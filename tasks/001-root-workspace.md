@@ -3,13 +3,88 @@
 **Sprint**: 1 | **Estimate**: 1h | **Depends on**: —
 
 ## Objective
-Initialize the pnpm monorepo root: `package.json`, `pnpm-workspace.yaml`, `.gitignore`.
+Initialize the mixed monorepo: uv workspace for Python packages, pnpm workspace for Studio.
 
 ## Files to Create
-- `package.json` — workspace root. Scripts: `dev`, `setup`, `build`, `test`, `test:watch`, `test:coverage`, `lint`, `typecheck`, `clean`. DevDeps: `concurrently ^8.2`, `typescript ^5.4`, `vitest ^1.5`, `@vitest/coverage-v8`, `@typescript-eslint/eslint-plugin ^7`, `@typescript-eslint/parser ^7`, `eslint ^9`, `prettier ^3`, `@types/node ^20`. See DEVELOPMENT_GUIDE.md §2.2 for exact content.
-- `pnpm-workspace.yaml` — `packages: ['packages/*']`
-- `.gitignore` — `node_modules/`, `dist/`, `.elliot/secrets.enc`, `*.connector.json`, `.env`, `coverage/`
+
+### `pyproject.toml` (uv workspace root)
+```toml
+[tool.uv.workspace]
+members = [
+    "packages/core",
+    "packages/mcp-plugin",
+    "packages/connector-runtime",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "respx>=0.21",
+]
+```
+
+### `.python-version`
+```
+3.12
+```
+
+### `pnpm-workspace.yaml` (Studio only)
+```yaml
+packages:
+  - 'packages/studio'
+```
+
+### `Makefile`
+```makefile
+dev:
+	honcho start
+
+setup:
+	uv run python packages/mcp-plugin/scripts/install.py
+
+test:
+	uv run pytest
+
+lint:
+	uv run ruff check .
+
+format:
+	uv run ruff format .
+
+typecheck:
+	uv run mypy packages/
+
+build-studio:
+	pnpm --filter @elliot/studio run build
+```
+
+### `Procfile` (for honcho)
+```
+plugin: uv run uvicorn elliot_mcp_plugin.main:app --port 3000 --reload --app-dir packages/mcp-plugin/src
+studio: pnpm --filter @elliot/studio run dev
+```
+
+### `.gitignore`
+```
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+.elliot/secrets.enc
+*.connector.json
+.env
+coverage/
+node_modules/
+.ruff_cache/
+.mypy_cache/
+```
 
 ## Done When
-- [ ] `pnpm install` exits 0
-- [ ] `pnpm run build` script recognized (even if no packages built yet)
+- [ ] `uv sync` installs all Python dev dependencies
+- [ ] `make test` recognized (no packages yet, exits 0)
+- [ ] `uv run python --version` prints `Python 3.12.x`

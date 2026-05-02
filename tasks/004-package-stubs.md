@@ -1,18 +1,69 @@
-# 004 — Package Stubs + Verify Install
+# 004 — Python Package Stubs + Verify
 
 **Sprint**: 1 | **Estimate**: 1h | **Depends on**: 003
 
 ## Objective
-Create the four package skeletons so workspace linking works and `pnpm install` resolves cross-package deps.
+Create the three Python package skeletons so uv workspace linking works.
 
-## Files to Create
-For each of the 4 packages (`core`, `mcp-plugin`, `connector-runtime`, `studio`):
-- `packages/<name>/package.json` — correct `name` (`@elliot/<name>`), `version: 0.1.0`, `type: module`, `exports` pointing to `./dist/index.js`. See DEVELOPMENT_GUIDE.md for each package's full `package.json`.
-- `packages/<name>/tsconfig.json` — extends `../../tsconfig.base.json`, `outDir: ./dist`, `rootDir: ./src`.
-- `packages/<name>/vitest.config.ts` — `defineConfig({ test: { globals: true, environment: 'node', include: [...], coverage: { thresholds: { lines: 85, functions: 85, branches: 80 } } } })`
-- `packages/<name>/src/index.ts` — empty stub `export {}`
+## For Each Package (`core`, `mcp-plugin`, `connector-runtime`)
+
+### `packages/<name>/pyproject.toml`
+```toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "elliot-<name>"        # elliot-core / elliot-mcp-plugin / elliot-connector-runtime
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []             # filled in per-package below
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/elliot_<name>"]  # elliot_core / elliot_mcp_plugin / elliot_connector_runtime
+```
+
+**Per-package dependencies:**
+
+`elliot-core`:
+```toml
+dependencies = [
+    "pydantic>=2.7",
+    "httpx>=0.27",
+    "jmespath>=1.0",
+    "cryptography>=42.0",
+    "psycopg2-binary>=2.9",
+]
+```
+
+`elliot-mcp-plugin`:
+```toml
+dependencies = [
+    "elliot-core",
+    "mcp>=1.0",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
+]
+```
+
+`elliot-connector-runtime`:
+```toml
+dependencies = [
+    "elliot-core",
+    "mcp>=1.0",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
+]
+```
+
+### `packages/<name>/src/elliot_<name>/__init__.py`
+```python
+"""Elliot <Name> package."""
+```
+
+### `packages/<name>/tests/__init__.py` (empty)
 
 ## Done When
-- [ ] `pnpm install` resolves `@elliot/core` as a dep of `@elliot/mcp-plugin`
-- [ ] `pnpm -r run typecheck` exits 0 across all packages
-- [ ] `pnpm test` exits 0 (no tests yet)
+- [ ] `uv sync` resolves all dependencies without conflict
+- [ ] `uv run python -c "import elliot_core"` succeeds
+- [ ] `uv run python -c "import elliot_mcp_plugin"` succeeds

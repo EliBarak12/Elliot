@@ -1,30 +1,56 @@
 # 010 — SQL Query Validator
 
-**Sprint**: 1 | **Estimate**: 2h | **Depends on**: 009
+**Sprint**: 1 | **Estimate**: 1h | **Depends on**: 009
 
 ## Objective
-Prevent SQL injection and DDL execution. Every tool-defined SQL goes through this before running.
+Prevent SQL injection and DDL execution. All tool SQL goes through this.
 
 ## Files to Create
 
-### `packages/core/src/sqlite/query-runner.ts`
+### `packages/core/src/elliot_core/sqlite/query_runner.py`
+```python
+import re
+from typing import Any
+from elliot_core.errors import ElliotError
 
-**`validateToolSql(sql: string): { valid: true } | { valid: false; reason: string }`**
+DDL_PATTERN = re.compile(
+    r"\b(DROP|CREATE|ALTER|INSERT|UPDATE|DELETE|ATTACH|DETACH|PRAGMA)\b",
+    re.IGNORECASE,
+)
 
-Rejection rules (all must be enforced):
-1. After trimming whitespace + stripping `--` comments, must start with `SELECT`
-2. Contains any of: `DROP`, `CREATE`, `ALTER`, `INSERT`, `UPDATE`, `DELETE`, `ATTACH`, `DETACH`, `PRAGMA` → reject
-3. Contains `;` anywhere (multiple statements) → reject
-4. Empty or whitespace-only → reject
+def validate_tool_sql(sql: str) -> tuple[bool, str]:
+    """
+    Returns (True, "") if valid SELECT, or (False, reason) if not.
+    """
+    stripped = sql.strip()
+    # Remove single-line comments before checking
+    no_comments = re.sub(r"--[^\n]*", "", stripped).strip()
 
-**`runToolQuery(db: SQLiteEngine, sql: string, params: Record<string, unknown>): Record<string, unknown>[]`**
-- Validate first, throw `ElliotError('INVALID_SQL', ...)` if invalid
-- Bind named params (`:paramName` syntax) via `better-sqlite3`
-- Return rows
+    if not no_comments:
+        return False, "SQL is empty"
+    if not no_comments.upper().startswith("SELECT"):
+        return False, "SQL must start with SELECT"
+    if ";" in no_comments:
+        return False, "Multiple statements not allowed"
+    match = DDL_PATTERN.search(no_comments)
+    if match:
+        return False, f"Forbidden keyword: {match.group()}"
+    return True, ""
+
+def run_tool_query(
+    engine: "SQLiteEngine",  # type: ignore[name-defined]
+    sql: str,
+    params: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    valid, reason = validate_tool_sql(sql)
+    if not valid:
+        raise ElliotError("INVALID_SQL", reason)
+    return engine.query(sql, params or {})
+```
 
 ## Done When
-- [ ] `SELECT * FROM users` → valid
-- [ ] `DROP TABLE users` → rejected
-- [ ] `SELECT 1; DROP TABLE users` → rejected (semicolon)
-- [ ] `SELECT * FROM users -- ; DROP TABLE users` → valid (comment stripped)
-- [ ] `PRAGMA table_info(users)` → rejected
+- [ ] `validate_tool_sql("SELECT * FROM t")` returns `(True, "")`
+- [ ] `validate_tool_sql("DROP TABLE t")` returns `(False, ...)`
+- [ ] `validate_tool_sql("SELECT 1; DROP TABLE t")` returns `(False, ...)` (semicolon)
+- [ ] `validate_tool_sql("SELECT * FROM t -- ; DROP TABLE t")` returns `(True, "")` (comment stripped)
+- [ ] `validate_tool_sql("PRAGMA table_info(t)")` returns `(False, ...)`

@@ -40,6 +40,8 @@ pnpm install
   "name": "elliot",
   "private": true,
   "scripts": {
+    "dev": "concurrently -n plugin,studio -c cyan,magenta \"pnpm --filter @elliot/mcp-plugin run dev\" \"pnpm --filter @elliot/studio run dev\"",
+    "setup": "node packages/mcp-plugin/scripts/install.mjs",
     "build": "pnpm -r run build",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -52,6 +54,7 @@ pnpm install
     "@types/node": "^20.0.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
+    "concurrently": "^8.2.0",
     "eslint": "^9.0.0",
     "prettier": "^3.0.0",
     "typescript": "^5.4.0",
@@ -264,7 +267,7 @@ pnpm --filter @elliot/core run test:watch
 
 ## 4. Package: `@elliot/mcp-plugin`
 
-The MCP server that users install into Claude Code. Communicates over stdio.
+The MCP server that users install into Claude Code or Codex. Communicates over HTTP (StreamableHTTP). Runs persistently on port 3000. All Claude Code sessions and Studio connect to the same server instance, sharing a single in-memory SQLite engine and tool registry.
 
 ### 4.1 Setup
 
@@ -273,17 +276,20 @@ packages/mcp-plugin/
 ├── package.json
 ├── tsconfig.json
 ├── vitest.config.ts
+├── scripts/
+│   └── install.mjs     # auto-registers with Claude Code + Codex
 └── src/
-    ├── index.ts        # entry: create server + connect StdioTransport
-    ├── server.ts       # register all tools
-    ├── session.ts      # ElliotSession state
+    ├── index.ts        # HTTP server: Express + StreamableHTTPServerTransport on :3000
+    ├── server.ts       # create McpServer + register all tools
+    ├── session.ts      # ElliotSession singleton (shared across all HTTP sessions)
     └── tools/
         ├── source-tools.ts
         ├── sql-tools.ts
         ├── tool-tools.ts
         ├── skill-tools.ts
         ├── connector-tools.ts
-        └── context-tools.ts
+        ├── context-tools.ts
+        └── studio-tools.ts  # meta-tools, only visible to elliot-studio client
 ```
 
 **`packages/mcp-plugin/package.json`**:
@@ -292,20 +298,23 @@ packages/mcp-plugin/
   "name": "@elliot/mcp-plugin",
   "version": "0.1.0",
   "type": "module",
-  "bin": { "elliot-mcp": "./dist/index.js" },
   "scripts": {
-    "build": "tsc && chmod +x dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist",
     "test": "vitest run",
-    "install-claude": "node scripts/install-claude.mjs"
+    "setup": "node scripts/install.mjs"
   },
   "dependencies": {
     "@elliot/core": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.10.0",
+    "express": "^4.19.0",
     "zod": "^3.22.0"
   },
   "devDependencies": {
+    "@types/express": "^4.17.0",
+    "tsx": "^4.0.0",
     "typescript": "^5.4.0",
     "vitest": "^1.5.0"
   }
@@ -314,50 +323,68 @@ packages/mcp-plugin/
 
 ### 4.2 MCP Server Entry Point
 
-**`src/index.ts`**:
+**`src/index.ts`** — Express server with `StreamableHTTPServerTransport`. All HTTP sessions share one `ElliotSession` singleton so state (loaded tables, tool registry) persists across Claude Code reconnections.
+
 ```typescript
-#!/usr/bin/env node
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import express from 'express';
+import { randomUUID } from 'crypto';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { createElliotServer } from './server.js';
 import { ElliotSession } from './session.js';
-import { registerSourceTools } from './tools/source-tools.js';
-import { registerSqlTools } from './tools/sql-tools.js';
-import { registerToolTools } from './tools/tool-tools.js';
-import { registerSkillTools } from './tools/skill-tools.js';
-import { registerConnectorTools } from './tools/connector-tools.js';
-import { registerContextTools } from './tools/context-tools.js';
 
-async function main() {
-  const server = new McpServer({
-    name: 'elliot',
-    version: '0.1.0',
+const PORT = parseInt(process.env.ELLIOT_PORT ?? '3000', 10);
+const app = express();
+app.use(express.json());
+
+// CORS — allow Studio dev server
+app.use((_req, res, next) => {
+  res.header('Access-Control-Allow-Origin', 'http://localhost:5173');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Mcp-Session-Id, x-client-name');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  if (_req.method === 'OPTIONS') { res.sendStatus(204); return; }
+  next();
+});
+
+// Shared singleton — all MCP sessions read/write the same state
+const session = new ElliotSession();
+await session.load();
+
+// sessionId → transport routing table
+const transports = new Map<string, StreamableHTTPServerTransport>();
+
+app.all('/mcp', async (req, res) => {
+  const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+  if (sessionId && transports.has(sessionId)) {
+    await transports.get(sessionId)!.handleRequest(req, res);
+    return;
+  }
+
+  // New connection — create a transport + server pair
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
   });
 
-  const session = new ElliotSession();
-  await session.load();   // load any saved state from .elliot/
+  transport.onSessionId = (id) => transports.set(id, transport);
+  transport.onClose = () => {
+    const id = transport.sessionId;
+    if (id) transports.delete(id);
+  };
 
-  // Register all tool groups — each function mutates `server`
-  registerSourceTools(server, session);
-  registerSqlTools(server, session);
-  registerToolTools(server, session);
-  registerSkillTools(server, session);
-  registerConnectorTools(server, session);
-  registerContextTools(server, session);
-
-  const transport = new StdioServerTransport();
+  const server = createElliotServer(session);
   await server.connect(transport);
+  await transport.handleRequest(req, res);
+});
 
-  // Graceful shutdown
-  process.on('SIGINT', async () => {
-    await session.save();
-    await server.close();
-    process.exit(0);
-  });
-}
+const httpServer = app.listen(PORT, () => {
+  console.log(`✓ Elliot plugin  → http://localhost:${PORT}/mcp`);
+  console.log(`  Studio         → http://localhost:5173`);
+});
 
-main().catch(err => {
-  console.error('Elliot MCP plugin failed to start:', err);
-  process.exit(1);
+process.on('SIGINT', async () => {
+  await session.save();
+  httpServer.close();
+  process.exit(0);
 });
 ```
 
@@ -409,37 +436,88 @@ export class ElliotSession {
 }
 ```
 
-### 4.4 Install Into Claude Code
+### 4.4 Auto-Register With Claude Code & Codex
 
-**`scripts/install-claude.mjs`**:
+Run once after cloning. Writes project-level config files that are auto-discovered when the folder is opened, and also registers at user scope via each tool's CLI.
+
+**`scripts/install.mjs`**:
 ```javascript
-import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { resolve } from 'path';
+#!/usr/bin/env node
+/**
+ * Registers Elliot with Claude Code and Codex — no manual config editing needed.
+ *
+ * 1. Writes .mcp.json at project root      → Claude Code auto-discovers on folder open
+ * 2. Runs `claude mcp add-json`            → also registers at user scope (if CLI present)
+ * 3. Writes .codex/config.toml            → Codex auto-discovers on folder open
+ * 4. Writes ~/.codex/config.toml          → also registers at Codex user scope
+ */
+import { execSync } from 'child_process';
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import os from 'os';
 
-const configPath = resolve(os.homedir(), '.claude', 'claude_desktop_config.json');
-const distPath = resolve(import.meta.dirname, '..', 'dist', 'index.js');
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = resolve(__dirname, '..', '..', '..');
+const PLUGIN_URL = 'http://localhost:3000/mcp';
 
-let config = existsSync(configPath)
-  ? JSON.parse(readFileSync(configPath, 'utf-8'))
+// ── 1. Claude Code — project-level .mcp.json ─────────────────────────────────
+const mcpJsonPath = resolve(PROJECT_ROOT, '.mcp.json');
+const mcpConfig = existsSync(mcpJsonPath)
+  ? JSON.parse(readFileSync(mcpJsonPath, 'utf-8'))
   : { mcpServers: {} };
+mcpConfig.mcpServers ??= {};
+mcpConfig.mcpServers.elliot = { type: 'http', url: PLUGIN_URL };
+writeFileSync(mcpJsonPath, JSON.stringify(mcpConfig, null, 2));
+console.log('✓ .mcp.json written — Claude Code auto-loads on folder open');
 
-config.mcpServers ??= {};
-config.mcpServers.elliot = {
-  command: 'node',
-  args: [distPath],
-  env: {},
-};
+// ── 2. Claude Code — user scope via CLI ──────────────────────────────────────
+try {
+  execSync(
+    `claude mcp add-json elliot '{"type":"http","url":"${PLUGIN_URL}"}' --scope user`,
+    { stdio: 'pipe' }
+  );
+  console.log('✓ Claude Code: registered at user scope (all projects)');
+} catch {
+  console.log('  claude CLI not found — project .mcp.json is sufficient');
+}
 
-writeFileSync(configPath, JSON.stringify(config, null, 2));
-console.log(`✓ Elliot MCP plugin registered in ${configPath}`);
-console.log('  Restart Claude Code to activate.');
+// ── 3. Codex — project-level .codex/config.toml ──────────────────────────────
+const codexDir = resolve(PROJECT_ROOT, '.codex');
+mkdirSync(codexDir, { recursive: true });
+const elliotToml = `\n[mcp_servers.elliot]\nurl = "${PLUGIN_URL}"\n`;
+const codexProjectPath = resolve(codexDir, 'config.toml');
+const projectToml = existsSync(codexProjectPath) ? readFileSync(codexProjectPath, 'utf-8') : '';
+if (!projectToml.includes('[mcp_servers.elliot]')) {
+  writeFileSync(codexProjectPath, projectToml + elliotToml);
+}
+console.log('✓ .codex/config.toml written — Codex auto-loads on folder open');
+
+// ── 4. Codex — user scope via ~/.codex/config.toml ───────────────────────────
+try {
+  const userCodexDir = resolve(os.homedir(), '.codex');
+  mkdirSync(userCodexDir, { recursive: true });
+  const userCodexPath = resolve(userCodexDir, 'config.toml');
+  const existing = existsSync(userCodexPath) ? readFileSync(userCodexPath, 'utf-8') : '';
+  if (!existing.includes('[mcp_servers.elliot]')) {
+    writeFileSync(userCodexPath, existing + elliotToml);
+    console.log('✓ Codex: registered at user scope (~/.codex/config.toml)');
+  } else {
+    console.log('  Codex user config already has elliot — skipped');
+  }
+} catch {
+  console.log('  Could not write ~/.codex/config.toml — project-level is sufficient');
+}
+
+console.log('\nAll done. Now run:');
+console.log('  pnpm dev    →  plugin :3000  |  Studio :5173');
 ```
 
-Then install with:
+Run it:
 ```bash
-pnpm --filter @elliot/mcp-plugin run build
-pnpm --filter @elliot/mcp-plugin run install-claude
+pnpm install
+pnpm setup      # writes configs + registers with Claude Code & Codex
+pnpm dev        # starts plugin :3000 + Studio :5173
 ```
 
 ### 4.5 Test The Plugin
@@ -448,14 +526,16 @@ pnpm --filter @elliot/mcp-plugin run install-claude
 pnpm --filter @elliot/mcp-plugin run test
 ```
 
-Key integration test uses `InMemoryTransport` from the MCP SDK to test the server without stdio:
+Key integration test uses `InMemoryTransport` from the MCP SDK to test the server without HTTP:
 ```typescript
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createElliotServer } from '../../src/server.js';
+import { ElliotSession } from '../../src/session.js';
 
+const session = new ElliotSession();
 const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-const server = createElliotServer();
+const server = createElliotServer(session);
 await server.connect(serverTransport);
 
 const client = new Client({ name: 'test', version: '0.0.1' });
@@ -469,7 +549,7 @@ const { tools } = await client.listTools();
 
 ## 5. Package: `@elliot/connector-runtime`
 
-The deployable MCP server. Takes a `.connector.json` and exposes it as an MCP endpoint.
+The deployable MCP server. Takes a `.connector.json` and exposes it as a standalone MCP endpoint that other agents can connect to.
 
 ### 5.1 Setup
 
@@ -488,7 +568,8 @@ The deployable MCP server. Takes a `.connector.json` and exposes it as an MCP en
   },
   "dependencies": {
     "@elliot/core": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.10.0",
+    "express": "^4.19.0",
     "zod": "^3.22.0"
   }
 }
@@ -509,7 +590,6 @@ const { values } = parseArgs({
   options: {
     port: { type: 'string', default: '3001' },
     connector: { type: 'string', default: '.elliot/connector.json' },
-    protocol: { type: 'string', default: 'mcp' },  // 'mcp' | 'openai' | 'both'
   },
 });
 
@@ -517,20 +597,14 @@ const connectorPath = resolve(process.cwd(), values.connector!);
 const config: ConnectorConfig = JSON.parse(readFileSync(connectorPath, 'utf-8'));
 const port = parseInt(values.port!, 10);
 
-await startConnectorServer(config, { port, protocol: values.protocol as 'mcp' | 'openai' | 'both' });
+await startConnectorServer(config, { port });
 
 console.log(`\n✓ Elliot connector runtime started`);
 console.log(`  Connector: ${config.name} v${config.version}`);
 console.log(`  MCP endpoint: http://localhost:${port}/mcp`);
 console.log(`  Tools: ${config.tools.length} | Skills: ${config.skills.length}`);
-console.log(`\n  Add to Claude Desktop config:`);
-console.log(`  {`);
-console.log(`    "mcpServers": {`);
-console.log(`      "${config.slug}": {`);
-console.log(`        "url": "http://localhost:${port}/mcp"`);
-console.log(`      }`);
-console.log(`    }`);
-console.log(`  }`);
+console.log(`\n  Add to your agent config:`);
+console.log(`  { "${config.slug}": { "type": "http", "url": "http://localhost:${port}/mcp" } }`);
 ```
 
 ### 5.3 Usage
@@ -541,18 +615,15 @@ pnpm --filter @elliot/connector-runtime run build
 
 # Serve a connector
 node packages/connector-runtime/dist/index.js \
-  --connector ./my-product.connector.json \
+  --connector .elliot/connector.json \
   --port 3001
-
-# Or after installing globally
-elliot serve --connector ./my-product.connector.json
 ```
 
 ---
 
 ## 6. Package: `@elliot/studio`
 
-The React dashboard. Uses **Vite** (not Next.js), **shadcn/ui**, **Tailwind CSS v4**, and **React Router v6**.
+The React dashboard. Uses **Vite** (not Next.js), **shadcn/ui**, **Tailwind CSS v4**, and **React Router v6**. Connects to the MCP plugin via `StreamableHTTPClientTransport` — no REST API.
 
 ### 6.1 Initial Setup
 
@@ -562,7 +633,7 @@ cd packages/studio
 npm create vite@latest . -- --template react-ts
 
 # Install dependencies
-pnpm add react-router-dom zustand @tanstack/react-query
+pnpm add react-router-dom zustand @tanstack/react-query @modelcontextprotocol/sdk
 pnpm add -D tailwindcss @tailwindcss/vite
 
 # Add shadcn/ui
@@ -571,6 +642,8 @@ pnpm dlx shadcn@latest init
 ```
 
 ### 6.2 Vite Config
+
+Studio communicates with the plugin exclusively via MCP over HTTP — no proxy needed.
 
 **`packages/studio/vite.config.ts`**:
 ```typescript
@@ -586,13 +659,6 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:3001',  // connector runtime
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
-      },
-    },
   },
 });
 ```
@@ -685,7 +751,72 @@ createRoot(document.getElementById('root')!).render(
 );
 ```
 
-### 6.6 Zustand Store
+### 6.6 MCP Client
+
+All Studio↔plugin communication goes through `StreamableHTTPClientTransport`. This is the only network layer — there is no REST API.
+
+**`src/lib/mcp-client.ts`**:
+```typescript
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+
+const PLUGIN_URL = new URL('http://localhost:3000/mcp');
+const SESSION_KEY = 'elliot-mcp-session-id';
+
+let mcpClient: Client | null = null;
+
+export async function getMcpClient(): Promise<Client> {
+  if (mcpClient) return mcpClient;
+
+  // Restore previous session ID across page reloads (workaround for SDK issue #852)
+  const storedSessionId = sessionStorage.getItem(SESSION_KEY) ?? undefined;
+
+  const transport = new StreamableHTTPClientTransport(PLUGIN_URL, {
+    sessionId: storedSessionId,
+    requestInit: {
+      headers: { 'x-client-name': 'elliot-studio' },
+    },
+  });
+
+  mcpClient = new Client({ name: 'elliot-studio', version: '0.1.0' });
+  await mcpClient.connect(transport);
+
+  const sessionId = transport.sessionId;
+  if (sessionId) sessionStorage.setItem(SESSION_KEY, sessionId);
+
+  return mcpClient;
+}
+
+export async function callTool(name: string, args: Record<string, unknown>) {
+  const client = await getMcpClient();
+  return client.callTool({ name, arguments: args });
+}
+
+export async function listTools() {
+  const client = await getMcpClient();
+  return client.listTools();
+}
+```
+
+Use with React Query:
+```typescript
+// src/hooks/useTools.ts
+import { useQuery, useMutation } from '@tanstack/react-query';
+import { listTools, callTool } from '@/lib/mcp-client';
+
+export function useTools() {
+  return useQuery({ queryKey: ['tools'], queryFn: listTools });
+}
+
+export function useCallTool() {
+  return useMutation({
+    mutationFn: ({ name, args }: { name: string; args: Record<string, unknown> }) =>
+      callTool(name, args),
+  });
+}
+```
+
+### 6.7 Zustand Store
 
 **`src/lib/store.ts`**:
 ```typescript
@@ -694,28 +825,13 @@ import { persist } from 'zustand/middleware';
 import type { ConnectorConfig, ToolDefinition, SourceConfig } from '@elliot/core';
 
 interface ElliotStore {
-  // Connector state (loaded from connector runtime)
   connector: ConnectorConfig | null;
   sources: SourceConfig[];
   tools: ToolDefinition[];
-
-  // Studio UI state
   selectedToolId: string | null;
-  playgroundMessages: PlaygroundMessage[];
 
-  // Actions
   setConnector: (c: ConnectorConfig) => void;
   selectTool: (id: string | null) => void;
-  addPlaygroundMessage: (msg: PlaygroundMessage) => void;
-  clearPlayground: () => void;
-}
-
-export interface PlaygroundMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  toolCalls?: Array<{ name: string; parameters: Record<string, unknown>; result: unknown; latencyMs: number }>;
-  timestamp: string;
 }
 
 export const useElliotStore = create<ElliotStore>()(
@@ -725,23 +841,27 @@ export const useElliotStore = create<ElliotStore>()(
       sources: [],
       tools: [],
       selectedToolId: null,
-      playgroundMessages: [],
 
       setConnector: (connector) => set({ connector, sources: connector.sources, tools: connector.tools }),
       selectTool: (id) => set({ selectedToolId: id }),
-      addPlaygroundMessage: (msg) => set((s) => ({ playgroundMessages: [...s.playgroundMessages, msg] })),
-      clearPlayground: () => set({ playgroundMessages: [] }),
     }),
     { name: 'elliot-studio', partialize: (s) => ({ connector: s.connector }) }
   )
 );
 ```
 
-### 6.7 Run Studio
+> **Important**: Every import from `@elliot/core` in Studio **must** use `import type { ... }`. Never import runtime values (`SQLiteEngine`, `ApiClient`, etc.) — those depend on Node.js native modules and will break the Vite browser build.
+
+### 6.8 Run Studio
 
 ```bash
 pnpm --filter @elliot/studio run dev
 # Opens at http://localhost:5173
+```
+
+Or start everything at once from the repo root:
+```bash
+pnpm dev   # plugin :3000 + Studio :5173
 ```
 
 ---
@@ -776,14 +896,17 @@ CI will fail if these are not met.
 
 This section walks through how to actually BUILD a connector from scratch using the MCP plugin.
 
-### Step 1: Install the plugin
+### Step 1: Setup
 
 ```bash
+git clone https://github.com/elibarak12/elliot.git
+cd elliot
 pnpm install
-pnpm build
-pnpm --filter @elliot/mcp-plugin run install-claude
-# Restart Claude Code
+pnpm setup      # writes .mcp.json + .codex/config.toml, registers with Claude Code & Codex
+pnpm dev        # starts plugin on :3000 and Studio on :5173
 ```
+
+Then open the project folder in Claude Code or Codex — Elliot is already registered via the project-level `.mcp.json` / `.codex/config.toml`. No manual config editing needed.
 
 ### Step 2: Open a project directory
 
@@ -893,16 +1016,10 @@ Claude: [calls elliot_build_connector]
 
         ✓ Connector runtime started on http://localhost:3001/mcp
 
-        Add to Claude Desktop (~/.claude/claude_desktop_config.json):
-        {
-          "mcpServers": {
-            "shopOS": {
-              "url": "http://localhost:3001/mcp"
-            }
-          }
-        }
+        Add to your agent config:
+        { "shopOS": { "type": "http", "url": "http://localhost:3001/mcp" } }
 
-        Restart Claude Desktop and your connector is live.
+        Restart your agent and your connector is live.
 ```
 
 ---
@@ -932,6 +1049,7 @@ The plugin writes all state to `.elliot/` in the working directory:
 The MCP plugin reads these from environment or `.elliot/.env`:
 
 ```bash
+ELLIOT_PORT=3000                        # plugin HTTP port (default: 3000)
 ELLIOT_WORKSPACE_DIR=./.elliot          # where to write state (default: cwd/.elliot)
 ELLIOT_MAX_ROWS=10000                   # max rows per table load
 ELLIOT_MAX_PAGES=100                    # max pagination pages to follow
@@ -945,11 +1063,14 @@ ELLIOT_LOG_LEVEL=info                   # debug | info | warn | error
 ## 11. Common Development Commands
 
 ```bash
-# Full build
-pnpm build
+# First-time setup
+pnpm install && pnpm setup
 
-# Build + watch a single package
-pnpm --filter @elliot/core build --watch
+# Start everything (plugin :3000 + Studio :5173)
+pnpm dev
+
+# Build all packages
+pnpm build
 
 # Run tests across everything
 pnpm test
@@ -960,10 +1081,7 @@ pnpm typecheck
 # Add a new shadcn component to Studio
 pnpm --filter @elliot/studio dlx shadcn@latest add <component>
 
-# Install MCP plugin (after build)
-pnpm --filter @elliot/mcp-plugin run install-claude
-
-# Serve an existing connector
+# Serve an existing connector (Phase 2+)
 pnpm --filter @elliot/connector-runtime run build
 node packages/connector-runtime/dist/index.js --connector .elliot/connector.json
 ```

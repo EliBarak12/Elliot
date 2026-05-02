@@ -262,6 +262,7 @@ Build the tool management layer: defining, validating, storing, and executing to
   6. Return `ToolResult: { rows, meta: { rowCount, latencyMs, truncated } }`
 - `executeSkill(skill, inputs, registry, engine)` — sequential step runner with binding resolver
 - Binding resolver: `{{skill.input.X}}` and `{{steps.ALIAS.FIELD}}`
+- Use `jsonpath-plus` for deep path resolution (not lodash)
 
 **5.4** `packages/core/src/connector/builder.ts` and `serializer.ts`:
 - `ConnectorBuilder.build(config)` — validate and assemble `ConnectorConfig`
@@ -313,11 +314,11 @@ packages/core/tests/unit/skill-executor.test.ts
 
 ---
 
-## Mission 6: MCP Plugin — Server & Source Tools
+## Mission 6: MCP Plugin — HTTP Server & Source Tools
 **Estimated**: 8–10 hours | **Dependencies**: Mission 5
 
 ### Objective
-Build the MCP plugin server with source management and SQL exploration tools. After this mission, Claude Code can discover and query a user's APIs.
+Build the MCP plugin server with source management and SQL exploration tools. After this mission, Claude Code and Codex can discover and query a user's APIs via HTTP MCP.
 
 ### Steps
 
@@ -325,10 +326,13 @@ Build the MCP plugin server with source management and SQL exploration tools. Af
 - `ElliotSession` class holding `SQLiteEngine`, `ToolRegistry`, `ConnectorBuilder`
 - `load()` / `save()` to `.elliot/session.json`
 - Encrypted secrets storage in `.elliot/secrets.enc` (AES-256-GCM via Node crypto)
+- This is a **singleton** — instantiated once at server start, shared across all MCP sessions
 
 **6.2** `packages/mcp-plugin/src/server.ts`:
-- Create `McpServer` from `@modelcontextprotocol/sdk`
-- Call all `register*Tools(server, session)` functions
+- `createElliotServer(session: ElliotSession): McpServer`
+- Creates a new `McpServer` from `@modelcontextprotocol/sdk`
+- Calls all `register*Tools(server, session)` functions
+- Studio meta-tools are registered here too but filtered by `clientInfo.name` at call time
 
 **6.3** `packages/mcp-plugin/src/tools/source-tools.ts` — implement:
 - `elliot_discover_source`: fetch source, flatten, load SQLite, return schema summary
@@ -345,9 +349,19 @@ Build the MCP plugin server with source management and SQL exploration tools. Af
 - `elliot_profile_column`: column stats
 - `elliot_explain_query`: EXPLAIN QUERY PLAN
 
-**6.5** `packages/mcp-plugin/src/index.ts` — stdio entry point
+**6.5** `packages/mcp-plugin/src/index.ts` — HTTP server entry point:
+- Express app on `ELLIOT_PORT` (default 3000)
+- CORS headers allowing `http://localhost:5173`
+- `Map<sessionId, StreamableHTTPServerTransport>` for routing
+- `app.all('/mcp', ...)` handler: route existing sessions or create new ones
+- Graceful shutdown: `session.save()` on SIGINT
 
-**6.6** `scripts/install-claude.mjs` — write MCP config to `~/.claude/claude_desktop_config.json`
+**6.6** `scripts/install.mjs` — auto-registration script:
+- Writes `.mcp.json` at project root (Claude Code project-level auto-discovery)
+- Runs `claude mcp add-json elliot '{"type":"http","url":"http://localhost:3000/mcp"}' --scope user` (user-level Claude Code)
+- Writes `.codex/config.toml` at project root (Codex project-level auto-discovery)
+- Writes `~/.codex/config.toml` (user-level Codex)
+- Fails gracefully if any CLI is not installed
 
 **6.7** Write MCP integration tests using `InMemoryTransport`:
 - `elliot_discover_source` with CSV fixture file → returns schema
@@ -361,16 +375,17 @@ packages/mcp-plugin/src/server.ts
 packages/mcp-plugin/src/index.ts
 packages/mcp-plugin/src/tools/source-tools.ts
 packages/mcp-plugin/src/tools/sql-tools.ts
-packages/mcp-plugin/scripts/install-claude.mjs
+packages/mcp-plugin/scripts/install.mjs
 packages/mcp-plugin/tests/integration/source-tools.test.ts
 packages/mcp-plugin/tests/integration/sql-tools.test.ts
 ```
 
 ### Acceptance Criteria
-- `pnpm run install-claude` registers the plugin in Claude Code config
-- Claude Code can call `elliot_discover_source` and get a schema back
+- `pnpm setup` registers the plugin in Claude Code and Codex config automatically
+- Claude Code / Codex can call `elliot_discover_source` and get a schema back
 - `elliot_query_sql` returns real data from loaded tables
 - Session state survives restart (load/save works)
+- Multiple concurrent MCP sessions share the same SQLite state
 
 ---
 
@@ -378,7 +393,7 @@ packages/mcp-plugin/tests/integration/sql-tools.test.ts
 **Estimated**: 6–8 hours | **Dependencies**: Mission 6
 
 ### Objective
-Complete the MCP plugin with tool building, skill building, and connector management tools. After this mission, Claude Code can build and start a complete connector.
+Complete the MCP plugin with tool building, skill building, and connector management tools. After this mission, Claude Code can build and export a complete connector.
 
 ### Steps
 
@@ -403,19 +418,19 @@ Complete the MCP plugin with tool building, skill building, and connector manage
 - `elliot_build_connector`: assemble ConnectorConfig from selected tool/skill IDs
 - `elliot_get_connector`: current connector state
 - `elliot_export_connector`: write `.connector.json` to disk
-- `elliot_start_runtime`: spawn `@elliot/connector-runtime` as child process
+- `elliot_start_runtime`: spawn `@elliot/connector-runtime` as child process on :3001
 - `elliot_stop_runtime`: kill child process
-- `elliot_get_connection_config`: return formatted config snippet for Claude Desktop / Cursor
+- `elliot_get_connection_config`: return formatted config snippet for agent registration
 
 **7.5** Write integration tests for the full build flow:
 - discover source → create tool → build connector → export file
 - Connector JSON is valid and deserializes correctly
 
 ### Acceptance Criteria
-- Claude Code can execute the full Phase 1 flow (see DEVELOPMENT_GUIDE Section 8)
+- Claude Code / Codex can execute the full Phase 1 flow (see DEVELOPMENT_GUIDE Section 8)
 - Built connector file is valid `ConnectorConfig`
 - `elliot_start_runtime` starts the connector and reports the port
-- `elliot_get_connection_config` returns correct Claude Desktop JSON
+- `elliot_get_connection_config` returns correct agent config JSON
 
 ---
 
@@ -423,7 +438,7 @@ Complete the MCP plugin with tool building, skill building, and connector manage
 **Estimated**: 10–12 hours | **Dependencies**: Mission 5
 
 ### Objective
-Build the connector runtime — the MCP server that AI agents connect to to use a deployed connector.
+Build the connector runtime — the standalone MCP server that AI agents connect to when using a deployed connector.
 
 ### Steps
 
@@ -448,11 +463,11 @@ Build the connector runtime — the MCP server that AI agents connect to to use 
   6. Return result + meta
 
 **8.4** `packages/connector-runtime/src/protocols/mcp.ts`:
-- HTTP server on `http://localhost:{port}/mcp`
-- Handle `initialize`, `tools/list`, `tools/call` JSON-RPC methods
-- `tools/list`: return all tools + skills as MCP tool definitions with JSON schema
+- Express + `StreamableHTTPServerTransport` on `http://localhost:{port}/mcp`
+- `tools/list`: return all user-defined tools + skills as MCP tool definitions with JSON schema
 - `tools/call`: route to `executeToolCall` or `executeSkill`
 - Rate limiting: in-memory token bucket per session
+- Audit: append `AuditLogEntry` to `.elliot/audit.ndjson` after every call
 
 **8.5** `packages/connector-runtime/src/protocols/openai.ts`:
 - `GET /openai/tools` → OpenAI function-calling schema array
@@ -461,6 +476,7 @@ Build the connector runtime — the MCP server that AI agents connect to to use 
 **8.6** `packages/connector-runtime/src/audit.ts`:
 - Append `AuditLogEntry` to `.elliot/audit.ndjson` after every call (async fire-and-forget)
 - `readAuditLog(limit)` → parse last N entries
+- `aggregateMetrics(entries)` → call counts, error rates, latency per tool
 
 **8.7** `packages/connector-runtime/src/index.ts` — CLI entry (`elliot serve --port 3001 --connector ...`)
 
@@ -484,7 +500,7 @@ packages/connector-runtime/tests/integration/runtime.test.ts
 ```
 
 ### Acceptance Criteria
-- Claude Desktop can connect to the runtime and call tools
+- An agent can connect to the runtime and call tools via HTTP MCP
 - Tools return correct data from live sources
 - Audit log has an entry for every call
 - Cache respects TTL settings from `SourceConfig.refreshStrategy`
@@ -492,10 +508,10 @@ packages/connector-runtime/tests/integration/runtime.test.ts
 ---
 
 ## Mission 9: Studio — Core UI (Vite + shadcn)
-**Estimated**: 12–14 hours | **Dependencies**: Missions 5, 8
+**Estimated**: 12–14 hours | **Dependencies**: Missions 5, 6
 
 ### Objective
-Build the Elliot Studio React application: dashboard, source browser, tool builder UI, and connector manager.
+Build the Elliot Studio React application: dashboard, source browser, tool builder UI, and connector manager. Studio connects to the MCP plugin at `:3000` via `StreamableHTTPClientTransport` — no REST API.
 
 ### Steps
 
@@ -510,7 +526,7 @@ Build the Elliot Studio React application: dashboard, source browser, tool build
 **9.3** Dashboard page (`/`):
 - Stats cards: sources loaded, tools created, skills, connector status
 - Getting-started checklist (greyed-out steps, ticked when done)
-- Recent audit log feed (last 10 entries from `.elliot/audit.ndjson`)
+- Recent audit log feed (last 10 entries via `studio_get_audit_log` MCP meta-tool)
 - Quick-action buttons: "Discover Source", "Create Tool", "Build Connector"
 
 **9.4** Sources page (`/sources`):
@@ -535,15 +551,16 @@ Build the Elliot Studio React application: dashboard, source browser, tool build
 
 **9.7** Connector page (`/connector`):
 - Tool/skill selector (checkboxes)
-- Deploy button → calls runtime API
-- Connection config display with copy buttons (Claude Desktop, OpenAI, REST)
+- Build + Export button
+- Connection config display with copy button
 
-**9.8** `src/lib/api.ts` — fetch wrapper connecting Studio to connector runtime REST API
+**9.8** `src/lib/mcp-client.ts` — `StreamableHTTPClientTransport` connecting Studio to the plugin at `:3000`.
+Exposes `getMcpClient()`, `callTool(name, args)`, `listTools()`. Session ID persisted to `sessionStorage` to survive page reloads (workaround for SDK issue #852).
 
 **9.9** Write unit tests for critical components:
 ```
 ToolCard.test.tsx      — renders correctly, badge shows category
-ToolEditor.test.tsx    — form validation, submit calls API
+ToolEditor.test.tsx    — form validation, submit calls MCP tool
 SqlEditor.test.tsx     — validates SQL on change
 ParameterRow.test.tsx  — add/remove/edit params
 ```
@@ -553,7 +570,8 @@ ParameterRow.test.tsx  — add/remove/edit params
 packages/studio/src/main.tsx
 packages/studio/src/App.tsx
 packages/studio/src/router.tsx
-packages/studio/src/lib/{utils,api,store}.ts
+packages/studio/src/lib/{utils,mcp-client,store}.ts
+packages/studio/src/hooks/{useTools,useCallTool}.ts
 packages/studio/src/components/layout/{AppShell,Sidebar,Header}.tsx
 packages/studio/src/pages/{Dashboard,SourcesPage,ToolsPage,SkillsPage,ConnectorPage}.tsx
 packages/studio/src/components/{sources,tools,skills,connector}/...
@@ -563,8 +581,9 @@ packages/studio/src/tests/unit/...
 ### Acceptance Criteria
 - All 7 pages render without errors
 - Tool can be created and tested entirely through the Studio UI (no CLI needed)
-- Connector can be built and started from the UI
+- Connector can be built and exported from the UI
 - Connection config snippet can be copied in one click
+- All `@elliot/core` imports in Studio use `import type` (no runtime Node.js code in browser build)
 
 ---
 
@@ -572,39 +591,38 @@ packages/studio/src/tests/unit/...
 **Estimated**: 8–10 hours | **Dependencies**: Mission 9
 
 ### Objective
-Add the Playground (chat with real agent + tool call inspector) and the Metrics dashboard.
+Add the Playground (manual tool invoker with call inspector) and the Metrics dashboard. All data flows through MCP meta-tools — no REST API.
 
 ### Steps
 
 **10.1** Playground page (`/playground`):
-- Split-pane: chat on left, tool call inspector on right
-- Chat input at bottom; streaming AI response display
-- Backend: `POST /api/playground/chat` — calls Claude claude-opus-4-7 with connector tools loaded
-- When Claude calls a tool: forward to connector runtime, feed result back
-- Each tool call → add entry to inspector panel (tool name, params, result, latency)
-- Inspector entry click → open tool editor in Sheet
-- Export conversation as few-shot prompt example
+- Tool selector dropdown: lists all tools from `listTools()` MCP call
+- Dynamic parameter form: generated from the selected tool's `parameters` definition
+- "Run" button: calls `callTool(name, args)` via MCP
+- Response panel: formatted JSON output + latency badge
+- Invocation history: scrollable list of past runs (tool name, params, result, latency)
+- Click any history item to pre-fill the form and re-run
+- Export history as a JSON fixture for eval suites
 
 **10.2** Metrics page (`/metrics`):
 - Time series chart: tool calls per day (last 30 days) — `recharts` via shadcn chart
 - Tool usage breakdown: bar chart of top tools by call count
-- Success rate gauge
+- Success rate gauge per tool
 - Average latency table by tool
-- All data read from `.elliot/audit.ndjson` via connector runtime REST endpoint
+- All data fetched via `studio_get_metrics` and `studio_get_audit_log` MCP meta-tools
 
-**10.3** `packages/connector-runtime/src/protocols/rest.ts`:
-- Add REST endpoints the Studio consumes:
-  - `GET /studio/connector` — return `ConnectorConfig`
-  - `GET /studio/tools` — return tool list with metadata
-  - `GET /studio/audit?limit=N` — return last N audit entries
-  - `GET /studio/metrics` — aggregated metrics from audit log
-  - `POST /studio/playground/chat` — streaming Claude chat with tool use
+**10.3** `packages/mcp-plugin/src/tools/studio-tools.ts` — Studio meta-tools on the plugin:
+- Only registered when `clientInfo.name === 'elliot-studio'` (filtered from agent tool lists)
+- `studio_get_connector_info` — current `ConnectorConfig` + session summary
+- `studio_get_audit_log` — last N entries from `.elliot/audit.ndjson`
+- `studio_get_metrics` — aggregated metrics: call counts, error rates, latency per tool
+- `studio_run_sql` — run raw SQL against the in-memory SQLite engine (Studio-only debug tool)
 
 ### Acceptance Criteria
-- User can type in Playground and Claude uses their tools in real time
-- Every tool call appears in the inspector within 100ms of the call being made
-- Metrics page shows accurate data from the audit log
-- Conversation export adds a prompt to the prompts list
+- User can select any tool, fill in parameters, and see the JSON response in Playground
+- Every tool call appears in the history list within 200ms
+- Metrics page shows accurate data derived from the audit log
+- Studio meta-tools are invisible when connecting from Claude Code / Codex
 
 ---
 
@@ -612,23 +630,22 @@ Add the Playground (chat with real agent + tool call inspector) and the Metrics 
 **Estimated**: 8–10 hours | **Dependencies**: Mission 10
 
 ### Objective
-Build the evaluation framework: create test suites, run evaluations against the connector, and get a quality score.
+Build the evaluation framework: create test suites, run tool-call evaluations against the connector, and get a quality score.
 
 ### Steps
 
 **11.1** Evaluation page (`/evaluation`):
-- Create/edit eval suites (EvalSuite + EvalCase)
+- Create/edit eval suites (`EvalSuite` + `EvalCase`)
 - Run evaluation button → execute all cases
 - Results view: overall score, case-by-case breakdown, pass/fail per case
 - Score history chart: compare runs over time
 - Regression alert: cases that passed before but now fail
 
 **11.2** `packages/core/src/evaluation/runner.ts`:
-- `runEvalSuite(suite, connector, apiKey)`:
-  - For each case: send question to Claude with connector tools
-  - Record all tool calls
-  - Score against expectedToolCalls
-  - Optionally: LLM judge compares answer to expectedFinalAnswer
+- `runEvalSuite(suite, connector)`:
+  - For each case: invoke tools directly via `executeTool` (no AI — deterministic)
+  - Compare actual result rows against `expectedRows` or `expectedShape`
+  - Score: exact match / shape match / partial match
 - Return `EvalRunResult`
 
 **11.3** Description quality analyzer `packages/core/src/evaluation/quality-analyzer.ts`:
@@ -664,7 +681,7 @@ Production quality: comprehensive integration tests, error handling, empty state
 ### Steps
 
 **12.1** End-to-end integration test (in `packages/mcp-plugin/tests/integration/`):
-- Full flow: discover CSV source → create tool → build connector → start runtime → call tool via MCP → verify result → check audit log
+- Full flow: discover CSV source → create tool → build connector → export file → start runtime → call tool via MCP → verify result → check audit log
 
 **12.2** Error handling audit:
 - Every `catch` block produces a user-readable `ElliotError` (never a raw `Error.message` to the agent)
@@ -724,11 +741,11 @@ jobs:
 | 3 | SQLite Engine | 6–8 | In-memory DB + safe query runner |
 | 4 | Source Fetchers | 10–12 | API + file + DB fetchers |
 | 5 | Tool Registry & Executor | 8–10 | Tool + skill execution |
-| 6 | MCP Plugin: Sources & SQL | 8–10 | Claude Code can discover APIs |
-| 7 | MCP Plugin: Tools & Connector | 6–8 | Claude Code builds full connector |
-| 8 | Connector Runtime | 10–12 | `elliot serve` MCP server |
-| 9 | Studio Core UI | 12–14 | Dashboard + tools + sources |
-| 10 | Playground & Metrics | 8–10 | Chat UI + analytics |
+| 6 | MCP Plugin: HTTP Server + Sources | 8–10 | Agent can discover APIs via HTTP MCP |
+| 7 | MCP Plugin: Tools & Connector | 6–8 | Agent builds full connector |
+| 8 | Connector Runtime | 10–12 | `elliot serve` standalone MCP server |
+| 9 | Studio Core UI | 12–14 | Dashboard + tools + sources via MCP |
+| 10 | Playground & Metrics | 8–10 | Tool invoker UI + analytics |
 | 11 | Evaluation Framework | 8–10 | Quality scoring + eval suites |
 | 12 | Polish & CI | 8–10 | E2E tests + CI green |
 
@@ -739,5 +756,5 @@ jobs:
 **1 → 2 → 3 → 4 → 5** (core library, must be sequential)
 **then → 6 → 7** (MCP plugin, uses core)
 **and → 8** (runtime, uses core, can run in parallel with 6-7)
-**then → 9 → 10 → 11** (studio, uses runtime)
+**then → 9 → 10 → 11** (studio, connects to plugin via MCP)
 **then → 12** (polish everything)

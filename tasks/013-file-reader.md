@@ -2,33 +2,41 @@
 
 **Sprint**: 1 | **Estimate**: 2h | **Depends on**: 005
 
-## Objective
-Read structured data from local files: CSV, JSON, and JSONL.
-
 ## Files to Create
 
-### `packages/core/src/sources/file-reader.ts`
+### `packages/core/src/elliot_core/sources/file_reader.py`
+```python
+import csv
+import json
+from pathlib import Path
+from elliot_core.types.source import FileSourceConfig, FetchResult, FetchWarning
+from elliot_core.errors import ElliotError
 
-**`readFile(config: FileSourceConfig): Promise<FetchResult>`**
+def read_file(config: FileSourceConfig) -> FetchResult:
+    """Read structured data from a local file (CSV, JSON, or JSONL)."""
+    path = Path(config.path)
+    if not path.exists():
+        raise ElliotError("FILE_NOT_FOUND", f"File not found: {config.path}")
+    ...
+```
 
-Supported formats:
-- **CSV** — use `papaparse` with `header: true`, auto-detect delimiter, handle quoted fields and multi-line values
-- **JSON** — parse file; if root is array use directly; if `{ data: [...] }` or `{ items: [...] }` extract array; otherwise wrap in array
-- **JSONL** — read line by line, parse each line as JSON, collect into array; skip blank lines
+**Format handling:**
+- **CSV**: `csv.DictReader` with `config.delimiter`, encoding `config.encoding`. Each row is a `dict[str, str]`.
+- **JSON**: `json.loads(path.read_text())`. If root is list → use directly. If `{"data": [...]}` or `{"items": [...]}` → extract. Else wrap in list.
+- **JSONL**: read line by line, `json.loads(line)` per non-empty line.
 
-Edge cases to handle:
-- Empty file → return `FetchResult` with empty rows + warning
-- File not found → throw `ElliotError('FILE_NOT_FOUND', ...)`
-- Invalid JSON → throw `ElliotError('FILE_PARSE_ERROR', ...)`
-- File > 100MB → emit `FlattenWarning` about size before processing
+**Edge cases:**
+- Empty file → return empty rows + `FetchWarning(type="empty_file", ...)`
+- File > 100MB → emit size warning before processing
+- `json.JSONDecodeError` → raise `ElliotError("FILE_PARSE_ERROR", ...)`
 
-## Files to Create for Tests (fixtures used in task 015)
-- `packages/core/tests/fixtures/customers.csv`
-- `packages/core/tests/fixtures/orders.json`
-- `packages/core/tests/fixtures/events.jsonl`
+## Fixture Files to Create
+- `packages/core/tests/fixtures/customers.csv` (5+ rows, columns: id, name, email, status, total_spent)
+- `packages/core/tests/fixtures/orders.json` (list of orders with nested items array)
+- `packages/core/tests/fixtures/events.jsonl` (5+ JSON lines)
 
 ## Done When
-- [ ] CSV with headers parsed correctly
-- [ ] JSON array parsed correctly
-- [ ] JSONL parsed correctly (one object per line)
-- [ ] Empty file returns empty rows + warning (no throw)
+- [ ] CSV parsed with correct column names and row count
+- [ ] JSON array extracted from `{"data": [...]}` envelope
+- [ ] JSONL: each line is a separate dict in result
+- [ ] Missing file raises `ElliotError("FILE_NOT_FOUND")`

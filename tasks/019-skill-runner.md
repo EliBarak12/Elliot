@@ -2,31 +2,68 @@
 
 **Sprint**: 1 | **Estimate**: 2h | **Depends on**: 018
 
-## Objective
-Execute multi-step skills where each step's output can be bound as input to subsequent steps.
-
 ## Files to Create
 
-### `packages/core/src/tools/skill-runner.ts`
+### `packages/core/src/elliot_core/tools/skill_runner.py`
+```python
+import re
+import jmespath
+from typing import Any
+from elliot_core.types.tool import SkillDefinition, ToolResult
+from elliot_core.tools.registry import ToolRegistry
+from elliot_core.tools.executor import execute_tool
+from elliot_core.sqlite.engine import SQLiteEngine
+from elliot_core.errors import ElliotError
 
-**`executeSkill(skill: SkillDefinition, inputs: Record<string, unknown>, registry: ToolRegistry, engine: SQLiteEngine): Promise<SkillResult>`**
+def execute_skill(
+    skill: SkillDefinition,
+    inputs: dict[str, Any],
+    registry: ToolRegistry,
+    engine: SQLiteEngine,
+) -> ToolResult:
+    step_results: dict[str, ToolResult] = {}
+    last_result: ToolResult | None = None
+    for step in skill.steps:
+        tool = registry.get_by_name(step.tool_name)
+        if not tool:
+            raise ElliotError("TOOL_NOT_FOUND", f"Skill step references unknown tool: {step.tool_name}")
+        resolved_params = resolve_bindings(step.params, inputs, step_results)
+        result = execute_tool(tool, resolved_params, engine)
+        step_results[step.alias] = result
+        last_result = result
+    if last_result is None:
+        raise ElliotError("SKILL_EMPTY", "Skill has no steps")
+    return last_result
 
-Step execution:
-1. For each step in `skill.steps` (sequential):
-   a. Resolve all parameter bindings using `resolveBindings(params, inputs, stepResults)`
-   b. Find the tool by `step.toolName` in registry
-   c. Execute via `executeTool()`
-   d. Store result under `step.alias` in `stepResults` map
-2. Return final step result (or designated output step)
-3. If any step fails → throw `ElliotError` with partial step results attached
+def resolve_bindings(
+    template: dict[str, Any],
+    inputs: dict[str, Any],
+    step_results: dict[str, ToolResult],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, val in template.items():
+        result[key] = _resolve_value(val, inputs, step_results)
+    return result
 
-**`resolveBindings(template: Record<string, unknown>, inputs: Record<string, unknown>, stepResults: Map<string, ToolResult>): Record<string, unknown>`**
-- `{{skill.input.X}}` → look up `X` in `inputs`
-- `{{steps.ALIAS.FIELD}}` → look up `ALIAS` in `stepResults`, then extract `FIELD` from first row using `jsonpath-plus`
-- Non-template values pass through unchanged
+def _resolve_value(val: Any, inputs: dict, step_results: dict[str, ToolResult]) -> Any:
+    if not isinstance(val, str):
+        return val
+    # {{skill.input.X}}
+    m = re.fullmatch(r"\{\{skill\.input\.(.+?)\}\}", val)
+    if m:
+        return inputs.get(m.group(1))
+    # {{steps.ALIAS.FIELD}} - use jmespath on first row of that step
+    m = re.fullmatch(r"\{\{steps\.([^.]+)\.(.+?)\}\}", val)
+    if m:
+        alias, path = m.group(1), m.group(2)
+        step = step_results.get(alias)
+        if step and step.rows:
+            return jmespath.search(path, step.rows[0])
+        return None
+    return val
+```
 
 ## Done When
-- [ ] Sequential steps execute in order
-- [ ] `{{skill.input.X}}` binding resolves correctly
-- [ ] `{{steps.ALIAS.FIELD}}` binding resolves from previous step result
-- [ ] Step failure throws with partial results
+- [ ] `{{skill.input.X}}` resolves from `inputs`
+- [ ] `{{steps.ALIAS.FIELD}}` resolves from previous step's first row
+- [ ] Step failure raises `ElliotError` with step alias in message

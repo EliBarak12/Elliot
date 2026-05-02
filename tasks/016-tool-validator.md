@@ -1,27 +1,47 @@
-# 016 — Tool + Skill Validator
+# 016 — Tool + Skill Validator (Pydantic)
 
 **Sprint**: 1 | **Estimate**: 2h | **Depends on**: 005, 010
 
-## Objective
-Zod-based validation for tool definitions, skill definitions, and full connector configs.
-
 ## Files to Create
 
-### `packages/core/src/tools/validator.ts`
+### `packages/core/src/elliot_core/tools/validator.py`
+```python
+from pydantic import ValidationError
+from elliot_core.types.tool import ToolDefinition, SkillDefinition
+from elliot_core.sqlite.query_runner import validate_tool_sql
+from elliot_core.errors import ElliotError
+import re
 
-**Zod schemas:**
-- `ParameterDefinitionSchema` — name, type (`string|integer|number|boolean|date`), required, description, defaultValue
-- `ToolDefinitionSchema` — id, name (snake_case only), description (min 10 chars), category (`READ|ACTION|AGGREGATE`), sql, parameters, responseShape
-- `SkillDefinitionSchema` — id, name, description, steps (min 1), inputParameters
-- `ConnectorConfigSchema` — full connector including sources, tools, skills, name, version, slug
+def validate_tool_definition(data: dict) -> ToolDefinition:
+    """Parse + validate a tool definition dict. Raises ElliotError on failure."""
+    try:
+        tool = ToolDefinition.model_validate(data)
+    except ValidationError as e:
+        raise ElliotError("INVALID_TOOL", str(e))
+    _validate_sql_params(tool)
+    return tool
 
-**Additional validation beyond Zod:**
-- `validateToolSqlParams(tool: ToolDefinition): ValidationResult` — every `:param` in SQL must have a matching entry in `tool.parameters`; every parameter must appear as `:param` in SQL
-- `validateToolDefinition(tool: unknown): ValidationResult` — run Zod + SQL param check
+def _validate_sql_params(tool: ToolDefinition) -> None:
+    """Check :param references match the parameters list."""
+    sql_params = set(re.findall(r":([a-zA-Z_][a-zA-Z0-9_]*)", tool.sql))
+    defined_params = {p.name for p in tool.parameters}
+    missing = sql_params - defined_params
+    if missing:
+        raise ElliotError("INVALID_TOOL", f"SQL references undefined params: {missing}")
+    unused = defined_params - sql_params
+    if unused:
+        # warning only — don't raise, just return info
+        pass  # callers can check via validate_tool_sql_params separately
+
+def validate_skill_definition(data: dict) -> SkillDefinition:
+    try:
+        return SkillDefinition.model_validate(data)
+    except ValidationError as e:
+        raise ElliotError("INVALID_SKILL", str(e))
+```
 
 ## Done When
-- [ ] Valid tool passes all checks
-- [ ] Tool with `:missing_param` in SQL but not in parameters → error
-- [ ] Tool with parameter defined but no `:param` in SQL → warning
-- [ ] Tool name with spaces → Zod error
-- [ ] Tool description < 10 chars → Zod error
+- [ ] Valid tool dict → returns `ToolDefinition`
+- [ ] SQL with `:missing` not in parameters → raises `ElliotError`
+- [ ] Tool name with spaces → Pydantic `ValidationError` → wrapped as `ElliotError`
+- [ ] Tool description < 10 chars → `ElliotError`

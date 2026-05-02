@@ -3,36 +3,45 @@
 **Sprint**: 2 | **Estimate**: 3h | **Depends on**: 025
 
 ## Objective
-Test the MCP plugin's source and SQL tools end-to-end using `InMemoryTransport` (no HTTP needed).
+Test source and SQL tools by hitting the real MCP server with `httpx` (no mocks).
 
 ## Files to Create
-- `packages/mcp-plugin/tests/integration/source-tools.test.ts`
-- `packages/mcp-plugin/tests/integration/sql-tools.test.ts`
+- `packages/mcp-plugin/tests/integration/test_source_tools.py`
+- `packages/mcp-plugin/tests/integration/test_sql_tools.py`
+- `packages/mcp-plugin/tests/conftest.py`
 
-## Test Setup (both files)
-```typescript
-const session = new ElliotSession();
-const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-await createElliotServer(session).connect(serverTransport);
-const client = new Client({ name: 'test', version: '0.0.1' });
-await client.connect(clientTransport);
+## `conftest.py` — shared fixture
+```python
+import pytest
+from elliot_mcp_plugin.session import ElliotSession
+from elliot_mcp_plugin.server import create_elliot_server
+
+@pytest.fixture
+def session(tmp_path):
+    return ElliotSession(cwd=str(tmp_path))
+
+@pytest.fixture
+def mcp(session):
+    return create_elliot_server(session)
 ```
 
-## Required Tests
+**Testing strategy**: call the tool functions directly (they are plain Python functions registered on FastMCP). Import the underlying function, call it, assert on the dict response.
 
-**source-tools.test.ts:**
-- `elliot_discover_source` with fixture CSV → returns schema with correct columns + row count
-- `elliot_list_sources` after discover → returns 1 source
-- `elliot_preview_source` → returns correct rows
-- `elliot_profile_source` → returns column statistics
-- `elliot_remove_source` → source gone from list, table dropped from schema
+```python
+# test_source_tools.py
+def test_discover_csv_source(mcp, session, tmp_path):
+    # copy fixture CSV to tmp_path
+    # call elliot_discover_source directly via session
+    from elliot_mcp_plugin.tools.source_tools import _discover_source
+    result = _discover_source(session, source_type="file", config={"path": str(csv)}, name="customers")
+    assert "source_id" in result
+    assert len(session.engine.get_table_names()) > 0
 
-**sql-tools.test.ts:**
-- `elliot_get_schema` → returns loaded table names
-- `elliot_query_sql` with valid SELECT → returns rows
-- `elliot_query_sql` with DROP → returns error content (not MCP protocol error)
-- `elliot_validate_sql` → correct valid/invalid classification
+def test_list_sources(session): ...
+def test_remove_source_drops_table(session): ...
+```
 
 ## Done When
-- [ ] All tests pass using `InMemoryTransport`
-- [ ] No HTTP server needed to run tests
+- [ ] All source tool tests pass without a running HTTP server
+- [ ] All SQL tool tests pass
+- [ ] `uv run pytest packages/mcp-plugin/tests/ -v` exits 0

@@ -1,35 +1,60 @@
-# 023 — MCP Server Factory
+# 023 — MCP Server Factory (FastMCP)
 
 **Sprint**: 2 | **Estimate**: 2h | **Depends on**: 022
 
 ## Objective
-Factory function that creates a configured `McpServer` instance with all tool groups registered.
+Factory that creates a configured `FastMCP` instance with all tool groups registered.
 
 ## Files to Create
 
-### `packages/mcp-plugin/src/server.ts`
+### `packages/mcp-plugin/src/elliot_mcp_plugin/server.py`
+```python
+from mcp.server.fastmcp import FastMCP
+from elliot_mcp_plugin.session import ElliotSession
+from elliot_mcp_plugin.tools.source_tools import register_source_tools
+from elliot_mcp_plugin.tools.sql_tools import register_sql_tools
+from elliot_mcp_plugin.tools.tool_tools import register_tool_tools
+from elliot_mcp_plugin.tools.skill_tools import register_skill_tools
+from elliot_mcp_plugin.tools.context_tools import register_context_tools
+from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
+from elliot_mcp_plugin.tools.studio_tools import register_studio_tools
 
-```typescript
-export function createElliotServer(session: ElliotSession): McpServer {
-  const server = new McpServer({ name: 'elliot', version: '0.1.0' });
-  registerSourceTools(server, session);
-  registerSqlTools(server, session);
-  registerToolTools(server, session);
-  registerSkillTools(server, session);
-  registerContextTools(server, session);
-  registerConnectorTools(server, session);
-  registerStudioTools(server, session);
-  return server;
-}
+def create_elliot_server(session: ElliotSession) -> FastMCP:
+    mcp = FastMCP("elliot")
+    register_source_tools(mcp, session)
+    register_sql_tools(mcp, session)
+    register_tool_tools(mcp, session)
+    register_skill_tools(mcp, session)
+    register_context_tools(mcp, session)
+    register_connector_tools(mcp, session)
+    register_studio_tools(mcp, session)
+    return mcp
 ```
 
-**Studio tool filtering** — in `registerStudioTools`, wrap each tool handler:
-```typescript
-if (request.clientInfo?.name !== 'elliot-studio') {
-  throw new ElliotError('UNAUTHORIZED', 'This tool is only available to Elliot Studio');
-}
+**Pattern for each `register_*` function:**
+```python
+def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
+    @mcp.tool()
+    def elliot_discover_source(source_type: str, config: dict, name: str) -> dict:
+        """Fetch a data source and load it into in-memory SQLite."""
+        try:
+            # ... logic using session ...
+            return {"status": "ok", "schema": ...}
+        except ElliotError as e:
+            return {"error": f"[{e.code}] {e.message}"}
+```
+
+**Studio tool filtering:**
+```python
+def register_studio_tools(mcp: FastMCP, session: ElliotSession) -> None:
+    @mcp.tool()
+    def studio_get_metrics(days: int = 30) -> dict:
+        """[Studio only] Get aggregated tool call metrics."""
+        # FastMCP doesn't expose clientInfo directly —
+        # use a request-context header check via middleware instead
+        ...
 ```
 
 ## Done When
-- [ ] `createElliotServer(session).listTools()` returns tools from all groups
-- [ ] Studio meta-tools not visible when called without `clientInfo.name === 'elliot-studio'`
+- [ ] `create_elliot_server(session)` returns a `FastMCP` instance without error
+- [ ] Calling `mcp.list_tools()` includes tools from all groups

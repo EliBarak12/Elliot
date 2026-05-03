@@ -1,6 +1,6 @@
 # Elliot — Task List
 
-65 ordered tasks across 4 sprints, organized into 8 epic folders.
+67 ordered tasks across 4 sprints, organized into 8 epic folders.
 
 **Backend**: Python 3.12 + uv workspaces 
 **Frontend**: TypeScript + React + Vite + shadcn/ui
@@ -16,9 +16,9 @@
 | [05-studio-ui](05-studio-ui/) | 4 | 038–048 | Studio React app (TypeScript :5173) | 30–36h |
 | [06-eval-and-polish](06-eval-and-polish/) | 4 | 049–056 | Eval, quality, CI | 18–22h |
 | [07-dx-and-observability](07-dx-and-observability/) | 4 | 057–059 | Logging, error middleware, test plan | 6–8h |
-| [08-agent-observability](08-agent-observability/) | 4 | 060–065 | Session tracking, linter, eval, agent console, token metrics | 20–26h |
+| [08-agent-observability](08-agent-observability/) | 4 | 060–067 | Session tracking, linter, eval, agent console, token metrics, secrets, local DB | 31–39h |
 
-**Total**: ~162–198 hours
+**Total**: ~173–211 hours
 
 ## Tech Stack
 
@@ -53,4 +53,4 @@ Evaluation runner + quality analyzer in `elliot-core`, eval page UI, error class
 Structured JSON logging with `structlog` for both Python services (task 057), FastAPI global error middleware mapping `ElliotError` subclasses to HTTP status codes (task 058), and the full test strategy document covering pyramid, mocking rules, CI ordering, and coverage gates per package (task 059).
 
 ### [08 — Agent Observability](08-agent-observability/)
-The layer that turns Elliot into a true agentic-product platform. Upgrades the flat audit log to a full **SessionTracker** that groups every agent connection's tool calls into an observable session with token estimates (task 060). Adds a **Tool Quality Linter** (`elliot lint`) for static analysis of connector definitions — surfacing short descriptions, unbounded queries, and weak parameter names before deployment (task 061). Defines a YAML **Eval Test Case** schema with Pydantic models so developers can write repeatable expectations against their connector tools (task 062). Implements the async **Eval Runner** (`elliot eval`) that executes eval suites against a live `ToolExecutor` and reports pass/fail with row counts and token estimates (task 063). Adds the **Studio Agent Console** — a real-time React page showing the full session tree: which agent connected, which tools it called, with what arguments, how many rows came back, and token cost per call (task 064). Finally, surfaces **Token Efficiency Metrics** (`GET /v1/metrics/token-efficiency`) with per-tool averages and actionable suggestions for reducing token usage (task 065).
+The layer that turns Elliot into a true agentic-product platform. Upgrades the flat audit log to a full **SessionTracker** that groups every agent connection’s tool calls into an observable session with token estimates (task 060). Adds a **Tool Quality Linter** (`elliot lint`) for static analysis of connector definitions — surfacing short descriptions, unbounded queries, and weak parameter names before deployment (task 061). Defines a YAML **Eval Test Case** schema with Pydantic models so developers can write repeatable expectations against their connector tools (task 062). Implements the async **Eval Runner** (`elliot eval`) that executes eval suites against a live `ToolExecutor` and reports pass/fail with row counts and token estimates (task 063). Adds the **Studio Agent Console** — a real-time React page showing the full session tree: which agent connected, which tools it called, with what arguments, how many rows came back, and token cost per call (task 064). Surfaces **Token Efficiency Metrics** (`GET /v1/metrics/token-efficiency`) with per-tool averages and actionable suggestions for reducing token usage (task 065). Adds **Secrets Management** (`{{ env:VAR }}` placeholders in connector.json resolved at load time, never logged) with a `elliot secrets check` CLI and linter rules that flag hardcoded credentials (task 066). Replaces the two NDJSON flat files with a single **Local SQLite Observation Store** (`.elliot/observations.db`) giving the user queryable, retention-managed, aggregation-ready storage for all agent traffic — openable in any DB browser (task 067).

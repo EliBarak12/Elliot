@@ -39,7 +39,7 @@ class OrderField(BaseModel):
 class ApiRequestMapping(BaseModel):
     """
     For REST sources: how tool parameters map into the HTTP request.
-    Only used when source.type == 'rest' and category == 'WRITE' or 'ACTION'.
+    Used when category == 'WRITE' or 'ACTION'.
     """
     method: Literal["GET", "POST", "PUT", "DELETE", "PATCH"] = "POST"
     path_template: Optional[str] = None  # e.g. "/users/{user_id}"
@@ -62,14 +62,25 @@ class ToolDefinition(BaseModel):
     # Which sources to pull data from.
     source_ids: list[str]
 
-    # READ tools: Elliot converts these into a safe parameterized SELECT.
-    filter_groups: list[FilterGroup] = []    # WHERE conditions
-    return_fields: list[ReturnField] = []    # SELECT columns (with optional aggregation)
-    having: list[FilterGroup] = []           # HAVING conditions (post-aggregation filter)
-    order_by: list[OrderField] = []          # ORDER BY columns
+    # ── READ / full-fetch mode (DB, file, or small REST) ───────────────────────
+    # Elliot fetches all rows, loads into SQLite, runs a generated SELECT.
+    filter_groups: list[FilterGroup] = []  # WHERE conditions
+    return_fields: list[ReturnField] = []  # SELECT columns (with optional aggregation)
+    having: list[FilterGroup] = []         # HAVING conditions (post-aggregation)
+    order_by: list[OrderField] = []        # ORDER BY columns
     limit: int = 100
 
-    # WRITE / ACTION tools: Elliot maps parameters into the HTTP request.
+    # ── READ / passthrough mode (large REST APIs with server-side filtering) ────
+    # Parameter names listed here are forwarded directly as API query params.
+    # The agent controls their values; Elliot does NOT paginate automatically.
+    # Any filter_groups still apply as a post-fetch SQL filter on the result.
+    #
+    # Example: rest_query_params=["q","page","per_page"] with matching parameters
+    # lets the agent call: search_products(q="widget", page=2, per_page=10)
+    # Elliot sends: GET /products?q=widget&page=2&per_page=10
+    rest_query_params: list[str] = []
+
+    # ── WRITE / ACTION tools (REST sources) ───────────────────────────────
     api_mapping: Optional[ApiRequestMapping] = None
 
     parameters: list[ParameterDefinition] = []
@@ -92,4 +103,4 @@ class SkillDefinition(BaseModel):
 
 class ToolResult(BaseModel):
     rows: list[dict[str, Any]]
-    meta: dict[str, Any]  # row_count, latency_ms, truncated, sources_fetched
+    meta: dict[str, Any]  # row_count, fetch_mode, truncated, sources_fetched

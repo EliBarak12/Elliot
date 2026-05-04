@@ -69,13 +69,76 @@ class ToolExecutor:
         return result
 
     async def _execute_read(self, tool: ToolDefinition, params: dict[str, Any]) -> ToolResult:
+        # ── Passthrough mode: agent params forwarded as API query params ──────────
+        if tool.rest_query_params:
+            return await self._execute_read_passthrough(tool, params)
+
+        # ── Full-fetch mode: fetch all rows → SQLite → generated SELECT ────────
+        return await self._execute_read_full(tool, params)
+
+    async def _execute_read_passthrough(
+        self, tool: ToolDefinition, params: dict[str, Any]
+    ) -> ToolResult:
+        """
+        Passthrough mode: forward rest_query_params values directly to the API
+        as query string parameters. Returns the API response without full pagination.
+        Optionally applies filter_groups as a post-fetch SQL filter.
+        """
+        source = self._source_map.get(tool.source_ids[0])
+        if not source:
+            raise ElliotError("SOURCE_NOT_FOUND", f"Source '{tool.source_ids[0]}' not found")
+        if source.type != "rest":
+            raise ElliotError(
+                "INVALID_TOOL",
+                f"Tool '{tool.id}' uses rest_query_params but source '{source.id}' "
+                f"is type '{source.type}', not 'rest'",
+            )
+
+        api_params = {k: params[k] for k in tool.rest_query_params if k in params}
+        log.debug("tool.passthrough", tool_id=tool.id, api_params=list(api_params))
+
+        from elliot_core.sources.passthrough_fetcher import fetch_passthrough
+        fetch_result = await fetch_passthrough(source, self._secrets, api_params)
+
+        rows = fetch_result.rows
+
+        # Optional: apply filter_groups / return_fields as SQL post-filter
+        if tool.filter_groups or tool.return_fields or tool.having or tool.order_by:
+            engine = SQLiteEngine()
+            try:
+                engine.load_result(flatten(rows, source.id))
+                sql, sql_params = build_select_sql(tool, params)
+                rows = engine.query(sql, sql_params)
+            finally:
+                engine.close()
+
+        truncated = len(rows) > tool.response_shape.max_rows
+        rows = rows[: tool.response_shape.max_rows]
+        rows = _apply_rename(rows, tool.response_shape.rename)
+
+        return ToolResult(
+            rows=rows,
+            meta={
+                "fetch_mode": "passthrough",
+                "row_count": len(rows),
+                "truncated": truncated,
+                "api_params_sent": list(api_params.keys()),
+            },
+        )
+
+    async def _execute_read_full(
+        self, tool: ToolDefinition, params: dict[str, Any]
+    ) -> ToolResult:
+        """
+        Full-fetch mode: retrieve all pages from source, load into SQLite,
+        run generated SELECT with filter_groups / return_fields / order_by.
+        """
         fetch_results = await self._fetch_sources(tool.source_ids)
 
         engine = SQLiteEngine()
         try:
             for source_id, fetch_result in fetch_results.items():
-                flat = flatten(fetch_result.rows, source_id)
-                engine.load_result(flat)
+                engine.load_result(flatten(fetch_result.rows, source_id))
 
             sql, sql_params = build_select_sql(tool, params)
             try:
@@ -93,6 +156,7 @@ class ToolExecutor:
         return ToolResult(
             rows=rows,
             meta={
+                "fetch_mode": "full",
                 "row_count": len(rows),
                 "truncated": truncated,
                 "sources_fetched": list(fetch_results.keys()),
@@ -146,11 +210,9 @@ class ToolExecutor:
             log.error("tool.write.failed", tool_id=tool.id, error=str(exc))
             raise ElliotError("API_REQUEST_FAILED", str(exc)) from exc
 
-        return ToolResult(rows=rows, meta={"row_count": len(rows), "url": url})
+        return ToolResult(rows=rows, meta={"fetch_mode": "write", "row_count": len(rows), "url": url})
 
-    async def _fetch_sources(
-        self, source_ids: list[str]
-    ) -> dict[str, FetchResult]:
+    async def _fetch_sources(self, source_ids: list[str]) -> dict[str, FetchResult]:
         async def _one(sid: str) -> tuple[str, FetchResult]:
             source = self._source_map.get(sid)
             if not source:
@@ -164,9 +226,7 @@ class ToolExecutor:
                 raise
             except Exception as exc:
                 log.error("source.fetch.failed", source_id=sid, error=str(exc))
-                raise SourceFetchError(
-                    f"Failed to fetch source '{sid}': {exc}"
-                ) from exc
+                raise SourceFetchError(f"Failed to fetch source '{sid}': {exc}") from exc
 
         pairs = await asyncio.gather(*[_one(sid) for sid in source_ids])
         return dict(pairs)

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "elliot-mcp-plugin"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "elliot-core",
+    "mcp[cli]>=1.9",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "structlog>=24.1",
+    "slowapi>=0.1.9",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/elliot_mcp_plugin"]

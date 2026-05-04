@@ -16,7 +16,7 @@ build-backend = "hatchling.build"
 [project]
 name = "elliot-<name>"        # elliot-core / elliot-mcp-plugin / elliot-connector-runtime
 version = "0.1.0"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = []             # filled in per-package below
 
 [tool.hatch.build.targets.wheel]

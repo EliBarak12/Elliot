@@ -2,8 +2,8 @@
 
 79 ordered tasks across 9 epics. The **Folder Structure** table is for navigation. The **Build Order** is the sequence to implement them.
 
-**Backend**: Python 3.12 + uv workspaces 
-**Frontend**: TypeScript + React + Vite + shadcn/ui
+**Backend**: Python 3.13 + uv workspaces 
+**Frontend**: TypeScript + React 19 + Vite + shadcn/ui + TanStack
 
 ---
 
@@ -30,7 +30,7 @@
 ### Phase 1 — Foundation
 
 | # | Task | What it unlocks |
-|---|------|-----------------|
+|---|------|----------------|
 | 1 | 001 | Monorepo workspace |
 | 2 | 002 | Python tooling (ruff, mypy, pytest) |
 | 3 | 003 | TypeScript tooling (ESLint, Vitest) |
@@ -45,7 +45,7 @@
 ### Phase 2 — Core Library
 
 | # | Task | What it unlocks |
-|---|------|-----------------|
+|---|------|----------------|
 | 11 | 006 | Column namer / type inferrer |
 | 12 | 007 | JSON flattener |
 | 13 | 008 | Flattener tests |
@@ -66,7 +66,7 @@
 ### Phase 3 — Connector Creation Tools
 
 | # | Task | What it unlocks |
-|---|------|-----------------|
+|---|------|----------------|
 | 27 | 059 | Test plan strategy document |
 | 28 | 075 | Connector starter templates (`elliot init --template`) |
 | 29 | 070 | OpenAPI spec analyzer → `ProposedConnector` |
@@ -76,7 +76,7 @@
 ### Phase 4 — Runtime Services
 
 | # | Task | What it unlocks |
-|---|------|-----------------|
+|---|------|----------------|
 | 32 | 033 | Runtime loader + cache (TTL + mtime) |
 | 33 | 034 | Runtime executor (wraps core ToolExecutor) |
 | 34 | 067 | Observation store (SQLite default / MySQL optional) |
@@ -91,7 +91,7 @@
 ### Phase 5 — MCP Plugin & Agentic Builder
 
 | # | Task | What it unlocks |
-|---|------|-----------------|
+|---|------|----------------|
 | 42 | 022 | Plugin `ElliotSession` |
 | 43 | 023 | Plugin FastMCP server factory (:3000) |
 | 44 | 024 | Plugin source tools |
@@ -110,17 +110,17 @@
 ### Phase 6 — Studio UI
 
 | # | Task | What it unlocks |
-|---|------|-----------------|
-| 56 | 038 | Studio Vite + shadcn/ui scaffold |
-| 57 | 039 | App shell (nav, layout, routing) |
+|---|------|----------------|
+| 56 | 038 | Studio Vite + shadcn/ui scaffold (React 19) |
+| 57 | 039 | App shell (nav, layout, TanStack Router) |
 | 58 | 040 | MCP client (`StreamableHTTPClientTransport`) |
-| 59 | 041 | Zustand store |
+| 59 | 041 | Zustand store (UI state) + TanStack Query setup (server state) |
 | 60 | 042 | Dashboard / sources page |
-| 61 | 043 | Tools page |
+| 61 | 043 | Tools page (TanStack Table) |
 | 62 | 044 | Skills page |
 | 63 | 045 | Meta-tools page |
 | 64 | 046 | Playground |
-| 65 | 047 | Metrics / audit page |
+| 65 | 047 | Metrics / audit page (TanStack Table) |
 | 66 | 048 | Studio UI tests |
 | 67 | 064 | Studio Agent Console (real-time session tree) |
 | 68 | 065 | Token efficiency metrics |
@@ -129,7 +129,7 @@
 ### Phase 7 — Quality Gates
 
 | # | Task | What it unlocks |
-|---|------|-----------------|
+|---|------|----------------|
 | 70 | 063 | Eval runner CLI (`elliot eval`) |
 | 71 | 049 | Eval runner in `elliot-core` |
 | 72 | 050 | Quality analyzer |
@@ -140,7 +140,7 @@
 ### Phase 8 — Ship
 
 | # | Task | What it unlocks |
-|---|------|-----------------|
+|---|------|----------------|
 | 76 | 055 | E2E integration test (agent → plugin → runtime → DB) |
 | 77 | 056 | CI workflow (GitHub Actions) |
 | 78 | 069 | Docker Compose + production Dockerfiles |
@@ -155,7 +155,7 @@
 | Core library | Python | `pydantic`, `httpx`, `sqlite3`, `sqlalchemy` |
 | MCP Plugin | Python | `mcp` (FastMCP), `fastapi`, `uvicorn`, `structlog`, `slowapi` |
 | Connector Runtime | Python | `mcp` (FastMCP), `fastapi`, `uvicorn`, `structlog`, `sqlalchemy`, `pymysql`, `asyncpg` |
-| Studio UI | TypeScript | React, Vite, shadcn/ui, `@modelcontextprotocol/sdk` |
+| Studio UI | TypeScript | React 19, Vite, shadcn/ui, TanStack Router v1, TanStack Query v5, TanStack Table v8, Zustand v5, `@modelcontextprotocol/sdk` |
 
 ---
 
@@ -174,7 +174,7 @@ Workspace, tooling configs, package stubs.
 `elliot-connector-runtime` on :3001: loader + cache, executor, FastMCP server, OpenAI endpoint, observation store, session tracker.
 
 ### [05 — Studio UI](05-studio-ui/)
-`elliot-studio` React app on :5173: app shell, MCP client, Zustand, all pages.
+`elliot-studio` React 19 app on :5173: TanStack Router for navigation, TanStack Query for server state, TanStack Table for data grids, Zustand for UI state, shadcn/ui components.
 
 ### [06 — Eval & Polish](06-eval-and-polish/)
 Eval runner, quality analyzer, eval UI, error audit, empty states, E2E test, CI.

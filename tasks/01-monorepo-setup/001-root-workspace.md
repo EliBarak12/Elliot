@@ -29,7 +29,7 @@ dev-dependencies = [
 
 ### `.python-version`
 ```
-3.12
+3.13
 ```
 
 ### `pnpm-workspace.yaml` (Studio only)
@@ -87,4 +87,4 @@ node_modules/
 ## Done When
 - [ ] `uv sync` installs all Python dev dependencies
 - [ ] `make test` recognized (no packages yet, exits 0)
-- [ ] `uv run python --version` prints `Python 3.12.x`
+- [ ] `uv run python --version` prints `Python 3.13.x`

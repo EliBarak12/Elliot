@@ -1,0 +1,74 @@
+import json
+import os
+
+import pytest
+
+from elliot_core.errors import ElliotError
+from elliot_mcp_plugin.connector_loader import load_connector, load_secrets
+
+_CONNECTOR = {
+    "id": "test",
+    "name": "Test",
+    "description": "Test connector",
+    "sources": [{"id": "s1", "name": "Source 1", "type": "file", "path": "/tmp/data.csv"}],
+    "tools": [],
+}
+
+
+def test_load_from_file(tmp_path):
+    p = tmp_path / "connector.json"
+    p.write_text(json.dumps(_CONNECTOR))
+    config = load_connector(str(p))
+    assert config.id == "test"
+
+
+def test_load_from_env_path(tmp_path, monkeypatch):
+    p = tmp_path / "connector.json"
+    p.write_text(json.dumps(_CONNECTOR))
+    monkeypatch.setenv("ELLIOT_CONNECTOR_PATH", str(p))
+    config = load_connector()
+    assert config.name == "Test"
+
+
+def test_load_from_env_json(monkeypatch):
+    monkeypatch.setenv("ELLIOT_CONNECTOR_JSON", json.dumps(_CONNECTOR))
+    config = load_connector()
+    assert config.description == "Test connector"
+
+
+def test_env_path_takes_priority_over_env_json(tmp_path, monkeypatch):
+    p = tmp_path / "connector.json"
+    other = dict(_CONNECTOR, id="from-file")
+    p.write_text(json.dumps(other))
+    monkeypatch.setenv("ELLIOT_CONNECTOR_PATH", str(p))
+    monkeypatch.setenv("ELLIOT_CONNECTOR_JSON", json.dumps(_CONNECTOR))
+    config = load_connector()
+    assert config.id == "from-file"
+
+
+def test_missing_raises(monkeypatch):
+    monkeypatch.delenv("ELLIOT_CONNECTOR_PATH", raising=False)
+    monkeypatch.delenv("ELLIOT_CONNECTOR_JSON", raising=False)
+    with pytest.raises(ElliotError) as exc_info:
+        load_connector()
+    assert exc_info.value.code == "CONNECTOR_NOT_FOUND"
+
+
+def test_explicit_path_not_found_raises():
+    with pytest.raises(ElliotError) as exc_info:
+        load_connector("/nonexistent/path.json")
+    assert exc_info.value.code == "CONNECTOR_NOT_FOUND"
+
+
+def test_load_secrets(monkeypatch):
+    monkeypatch.setenv("ELLIOT_SECRET_API_KEY", "abc123")
+    monkeypatch.setenv("ELLIOT_SECRET_DB_PASS", "secret")
+    secrets = load_secrets()
+    assert secrets["api_key"] == "abc123"
+    assert secrets["db_pass"] == "secret"
+
+
+def test_load_secrets_empty(monkeypatch):
+    for k in [k for k in os.environ if k.startswith("ELLIOT_SECRET_")]:
+        monkeypatch.delenv(k, raising=False)
+    assert load_secrets() == {}

@@ -1,3 +1,4 @@
-"""Elliot MCP Plugin — FastMCP server on :3000."""
+from .connector_loader import load_connector, load_secrets
+from .server import build_tool_list, create_server, run_stdio
 
-__version__ = "0.1.0"
+__all__ = ["build_tool_list", "create_server", "run_stdio", "load_connector", "load_secrets"]

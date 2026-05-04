@@ -1,0 +1,6 @@
+id,name,email,status,total_spent
+1,Alice Smith,alice@example.com,active,1250.00
+2,Bob Jones,bob@example.com,inactive,320.50
+3,Carol White,carol@example.com,active,875.25
+4,Dave Brown,dave@example.com,active,2100.75
+5,Eve Davis,eve@example.com,suspended,50.00

@@ -1,0 +1,5 @@
+{"event_id": "e001", "type": "page_view", "user_id": 1, "ts": "2026-05-01T10:00:00Z"}
+{"event_id": "e002", "type": "click", "user_id": 1, "ts": "2026-05-01T10:00:05Z"}
+{"event_id": "e003", "type": "purchase", "user_id": 2, "ts": "2026-05-01T10:01:00Z"}
+{"event_id": "e004", "type": "page_view", "user_id": 3, "ts": "2026-05-01T10:02:00Z"}
+{"event_id": "e005", "type": "logout", "user_id": 2, "ts": "2026-05-01T10:03:00Z"}

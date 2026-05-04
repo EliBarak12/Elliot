@@ -31,6 +31,11 @@ class ReturnField(BaseModel):
     aggregation: Literal["none", "count", "sum", "avg", "min", "max"] = "none"
 
 
+class OrderField(BaseModel):
+    field: str
+    direction: Literal["ASC", "DESC"] = "ASC"
+
+
 class ApiRequestMapping(BaseModel):
     """
     For REST sources: how tool parameters map into the HTTP request.
@@ -58,8 +63,10 @@ class ToolDefinition(BaseModel):
     source_ids: list[str]
 
     # READ tools: Elliot converts these into a safe parameterized SELECT.
-    filter_groups: list[FilterGroup] = []
-    return_fields: list[ReturnField] = []
+    filter_groups: list[FilterGroup] = []    # WHERE conditions
+    return_fields: list[ReturnField] = []    # SELECT columns (with optional aggregation)
+    having: list[FilterGroup] = []           # HAVING conditions (post-aggregation filter)
+    order_by: list[OrderField] = []          # ORDER BY columns
     limit: int = 100
 
     # WRITE / ACTION tools: Elliot maps parameters into the HTTP request.

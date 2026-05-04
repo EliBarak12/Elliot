@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Callable
+from typing import Any, Callable
 
 import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -31,6 +31,3 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         )
         response.headers["X-Request-Id"] = request_id
         return response
-
-
-from typing import Any  # noqa: E402 — keep at bottom to avoid circular at module load

@@ -1,0 +1,32 @@
+{
+  "data": [
+    {
+      "id": "ord-001",
+      "customer_id": 1,
+      "status": "shipped",
+      "total": 149.99,
+      "items": [
+        {"sku": "WIDGET-A", "qty": 2, "price": 49.99},
+        {"sku": "GADGET-B", "qty": 1, "price": 50.01}
+      ]
+    },
+    {
+      "id": "ord-002",
+      "customer_id": 2,
+      "status": "pending",
+      "total": 29.99,
+      "items": [
+        {"sku": "WIDGET-A", "qty": 1, "price": 29.99}
+      ]
+    },
+    {
+      "id": "ord-003",
+      "customer_id": 1,
+      "status": "delivered",
+      "total": 299.00,
+      "items": [
+        {"sku": "DEVICE-C", "qty": 1, "price": 299.00}
+      ]
+    }
+  ]
+}

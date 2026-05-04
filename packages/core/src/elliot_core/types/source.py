@@ -16,8 +16,8 @@ class PaginationConfig(BaseModel):
     strategy: Literal["cursor", "offset", "page", "link_header", "none"] = "none"
     page_size: int = 100
     max_pages: int = 10
-    cursor_field: Optional[str] = None
-    next_url_field: Optional[str] = None
+    cursor_field: Optional[str] = None    # response field that holds the next cursor
+    next_url_field: Optional[str] = None  # response field that holds the next page URL
 
 
 class SourceConfig(BaseModel):
@@ -49,3 +49,6 @@ class FetchResult(BaseModel):
     fetched_at: str
     page_count: int = 1
     warnings: list[str] = []
+    # Populated by passthrough fetcher so the agent knows how to get the next page.
+    # Keys depend on pagination strategy: next_cursor, next_url, total, has_more, etc.
+    pagination_meta: dict[str, Any] = {}

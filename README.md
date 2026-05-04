@@ -11,8 +11,8 @@ Turn your existing product into an agentic-native product. Elliot wraps your dat
 Connecting an API to Claude is easy. Making it work *well* with agents is not. Agents fail when:
 - Tool descriptions are vague → wrong tool called
 - Results are too large → context window fills up
-- Errors are unstructured → agent can't recover
-- No observability → you don't know it's broken
+- Errors are unstructured → agent can’t recover
+- No observability → you don’t know it’s broken
 
 Elliot makes these problems visible and fixable.
 

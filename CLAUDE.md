@@ -123,7 +123,7 @@ elliot/
 │   ├── core/                  elliot-core          Python 3.13
 │   ├── mcp-plugin/            elliot-mcp-plugin    :3000
 │   ├── connector-runtime/     elliot-connector-runtime  :3001
-│   └── studio/                elliot-studio        React 19 :5175
+│   └── studio/                elliot-studio        React 19 :5173
 ├── connectors/            user connector.json files
 ├── templates/             starter connectors
 ├── Procfile               honcho start

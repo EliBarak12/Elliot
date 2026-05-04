@@ -1,7 +1,7 @@
 # Task 069 — Docker Compose + Production Deployment
 
 ## Goal
-Provide a `docker-compose.yml` that spins up all Elliot services in one command, plus an `.env.example` with every variable documented. Users can go from zero to running on a server without touching `uvicorn` or `vite` directly.
+Provide a `docker-compose.yml` that spins up all Elliot services in one command, plus an `.env.example` with every variable documented.
 
 ## Files to create
 
@@ -49,7 +49,7 @@ services:
       - plugin
       - runtime
 
-  # Optional: remote observation DB
+  # Optional remote observation DB
   # Enable with: docker compose --profile mysql up
   mysql:
     image: mysql:8.0
@@ -70,66 +70,93 @@ volumes:
 ### `packages/mcp-plugin/Dockerfile`
 
 ```dockerfile
-FROM python:3.12-slim
+FROM python:3.13-slim
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY packages/core packages/core
 COPY packages/mcp-plugin packages/mcp-plugin
 RUN pip install uv && uv sync --frozen --no-dev
 EXPOSE 3000
-CMD ["uv", "run", "uvicorn", "elliot_mcp_plugin.server:app", "--host", "0.0.0.0", "--port", "3000"]
+CMD ["uv", "run", "uvicorn", "elliot_mcp_plugin.main:app", \
+     "--host", "0.0.0.0", "--port", "3000"]
 ```
 
 ### `packages/connector-runtime/Dockerfile`
 
 ```dockerfile
-FROM python:3.12-slim
+FROM python:3.13-slim
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY packages/core packages/core
 COPY packages/connector-runtime packages/connector-runtime
 RUN pip install uv && uv sync --frozen --no-dev
 EXPOSE 3001
-CMD ["uv", "run", "uvicorn", "elliot_connector_runtime.server:app", "--host", "0.0.0.0", "--port", "3001"]
+CMD ["uv", "run", "uvicorn", "elliot_connector_runtime.server:app", \
+     "--host", "0.0.0.0", "--port", "3001"]
 ```
 
 ### `packages/studio/Dockerfile`
 
 ```dockerfile
-FROM node:20-alpine AS build
+FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN npm install -g pnpm && pnpm install --frozen-lockfile
 COPY . .
+ARG VITE_PLUGIN_URL=http://localhost:3000
+ARG VITE_RUNTIME_URL=http://localhost:3001
+ARG VITE_API_KEY
 RUN pnpm build
 
 FROM nginx:alpine
 COPY --from=build /app/dist /usr/share/nginx/html
-COPY packages/studio/nginx.conf /etc/nginx/conf.d/default.conf
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
+```
+
+### `packages/studio/nginx.conf`
+
+```nginx
+server {
+    listen 80;
+    root /usr/share/nginx/html;
+    index index.html;
+    # SPA fallback
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
 ```
 
 ### `.env.example`
 
 ```dotenv
-# ── Elliot Auth ────────────────────────────────────────────
+# ── Auth ────────────────────────────────────────────────────────
 # Leave blank for local dev (no auth). Set for any server deployment.
 ELLIOT_API_KEY=
 VITE_API_KEY=
 
-# ── Connectors ─────────────────────────────────────────────
+# ── Connectors ───────────────────────────────────────────────
 ELLIOT_CONNECTORS_DIR=./connectors
+# Single-connector mode:
+ELLIOT_CONNECTOR=./connectors/my-api.connector.json
 
-# ── Observation DB ─────────────────────────────────────────
+# ── Observation DB ───────────────────────────────────────────
 # Default: local SQLite. For MySQL: mysql+pymysql://user:pass@host/elliot
 ELLIOT_DB_URL=sqlite:///.elliot/observations.db
-# Only needed when using the mysql profile:
 MYSQL_ROOT_PASSWORD=changeme
+
+# ── Sessions / Audit ─────────────────────────────────────────
+ELLIOT_SESSIONS_LOG=.elliot/sessions.ndjson
+ELLIOT_AUDIT_LOG=.elliot/audit.ndjson
+
+# ── Rate limiting ──────────────────────────────────────────
+ELLIOT_RATE_LIMIT=120/minute
 
 # ── Logging ────────────────────────────────────────────────
 LOG_LEVEL=INFO
 
-# ── Studio ─────────────────────────────────────────────────
+# ── Studio ───────────────────────────────────────────────
 VITE_PLUGIN_URL=http://localhost:3000
 VITE_RUNTIME_URL=http://localhost:3001
 ```
@@ -137,16 +164,23 @@ VITE_RUNTIME_URL=http://localhost:3001
 ## Usage
 
 ```bash
-# Local dev (existing Procfile workflow unchanged)
+# Local dev (Procfile workflow unchanged)
 honcho start
 
-# Production — all services
+# Production
 cp .env.example .env   # fill in values
 docker compose up -d
 
-# Production — with remote MySQL
+# Production with MySQL observation DB
 docker compose --profile mysql up -d
 ```
+
+## Done When
+- [ ] `docker compose up -d` starts plugin + runtime + studio without error
+- [ ] `docker compose --profile mysql up -d` starts all 4 services
+- [ ] `curl http://localhost:3000/healthz` returns 200 inside container
+- [ ] Studio served at `http://localhost:80` loads correctly
+- [ ] `.env.example` documents every variable used anywhere in the codebase
 
 ## Estimate
 4–5 hours

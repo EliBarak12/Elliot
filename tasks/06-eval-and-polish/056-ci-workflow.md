@@ -1,4 +1,4 @@
-# 056 — CI Workflow + Final Polish
+# 056 — CI Workflow
 
 **Sprint**: 4 | **Estimate**: 2h | **Depends on**: 055
 
@@ -10,43 +10,74 @@ GitHub Actions CI that runs on every push and PR. Green CI = project is shippabl
 ### `.github/workflows/ci.yml`
 ```yaml
 name: CI
-on: [push, pull_request]
+
+on:
+  push:
+    branches: [main, "epic/**", "claude/**"]
+  pull_request:
+
 jobs:
   python:
+    name: Python (lint + typecheck + test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: astral-sh/setup-uv@v4
-        with: { version: "latest" }
+        with:
+          version: "latest"
+          python-version: "3.13"
+
       - run: uv sync
-      - run: uv run ruff check .
-      - run: uv run mypy packages/core/src packages/mcp-plugin/src packages/connector-runtime/src
-      - run: uv run pytest --cov --cov-fail-under=85
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy packages/core/src packages/mcp-plugin/src packages/connector-runtime/src
+
+      - name: Test with coverage
+        run: uv run pytest --tb=short --cov --cov-fail-under=85
+
   studio:
+    name: Studio (typecheck + test + build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v3
-        with: { version: 9 }
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
       - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: pnpm }
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @elliot/studio run typecheck
-      - run: pnpm --filter @elliot/studio run test
-      - run: pnpm --filter @elliot/studio run build
+
+      - name: Type check
+        run: pnpm --filter @elliot/studio run typecheck
+
+      - name: Unit tests
+        run: pnpm --filter @elliot/studio run test --run
+
+      - name: Build
+        run: pnpm --filter @elliot/studio run build
 ```
 
 ### Final Polish Checklist
-- [ ] Add docstrings to all public functions in `elliot_core`
-- [ ] Verify `make setup` runs without error on a fresh clone
-- [ ] Verify `make dev` starts both plugin and Studio
-- [ ] Confirm all 8 Studio pages have non-empty empty states (task 054)
-- [ ] `uv run pytest --cov` hits 85% line coverage across all packages
-- [ ] Add `CHANGELOG.md` to repo root with Phase 1 highlights
+- [ ] `make setup` runs without error on a fresh clone
+- [ ] `make dev` starts plugin, runtime, and Studio
+- [ ] All 8 Studio pages have non-empty empty states (task 054)
+- [ ] `uv run pytest --cov` hits 85% line coverage
+- [ ] `CHANGELOG.md` at repo root with v0.1.0 highlights
 
 ## Done When
-- [ ] `.github/workflows/ci.yml` exists and is valid YAML
-- [ ] Python CI job exits 0 locally
-- [ ] Studio CI job exits 0 locally
-- [ ] Zero type errors across all packages
-- [ ] All 56 tasks completed
+- [ ] `.github/workflows/ci.yml` passes `yamllint`
+- [ ] Python job exits 0 (ruff + mypy + pytest at 85%)
+- [ ] Studio job exits 0 (tsc + vitest + vite build)
+- [ ] Zero mypy errors across all packages

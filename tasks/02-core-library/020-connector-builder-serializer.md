@@ -10,12 +10,20 @@ from elliot_core.types.connector import ConnectorConfig, SourceConfig
 from elliot_core.types.tool import ToolDefinition, SkillDefinition
 from elliot_core.errors import ElliotError
 
+
 class ConnectorBuilder:
     def __init__(self) -> None:
         self._meta: dict = {}
 
-    def set_meta(self, name: str, version: str, slug: str, description: str = "") -> None:
-        self._meta = {"name": name, "version": version, "slug": slug, "description": description}
+    def set_meta(
+        self, name: str, version: str, slug: str, description: str = ""
+    ) -> None:
+        self._meta = {
+            "name": name,
+            "version": version,
+            "slug": slug,
+            "description": description,
+        }
 
     def build(
         self,
@@ -34,38 +42,75 @@ import json
 from elliot_core.types.connector import ConnectorConfig
 from elliot_core.errors import ElliotError
 
+
 def serialize_connector(config: ConnectorConfig) -> str:
     return config.model_dump_json(indent=2)
+
 
 def deserialize_connector(json_str: str) -> ConnectorConfig:
     try:
         return ConnectorConfig.model_validate_json(json_str)
-    except Exception as e:
-        raise ElliotError("INVALID_CONNECTOR", str(e))
+    except Exception as exc:
+        raise ElliotError("INVALID_CONNECTOR", str(exc)) from exc
 ```
 
 ### `packages/core/src/elliot_core/connector/schema_gen.py`
 ```python
 from elliot_core.types.tool import ToolDefinition
 
-TYPE_MAP = {"string": "string", "integer": "integer", "number": "number", "boolean": "boolean", "date": "string"}
+_TYPE_MAP = {
+    "string": "string",
+    "integer": "integer",
+    "number": "number",
+    "boolean": "boolean",
+    "date": "string",
+}
+
 
 def to_mcp_tool_schema(tool: ToolDefinition) -> dict:
-    """Convert ToolDefinition to MCP tools/list JSON Schema."""
-    props = {p.name: {"type": TYPE_MAP[p.type], "description": p.description} for p in tool.parameters}
+    """Convert ToolDefinition to MCP tools/list JSON Schema entry."""
+    props = {
+        p.name: {"type": _TYPE_MAP.get(p.type, "string"), "description": p.description}
+        for p in tool.parameters
+    }
     required = [p.name for p in tool.parameters if p.required]
     return {
-        "name": tool.name,
+        "name": tool.id,
         "description": tool.description,
-        "inputSchema": {"type": "object", "properties": props, "required": required},
+        "inputSchema": {
+            "type": "object",
+            "properties": props,
+            "required": required,
+        },
     }
 
+
 def to_openai_function(tool: ToolDefinition) -> dict:
-    """Convert ToolDefinition to OpenAI function-calling schema."""
-    ...
+    """Convert ToolDefinition to OpenAI function-calling tool descriptor."""
+    props = {
+        p.name: {
+            "type": _TYPE_MAP.get(p.type, "string"),
+            "description": p.description,
+        }
+        for p in tool.parameters
+    }
+    required = [p.name for p in tool.parameters if p.required]
+    return {
+        "type": "function",
+        "function": {
+            "name": tool.id,
+            "description": tool.description,
+            "parameters": {
+                "type": "object",
+                "properties": props,
+                "required": required,
+            },
+        },
+    }
 ```
 
 ## Done When
-- [ ] `serialize_connector` then `deserialize_connector` produces identical `ConnectorConfig`
+- [ ] `serialize_connector` then `deserialize_connector` round-trips identical `ConnectorConfig`
 - [ ] `deserialize_connector` with invalid JSON raises `ElliotError("INVALID_CONNECTOR")`
-- [ ] MCP schema has correct `required` array
+- [ ] `to_mcp_tool_schema` and `to_openai_function` produce correct `required` arrays
+- [ ] `to_openai_function` wraps schema under `{"type": "function", "function": {...}}`

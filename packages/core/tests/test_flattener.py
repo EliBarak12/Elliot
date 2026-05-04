@@ -54,7 +54,8 @@ def test_empty_array_creates_empty_child_table():
 
 
 def test_array_truncation_emits_warning():
-    result = flatten([{"items": list(range(MAX_ARRAY_ROWS + 1))}], "t")
+    # Truncation only fires for arrays of objects (primitive arrays become JSON text)
+    result = flatten([{"items": [{"x": i} for i in range(MAX_ARRAY_ROWS + 1)]}], "t")
     assert any(w.type == "array_truncated" for w in result.warnings)
 
 

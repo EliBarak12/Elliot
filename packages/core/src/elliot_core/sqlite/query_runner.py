@@ -20,13 +20,13 @@ def validate_tool_sql(sql: str) -> tuple[bool, str]:
     no_comments = re.sub(r"--[^\n]*", "", stripped).strip()
     if not no_comments:
         return False, "SQL is empty"
-    if not no_comments.upper().startswith("SELECT"):
-        return False, "SQL must start with SELECT"
     if ";" in no_comments:
         return False, "Multiple statements not allowed"
     m = DDL_PATTERN.search(no_comments)
     if m:
         return False, f"Forbidden keyword: {m.group()}"
+    if not no_comments.upper().startswith("SELECT"):
+        return False, "SQL must start with SELECT"
     return True, ""
 
 

@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 
-from elliot_core.errors import ElliotError, SourceFetchError
+from elliot_core.errors import SourceFetchError
 from elliot_core.sources.api_fetcher import (
     _build_auth_headers,
     _build_auth_query_params,
@@ -22,6 +22,9 @@ async def fetch_passthrough(
     """
     Single-request fetch that forwards agent-supplied params directly to the API.
     No automatic pagination — the agent controls page/cursor/limit.
+
+    Pagination metadata is extracted using the field names declared in
+    source.pagination (cursor_field, next_url_field) so nothing is hardcoded.
     """
     headers = _build_auth_headers(source, secrets)
     base_params: dict[str, Any] = dict(_build_auth_query_params(source, secrets))  # type: ignore[arg-type]
@@ -47,18 +50,53 @@ async def fetch_passthrough(
 
     data = resp.json()
     rows = _extract_rows(data, source.data_path)
-
-    # Surface pagination metadata from the response if present
-    meta_keys = ("total", "total_count", "total_pages", "has_more", "next_cursor", "next_page")
-    pagination_meta = {
-        k: data[k] for k in meta_keys if isinstance(data, dict) and k in data
-    }
+    pagination_meta = _extract_pagination_meta(data, resp.headers, source)
 
     return FetchResult(
         rows=rows,
         fetched_at=datetime.now(timezone.utc).isoformat(),
         page_count=1,
-        warnings=(
-            [f"pagination_meta:{pagination_meta}"] if pagination_meta else []
-        ),
+        pagination_meta=pagination_meta,
     )
+
+
+def _extract_pagination_meta(
+    data: Any,
+    headers: httpx.Headers,
+    source: SourceConfig,
+) -> dict[str, Any]:
+    """
+    Extract next-page information using the field names declared in
+    source.pagination — not a hardcoded list of guesses.
+    """
+    meta: dict[str, Any] = {}
+    pg = source.pagination
+
+    if not isinstance(data, dict):
+        return meta
+
+    if pg.strategy == "cursor" and pg.cursor_field:
+        val = data.get(pg.cursor_field)
+        if val is not None:
+            meta["next_cursor"] = val
+            meta["cursor_field"] = pg.cursor_field
+
+    elif pg.strategy == "link_header":
+        import re
+        link = headers.get("link", "")
+        m = re.search(r'<([^>]+)>;\s*rel="next"', link)
+        if m:
+            meta["next_url"] = m.group(1)
+
+    elif pg.strategy in ("page", "offset") and pg.next_url_field:
+        val = data.get(pg.next_url_field)
+        if val is not None:
+            meta["next_url"] = val
+
+    # Surface row totals if the API provides them (field names vary per API,
+    # but these are universally useful — the agent can use them for UI or planning)
+    for key in ("total", "total_count", "count", "has_more"):
+        if key in data:
+            meta[key] = data[key]
+
+    return meta

@@ -4,36 +4,34 @@
 
 ## The Mental Model
 
-A **Connector** represents a **business domain**, not a single API or database.
+A **Connector** represents a **business domain**, not a single API or database. One connector can span REST APIs, Postgres tables, MySQL tables, CSV and JSON files.
 
-One connector can span any number of data sources — REST APIs, Postgres tables, MySQL tables, CSV files, JSON files — all within the same domain. A tool inside the connector can JOIN data from multiple sources in one query because Elliot ingests all required sources into an in-memory SQLite DB before executing the SQL.
+**The agent (or user) never writes SQL or HTTP requests directly.** They define a tool using high-level concepts:
+- Which source(s) to pull data from
+- Which filters to apply (field, operator, parameter or fixed value)
+- Which fields to return (with optional aggregation)
+- For REST write operations: which parameters map to the HTTP request
+
+Elliot’s execution engine converts this into a safe parameterized SQL query (for DB/file sources) or an HTTP call (for REST sources) at runtime.
 
 ```
 Connector: "E-commerce Domain"
-├── Source: products_api     (REST → https://api.shop.com/products)
-├── Source: inventory_db     (Postgres → inventory table)
-└── Source: categories_file  (CSV → ./data/categories.csv)
+├── Source: products_api     REST  → https://api.shop.com/products
+├── Source: inventory_db     Postgres → inventory table
+└── Source: categories_file  CSV → ./data/categories.csv
 
 Tool: list_products_with_stock
-  source_ids: ["products_api", "inventory_db"]
-  sql: >
-    SELECT p.name, p.price, i.quantity
-    FROM products_api p
-    JOIN inventory_db i ON p.id = i.product_id
-    WHERE p.category = :category
-
-Tool: get_category
-  source_ids: ["categories_file"]
-  sql: SELECT * FROM categories_file WHERE id = :id
+  source_ids:    [products_api, inventory_db]
+  filter_groups: [species = :category]        ← agent passes this at call time
+  return_fields: [name, price, quantity]       ← Elliot generates the JOIN + SELECT
+  limit:         50
 ```
-
-Each source is ingested as a SQLite table named after its `id`. Tools declare which sources they need via `source_ids` — only those are fetched per call.
 
 ## Files to Create
 
 ### `packages/core/src/elliot_core/types/source.py`
 ```python
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Literal, Optional, Any
 
 class AuthConfig(BaseModel):
@@ -45,16 +43,16 @@ class AuthConfig(BaseModel):
 class PaginationConfig(BaseModel):
     strategy: Literal["cursor", "offset", "page", "link_header", "none"] = "none"
     page_size: int = 100
-    max_pages: int = 100
+    max_pages: int = 10
     cursor_field: Optional[str] = None
     next_url_field: Optional[str] = None
 
 class SourceConfig(BaseModel):
-    id: str                    # used as the SQLite table name for this source
+    id: str           # becomes the table name in SQLite (for DB/file) or the source key (for REST)
     name: str
     type: Literal["rest", "postgres", "mysql", "file"]
 
-    # REST sources
+    # REST
     url: Optional[str] = None
     method: Literal["GET", "POST"] = "GET"
     auth: Optional[AuthConfig] = None
@@ -62,26 +60,21 @@ class SourceConfig(BaseModel):
     data_path: Optional[str] = None   # jmespath to extract list from response
     timeout_ms: int = 30_000
 
-    # DB sources (postgres / mysql)
-    table: Optional[str] = None       # table to SELECT * from, OR
-    query: Optional[str] = None       # raw SQL to run on the upstream DB
+    # DB (postgres / mysql)
+    table: Optional[str] = None       # fetch all rows from this table
+    query: Optional[str] = None       # or run this read-only query on the upstream DB
 
-    # File sources
+    # File
     path: Optional[str] = None
     format: Optional[Literal["csv", "json", "jsonl"]] = None
     encoding: str = "utf-8"
     delimiter: str = ","
 
-class FetchWarning(BaseModel):
-    type: str
-    message: str
-    field: Optional[str] = None
-
 class FetchResult(BaseModel):
     rows: list[dict[str, Any]]
-    warnings: list[FetchWarning] = []
-    fetched_at: str    # ISO timestamp
+    fetched_at: str
     page_count: int = 1
+    warnings: list[str] = []
 ```
 
 ### `packages/core/src/elliot_core/types/tool.py`
@@ -96,10 +89,35 @@ class ParameterDefinition(BaseModel):
     description: str = ""
     default: Optional[Any] = None
 
+class FilterCondition(BaseModel):
+    field: str
+    operator: Literal["=", "!=", ">", ">=", "<", "<=", "in_list", "contains", "is_null", "is_not_null"]
+    value: Optional[Any] = None            # fixed value baked into the tool
+    parameter_name: Optional[str] = None   # runtime parameter passed by the agent
+
+class FilterGroup(BaseModel):
+    logic: Literal["AND", "OR"] = "AND"
+    conditions: list[FilterCondition] = []
+
+class ReturnField(BaseModel):
+    field: str
+    alias: Optional[str] = None
+    aggregation: Literal["none", "count", "sum", "avg", "min", "max"] = "none"
+
+class ApiRequestMapping(BaseModel):
+    """
+    For REST sources: how tool parameters map into the HTTP request.
+    Only used when source.type == 'rest' and category == 'WRITE' or 'ACTION'.
+    """
+    method: Literal["GET", "POST", "PUT", "DELETE", "PATCH"] = "POST"
+    path_template: Optional[str] = None   # e.g. "/users/{user_id}" — {param} interpolated
+    query_params: list[str] = []          # parameter names sent as query string
+    body_params: list[str] = []           # parameter names sent in JSON body
+    body_format: Literal["json", "form"] = "json"
+
 class ResponseShape(BaseModel):
-    fields: Optional[list[str]] = None   # keep only these columns
-    rename: dict[str, str] = {}          # old_name → new_name
     max_rows: int = 1000
+    rename: dict[str, str] = {}           # old_name → new_name in output
 
 class ToolDefinition(BaseModel):
     id: str
@@ -107,12 +125,20 @@ class ToolDefinition(BaseModel):
     description: str
     category: Literal["READ", "WRITE", "ACTION"]
 
-    # Which sources to fetch and ingest into SQLite before running sql.
-    # Each source.id becomes a SQLite table name.
-    # A tool may reference one source or JOIN across many.
+    # Which sources to pull data from.
+    # Each source.id becomes a SQLite table name (for DB/file) or the base URL (for REST).
     source_ids: list[str]
 
-    sql: str                             # runs against the in-memory SQLite
+    # ── READ tools (DB / file sources) ─────────────────────────────────
+    # Elliot converts these into a safe parameterized SELECT.
+    filter_groups: list[FilterGroup] = []
+    return_fields: list[ReturnField] = []
+    limit: int = 100
+
+    # ── WRITE / ACTION tools (REST sources) ───────────────────────────
+    # Elliot maps parameters into the HTTP request body / query string.
+    api_mapping: Optional[ApiRequestMapping] = None
+
     parameters: list[ParameterDefinition] = []
     response_shape: ResponseShape = ResponseShape()
 
@@ -136,7 +162,8 @@ class ToolResult(BaseModel):
 ### `packages/core/src/elliot_core/types/connector.py`
 ```python
 from pydantic import BaseModel, model_validator
-from typing import Optional
+from elliot_core.types.source import SourceConfig
+from elliot_core.types.tool import ToolDefinition, SkillDefinition
 
 class ConnectorConfig(BaseModel):
     name: str
@@ -146,11 +173,9 @@ class ConnectorConfig(BaseModel):
     sources: list[SourceConfig] = []
     tools: list[ToolDefinition] = []
     skills: list[SkillDefinition] = []
-    rate_limit: int = 60
 
     @model_validator(mode="after")
     def _validate_source_refs(self) -> "ConnectorConfig":
-        """Every source_id referenced in a tool must exist in sources."""
         source_ids = {s.id for s in self.sources}
         for tool in self.tools:
             for sid in tool.source_ids:
@@ -159,40 +184,12 @@ class ConnectorConfig(BaseModel):
                         f"Tool '{tool.id}' references unknown source '{sid}'. "
                         f"Available: {sorted(source_ids)}"
                     )
+            if tool.category == "READ" and not tool.source_ids:
+                raise ValueError(f"READ tool '{tool.id}' must declare at least one source_id")
         return self
 ```
 
-### `packages/core/src/elliot_core/types/sqlite.py`
-```python
-class ColumnMeta(BaseModel):
-    name: str
-    sqlite_type: Literal["INTEGER", "REAL", "TEXT"]
-    nullable: bool = True
-
-class FlattenedTable(BaseModel):
-    name: str          # matches source.id — becomes the SQLite table name
-    columns: list[ColumnMeta]
-    rows: list[dict[str, Any]]
-
-class FlattenResult(BaseModel):
-    tables: list[FlattenedTable]     # one per source fetched
-    warnings: list[FetchWarning] = []
-```
-
-### `packages/core/src/elliot_core/types/audit.py`
-```python
-class AuditLogEntry(BaseModel):
-    timestamp: str
-    tool_id: str
-    session_id: str
-    params: dict[str, str]   # values redacted
-    sources_fetched: list[str]
-    row_count: int
-    latency_ms: float
-    error: Optional[str] = None
-```
-
-## Example: Multi-source connector JSON
+## Example connector.json
 
 ```json
 {
@@ -205,7 +202,7 @@ class AuditLogEntry(BaseModel):
       "type": "rest",
       "url": "https://api.shop.com/products",
       "data_path": "data.items",
-      "auth": {"type": "bearer", "secret_key": "{{ env:SHOP_API_TOKEN }}"}
+      "auth": {"type": "bearer", "secret_key": "{{ env:SHOP_TOKEN }}"}
     },
     {
       "id": "inventory_db",
@@ -224,23 +221,43 @@ class AuditLogEntry(BaseModel):
     {
       "id": "list_products_with_stock",
       "name": "List products with stock level",
-      "description": "Return products filtered by category, joined with live inventory levels",
+      "description": "Return products joined with live inventory, optionally filtered by category",
       "category": "READ",
       "source_ids": ["products_api", "inventory_db"],
-      "sql": "SELECT p.name, p.price, i.quantity FROM products_api p JOIN inventory_db i ON p.id = i.product_id WHERE (:category IS NULL OR p.category = :category) LIMIT 50",
+      "filter_groups": [
+        {
+          "logic": "AND",
+          "conditions": [
+            {"field": "products_api.category", "operator": "=", "parameter_name": "category"}
+          ]
+        }
+      ],
+      "return_fields": [
+        {"field": "products_api.name"},
+        {"field": "products_api.price"},
+        {"field": "inventory_db.quantity"}
+      ],
+      "limit": 50,
       "parameters": [
         {"name": "category", "type": "string", "required": false, "description": "Filter by product category"}
       ]
     },
     {
-      "id": "get_category_info",
-      "name": "Get category information",
-      "description": "Return metadata for a product category from the reference file",
-      "category": "READ",
-      "source_ids": ["categories_file"],
-      "sql": "SELECT * FROM categories_file WHERE id = :id",
+      "id": "create_order",
+      "name": "Create an order",
+      "description": "Submit a new order to the orders API with the specified product and quantity",
+      "category": "WRITE",
+      "source_ids": ["products_api"],
+      "api_mapping": {
+        "method": "POST",
+        "path_template": "/orders",
+        "body_params": ["product_id", "quantity", "customer_id"],
+        "body_format": "json"
+      },
       "parameters": [
-        {"name": "id", "type": "string", "required": true, "description": "Category ID"}
+        {"name": "product_id", "type": "string", "required": true, "description": "Product ID to order"},
+        {"name": "quantity", "type": "integer", "required": true, "description": "Number of units"},
+        {"name": "customer_id", "type": "string", "required": true, "description": "Customer placing the order"}
       ]
     }
   ]
@@ -249,6 +266,7 @@ class AuditLogEntry(BaseModel):
 
 ## Done When
 - [ ] All models importable from `elliot_core.types`
-- [ ] `ConnectorConfig` validator rejects unknown `source_ids` with a clear error
-- [ ] `ToolDefinition.source_ids` is required and non-empty
+- [ ] `ConnectorConfig` validator rejects unknown `source_ids`
+- [ ] `ToolDefinition` with `filter_groups` + `return_fields` validates correctly
+- [ ] `ToolDefinition` with `api_mapping` validates correctly
 - [ ] `uv run mypy packages/core/src` exits 0

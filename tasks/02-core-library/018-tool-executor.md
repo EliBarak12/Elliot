@@ -1,24 +1,24 @@
 # 018 — Tool Executor
 
-**Sprint**: 1 | **Estimate**: 4h | **Depends on**: 017, 009, 012, 013, 014
+**Sprint**: 1 | **Estimate**: 5h | **Depends on**: 017, 009, 012, 013, 014
 
 ## What it does
 
-For each tool call:
-1. Look up which `source_ids` the tool needs
-2. Fetch **only those sources** (REST, DB, or file) in parallel
-3. Ingest each fetched result into in-memory SQLite as a table named after the source's `id`
-4. Run the tool's SQL against the combined SQLite DB
-5. Apply response shape (field filter, rename, max_rows)
-6. Return `ToolResult`
+The executor handles two execution paths depending on the tool and source type:
 
-This is what enables cross-source JOINs. A tool that lists `source_ids: ["products_api", "inventory_db"]` gets both ingested into the same SQLite, so its SQL can do:
+**Path A — READ (DB / file sources):**
+1. For each `source_id` in the tool: fetch data (DB query or file read) in parallel
+2. Ingest each result into in-memory SQLite as a table named after `source.id`
+3. Generate a safe parameterized SELECT from `filter_groups` + `return_fields` + `limit`
+4. Run it, apply `response_shape`, return `ToolResult`
 
-```sql
-SELECT p.name, i.quantity
-FROM products_api p
-JOIN inventory_db i ON p.id = i.product_id
-```
+**Path B — WRITE / ACTION (REST sources):**
+1. Validate and coerce parameters
+2. Build the HTTP request from `api_mapping` (path, query params, body)
+3. Execute via `httpx`
+4. Return the response as `ToolResult`
+
+**The agent never writes SQL or HTTP request details.** That is entirely Elliot’s job.
 
 ## File to Create
 
@@ -33,7 +33,7 @@ import structlog
 
 from elliot_core.errors import ElliotError, SourceFetchError, ToolNotFoundError
 from elliot_core.sqlite.engine import SQLiteEngine
-from elliot_core.sqlite.query_runner import validate_tool_sql
+from elliot_core.tools.query_builder import build_select_sql
 from elliot_core.types.connector import ConnectorConfig
 from elliot_core.types.tool import ToolDefinition, ToolResult
 
@@ -41,97 +41,131 @@ log = structlog.get_logger(__name__)
 
 
 class ToolExecutor:
-    """
-    Executes a tool against its declared sources.
-    One executor instance per connector — holds the source fetcher map.
-    """
-
     def __init__(self, config: ConnectorConfig, fetcher_factory) -> None:
         self._config = config
         self._source_map = {s.id: s for s in config.sources}
         self._tool_map = {t.id: t for t in config.tools}
-        self._fetcher_factory = fetcher_factory  # callable(SourceConfig) → Fetcher
+        self._fetcher_factory = fetcher_factory
 
     async def execute(self, tool_id: str, params: dict[str, Any]) -> ToolResult:
         tool = self._tool_map.get(tool_id)
-        if tool is None:
-            raise ToolNotFoundError(f"Tool '{tool_id}' not found in connector '{self._config.slug}'")
+        if not tool:
+            raise ToolNotFoundError(f"Tool '{tool_id}' not found")
 
-        log.info("tool.call.start", tool_id=tool_id, source_ids=tool.source_ids)
+        log.info("tool.call.start", tool_id=tool_id, category=tool.category)
         t0 = time.monotonic()
-
         bound = _coerce_and_validate(tool, params)
 
-        valid, reason = validate_tool_sql(tool.sql)
-        if not valid:
-            raise ElliotError("INVALID_SQL", reason)
+        if tool.category == "READ":
+            result = await self._execute_read(tool, bound)
+        else:
+            result = await self._execute_write(tool, bound)
 
+        latency_ms = (time.monotonic() - t0) * 1000
+        log.info("tool.call.complete", tool_id=tool_id,
+                 rows=len(result.rows), duration_ms=round(latency_ms, 2))
+        return result
+
+    async def _execute_read(self, tool: ToolDefinition, params: dict) -> ToolResult:
         # Fetch all required sources in parallel
         fetch_results = await self._fetch_sources(tool.source_ids)
 
-        # Ingest each source into SQLite as a table named after source.id
+        # Ingest into SQLite — each source becomes a table named after source.id
         engine = SQLiteEngine()
         for source_id, fetch_result in fetch_results.items():
             engine.ingest_table(table_name=source_id, rows=fetch_result.rows)
 
-        # Run the tool SQL
+        # Generate and run SELECT
+        sql, sql_params = build_select_sql(tool, params)
         try:
-            rows = engine.query(tool.sql, bound)
+            rows = engine.query(sql, sql_params)
         except Exception as exc:
-            log.error("tool.sql.failed", tool_id=tool_id, error=str(exc))
+            log.error("tool.sql.failed", tool_id=tool.id, error=str(exc))
             raise ElliotError("SQL_EXECUTION_FAILED", str(exc)) from exc
 
-        latency_ms = (time.monotonic() - t0) * 1000
         truncated = len(rows) > tool.response_shape.max_rows
         rows = rows[:tool.response_shape.max_rows]
-        rows = _apply_response_shape(rows, tool.response_shape)
-
-        log.info(
-            "tool.call.complete",
-            tool_id=tool_id,
-            rows=len(rows),
-            duration_ms=round(latency_ms, 2),
-            truncated=truncated,
-            sources=list(fetch_results.keys()),
-        )
+        rows = _apply_rename(rows, tool.response_shape.rename)
 
         return ToolResult(
             rows=rows,
-            meta={
-                "row_count": len(rows),
-                "latency_ms": round(latency_ms, 2),
-                "truncated": truncated,
-                "sources_fetched": list(fetch_results.keys()),
-            },
+            meta={"row_count": len(rows), "truncated": truncated,
+                  "sources_fetched": list(fetch_results.keys())},
         )
 
-    async def _fetch_sources(
-        self, source_ids: list[str]
-    ) -> dict[str, Any]:  # source_id → FetchResult
-        async def _fetch_one(source_id: str):
-            source = self._source_map.get(source_id)
-            if source is None:
-                raise ElliotError("SOURCE_NOT_FOUND", f"Source '{source_id}' not in connector")
-            fetcher = self._fetcher_factory(source)
-            try:
-                log.debug("source.fetch.start", source_id=source_id, type=source.type)
-                result = await fetcher.fetch()
-                log.debug("source.fetch.complete", source_id=source_id, rows=len(result.rows))
-                return source_id, result
-            except Exception as exc:
-                log.error("source.fetch.failed", source_id=source_id, error=str(exc))
-                raise SourceFetchError(source_id, str(exc)) from exc
+    async def _execute_write(self, tool: ToolDefinition, params: dict) -> ToolResult:
+        """For REST WRITE / ACTION tools: build and execute an HTTP call."""
+        if not tool.api_mapping:
+            raise ElliotError("MISSING_API_MAPPING",
+                              f"WRITE tool '{tool.id}' has no api_mapping")
+        source = self._source_map.get(tool.source_ids[0])
+        if not source:
+            raise ElliotError("SOURCE_NOT_FOUND", f"Source '{tool.source_ids[0]}' not found")
 
-        pairs = await asyncio.gather(*[_fetch_one(sid) for sid in source_ids])
+        mapping = tool.api_mapping
+        base_url = (source.url or "").rstrip("/")
+        path = mapping.path_template or ""
+
+        # Interpolate path params: /users/{user_id} → /users/42
+        for name, val in params.items():
+            path = path.replace(f"{{{name}}}", str(val))
+
+        url = base_url + path
+        query = {k: params[k] for k in mapping.query_params if k in params}
+        body = {k: params[k] for k in mapping.body_params if k in params}
+
+        import httpx
+        headers = {}
+        if source.auth:
+            fetcher = self._fetcher_factory(source)
+            headers = fetcher.auth_headers()
+
+        try:
+            async with httpx.AsyncClient(timeout=source.timeout_ms / 1000) as client:
+                resp = await client.request(
+                    method=mapping.method,
+                    url=url,
+                    params=query or None,
+                    json=body if mapping.body_format == "json" else None,
+                    data=body if mapping.body_format == "form" else None,
+                    headers=headers,
+                )
+            resp.raise_for_status()
+            data = resp.json()
+            rows = data if isinstance(data, list) else [data]
+        except httpx.HTTPStatusError as exc:
+            log.error("tool.write.http_error", tool_id=tool.id,
+                      status=exc.response.status_code, url=url)
+            raise ElliotError("API_REQUEST_FAILED",
+                              f"API returned {exc.response.status_code}: {exc.response.text[:200]}") from exc
+        except Exception as exc:
+            log.error("tool.write.failed", tool_id=tool.id, error=str(exc))
+            raise ElliotError("API_REQUEST_FAILED", str(exc)) from exc
+
+        return ToolResult(rows=rows, meta={"row_count": len(rows), "url": url})
+
+    async def _fetch_sources(self, source_ids: list[str]) -> dict:
+        async def _one(sid):
+            source = self._source_map.get(sid)
+            if not source:
+                raise ElliotError("SOURCE_NOT_FOUND", f"Source '{sid}' not in connector")
+            try:
+                log.debug("source.fetch.start", source_id=sid, type=source.type)
+                result = await self._fetcher_factory(source).fetch()
+                log.debug("source.fetch.complete", source_id=sid, rows=len(result.rows))
+                return sid, result
+            except Exception as exc:
+                log.error("source.fetch.failed", source_id=sid, error=str(exc))
+                raise SourceFetchError(sid, str(exc)) from exc
+
+        pairs = await asyncio.gather(*[_one(sid) for sid in source_ids])
         return dict(pairs)
 
 
-def _coerce_and_validate(tool: ToolDefinition, params: dict[str, Any]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
+def _coerce_and_validate(tool: ToolDefinition, params: dict) -> dict:
+    result = {}
     for p in tool.parameters:
-        val = params.get(p.name)
-        if val is None and p.default is not None:
-            val = p.default
+        val = params.get(p.name, p.default)
         if val is None and p.required:
             raise ElliotError("MISSING_PARAM", f"Required parameter missing: '{p.name}'")
         if val is not None:
@@ -144,7 +178,7 @@ def _coerce(val: Any, typ: str) -> Any:
         try:
             return int(val)
         except (ValueError, TypeError):
-            raise ElliotError("INVALID_PARAM_TYPE", f"Cannot convert {val!r} to integer")
+            raise ElliotError("INVALID_PARAM_TYPE", f"Expected integer, got: {val!r}")
     if typ == "number":
         return float(val)
     if typ == "boolean":
@@ -152,57 +186,100 @@ def _coerce(val: Any, typ: str) -> Any:
     return str(val)
 
 
-def _apply_response_shape(rows: list[dict], shape) -> list[dict]:
-    if shape.fields:
-        rows = [{k: v for k, v in row.items() if k in shape.fields} for row in rows]
-    if shape.rename:
-        rows = [{shape.rename.get(k, k): v for k, v in row.items()} for row in rows]
-    return rows
+def _apply_rename(rows: list[dict], rename: dict) -> list[dict]:
+    if not rename:
+        return rows
+    return [{rename.get(k, k): v for k, v in row.items()} for row in rows]
+```
+
+### `packages/core/src/elliot_core/tools/query_builder.py`
+
+```python
+from elliot_core.types.tool import ToolDefinition
+
+_OP_MAP = {
+    "=": "=", "!=": "!=", ">": ">", ">=": ">=", "<": "<", "<=": "<=",
+    "contains": "LIKE", "in_list": "IN",
+    "is_null": "IS NULL", "is_not_null": "IS NOT NULL",
+}
+
+
+def build_select_sql(tool: ToolDefinition, params: dict) -> tuple[str, dict]:
+    """
+    Convert tool.filter_groups + return_fields + limit into a safe
+    parameterized SELECT. Returns (sql, bound_params).
+    """
+    # SELECT
+    if not tool.return_fields:
+        select_clause = "*"
+    else:
+        parts = []
+        for rf in tool.return_fields:
+            col = rf.field.replace(".", "_")  # products_api.name → products_api_name
+            if rf.aggregation and rf.aggregation != "none":
+                alias = rf.alias or col
+                parts.append(f"{rf.aggregation.upper()}({col}) AS {alias}")
+            else:
+                alias = f" AS {rf.alias}" if rf.alias and rf.alias != col else ""
+                parts.append(f"{col}{alias}")
+        select_clause = ", ".join(parts)
+
+    # FROM (primary source is first in source_ids)
+    primary = tool.source_ids[0]
+    sql = f"SELECT {select_clause} FROM {primary}"
+
+    # WHERE
+    bound: dict = {}
+    where_parts = []
+    for group in tool.filter_groups:
+        group_parts = []
+        for cond in group.conditions:
+            col = cond.field.replace(".", "_")
+            op = _OP_MAP.get(cond.operator, cond.operator)
+
+            if cond.operator in ("is_null", "is_not_null"):
+                group_parts.append(f"{col} {op}")
+            elif cond.parameter_name:
+                val = params.get(cond.parameter_name)
+                if val is None:
+                    continue  # optional parameter not provided — skip condition
+                key = f"p_{cond.parameter_name}"
+                if cond.operator == "contains":
+                    bound[key] = f"%{val}%"
+                    group_parts.append(f"{col} LIKE :{key}")
+                elif cond.operator == "in_list":
+                    # SQLite doesn’t support list params — inline as comma list
+                    vals = val if isinstance(val, list) else val.split(",")
+                    placeholders = ", ".join(f":{key}_{i}" for i, _ in enumerate(vals))
+                    for i, v in enumerate(vals):
+                        bound[f"{key}_{i}"] = v
+                    group_parts.append(f"{col} IN ({placeholders})")
+                else:
+                    bound[key] = val
+                    group_parts.append(f"{col} {op} :{key}")
+            elif cond.value is not None:
+                key = f"fixed_{col}"
+                bound[key] = cond.value
+                group_parts.append(f"{col} {op} :{key}")
+
+        if group_parts:
+            joined = f" {group.logic} ".join(group_parts)
+            where_parts.append(f"({joined})")
+
+    if where_parts:
+        sql += " WHERE " + " AND ".join(where_parts)
+
+    sql += f" LIMIT {tool.limit}"
+    return sql, bound
 ```
 
 ## Done When
-- [ ] A tool with `source_ids: ["a", "b"]` fetches both sources in parallel
-- [ ] Each source is ingested as a SQLite table named after its `id`
-- [ ] A SQL JOIN across two source tables returns correct results
-- [ ] Unknown `source_id` raises `ElliotError("SOURCE_NOT_FOUND")`
+- [ ] READ tool with `filter_groups` generates correct parameterized SQL
+- [ ] READ tool with multiple `source_ids` fetches both in parallel and JOINs via SQLite
+- [ ] WRITE tool with `api_mapping` makes the correct HTTP call with params in body/query/path
+- [ ] Optional filter condition (parameter not provided) is skipped silently
+- [ ] `in_list` operator works with comma-separated string input
+- [ ] `contains` operator generates `LIKE %value%`
 - [ ] Missing required param raises `ElliotError("MISSING_PARAM")`
-- [ ] `max_rows` truncation sets `truncated: true` in meta
-- [ ] `response_shape.fields` filters columns
-- [ ] All fetch errors are logged with `source_id` and re-raised as `SourceFetchError`
-
-## Tests
-
-```python
-import pytest
-from unittest.mock import AsyncMock
-from elliot_core.tools.executor import ToolExecutor
-from elliot_core.types.connector import ConnectorConfig
-
-def make_config(source_ids_per_tool):
-    # helper to build a minimal ConnectorConfig
-    ...
-
-async def test_single_source_tool():
-    # fetches one source, returns rows
-    ...
-
-async def test_cross_source_join():
-    # two sources ingested as separate tables, JOIN returns merged rows
-    config = make_config(["products", "inventory"])
-    executor = ToolExecutor(config, mock_fetcher_factory)
-    result = await executor.execute("list_with_stock", {})
-    assert result.rows[0].keys() >= {"name", "quantity"}
-    assert result.meta["sources_fetched"] == ["products", "inventory"]
-
-async def test_unknown_tool_raises():
-    with pytest.raises(ToolNotFoundError):
-        await executor.execute("nonexistent", {})
-
-async def test_source_fetch_failure_raises():
-    # one source fails — whole call fails with SourceFetchError
-    ...
-
-async def test_missing_required_param():
-    with pytest.raises(ElliotError, match="MISSING_PARAM"):
-        await executor.execute("get_product", {})  # missing required 'id'
-```
+- [ ] HTTP error from WRITE tool raises `ElliotError("API_REQUEST_FAILED")` with status code
+- [ ] All fetch/exec errors logged with `source_id` / `tool_id`

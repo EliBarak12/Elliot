@@ -1,8 +1,8 @@
-# Elliot — AI Connector Platform
+# Elliot — AI AX (Agent Experience) Platform
 
-> Turn your existing product into an agentic-native product: design tools that AI agents can use efficiently, observe how they actually use them, and know when the answers are good enough.
+> **AX** is to agents what UX is to users and DX is to developers. Elliot is the interface layer that makes your product feel native to AI agents — design, validate, deploy, and observe agent-ready tools built around your existing APIs, databases, and files.
 
-Elliot wraps your APIs and databases in MCP tools — but the real job is making those tools *agent-ready*: correct descriptions, right-sized results, structured errors, and a feedback loop so you can see exactly how agents use your product and improve it.
+Turn your existing product into an agentic-native product. Elliot wraps your data sources in MCP tools agents can call efficiently — with minimum tokens, clean error recovery, and full observability of every session.
 
 ---
 
@@ -21,67 +21,35 @@ Elliot makes these problems visible and fixable.
 ## How It Works
 
 ```
-1. Write a .connector.json
-   └ describe sources (REST / PostgreSQL) and tools (named SQL queries)
+1. Connect your data sources
+   └ REST APIs, PostgreSQL, MySQL, CSV / JSON files — all in one connector
 
-2. Run the quality linter
-   └ catches vague descriptions, unbounded SELECTs, unclear parameter names
+2. Build tools (no SQL required)
+   └ Agent or user defines: name, description, parameters, filters, return fields
+   └ Elliot generates the safe parameterized query or API call internally
+   └ OR: let an AI agent build the connector for you via agentic builder tools
 
-3. Write eval test cases (.eval.yaml)
-   └ "call list_animals with species=dog, expect ≥1 row, all rows have species=dog"
-   └ run: uv run elliot eval pets.eval.yaml → pass/fail report
+3. Lint for agent-readiness
+   └ elliot lint my-domain.connector.json
+   └ catches vague descriptions, unbounded results, unclear parameter names
 
-4. Start the services
-   └ elliot-mcp-plugin (:3000) — Claude Code connects here via MCP
-   └ elliot-connector-runtime (:3001) — fetches live data, runs SQL, logs sessions
-   └ elliot-studio (:5173) — observe agent sessions, run tools manually, track quality
+4. Write and run eval cases
+   └ elliot eval my-domain.eval.yaml → pass/fail + token estimate per tool
 
-5. Observe real agent sessions in Studio Agent Console
-   └ see every tool call, params, result size, token cost, errors
-   └ Elliot flags: "this tool returned 1,200 tokens — consider adding LIMIT"
+5. Deploy and connect agents
+   └ elliot-mcp-plugin (:3000) — Claude Code / any MCP client connects here
+   └ elliot-connector-runtime (:3001) — fetches live data, logs sessions
+   └ elliot-studio (:5173) — observe sessions, run tools, track quality
 
-6. Improve and re-eval
-   └ connector.json → lint → eval → deploy → observe → improve
+6. Observe and improve
+   └ Studio Agent Console: every agent connection, every tool call, params, tokens, errors
+   └ Elliot flags: “this tool returned 1,200 tokens — consider adding a filter”
+   └ Edit in the visual Connector Editor — no JSON editing required
 ```
 
 ---
 
-## Repository Structure
-
-```
-elliot/
-├── packages/
-│   ├── core/                  elliot-core          types, SQLite engine, linter, eval runner
-│   ├── mcp-plugin/            elliot-mcp-plugin    MCP + FastAPI :3000
-│   ├── connector-runtime/     elliot-connector-runtime  runtime :3001 + session tracker
-│   └── studio/                elliot-studio        React + Vite :5173
-├── docs/
-│   ├── agentic-product-design.md  ← start here: what agentic-native means
-│   ├── architecture.md
-│   ├── data-flow.md
-│   ├── product-overview.md
-│   ├── test-plan.md
-│   └── user-stories.md
-├── tasks/                     59 + 6 = 65 ordered implementation tasks
-├── pyproject.toml
-└── package.json
-```
-
----
-
-## Tech Stack
-
-| Layer | Language | Key Libraries |
-|---|---|---|
-| Core library | Python 3.12 | `pydantic`, `sqlite3`, `httpx`, `jmespath` |
-| MCP plugin server | Python | `mcp` (FastMCP), `fastapi`, `uvicorn`, `structlog` |
-| Connector runtime | Python | `mcp` (FastMCP), `fastapi`, `uvicorn` |
-| Studio UI | TypeScript | React 18, Vite, Tailwind, shadcn/ui, Zustand |
-| Package managers | Python → `uv` · TypeScript → `pnpm` | |
-
----
-
-## Quick Start
+## Getting Started
 
 ```bash
 # Prerequisites: uv (Python), pnpm (Node)
@@ -92,14 +60,25 @@ npm install -g pnpm
 git clone https://github.com/elibarak12/elliot.git && cd elliot
 uv sync && pnpm install
 
+# Copy env vars
+cp .env.example .env
+
 # Start all services
 honcho start
 
-# Lint your connector
-uv run elliot lint my-api.connector.json
+# Check status
+elliot status
 
-# Run eval cases
-uv run elliot eval my-api.eval.yaml
+# Scaffold your first connector from a template
+elliot init --template rest-api-key my-api.connector.json
+
+# Or let an agent build it for you
+# Connect Claude Code to http://localhost:3000/mcp
+# Then: "I have an API at https://api.myapp.com — help me build a connector"
+
+# Lint and test
+elliot lint my-api.connector.json
+elliot eval my-api.eval.yaml
 ```
 
 Connect Claude Code — `.mcp.json` is already in the repo root:
@@ -109,19 +88,62 @@ Connect Claude Code — `.mcp.json` is already in the repo root:
 
 ---
 
+## Repository Structure
+
+```
+elliot/
+├── packages/
+│   ├── core/                  elliot-core          types, query builder, linter, eval runner
+│   ├── mcp-plugin/            elliot-mcp-plugin    MCP + FastAPI :3000 + agentic builder tools
+│   ├── connector-runtime/     elliot-connector-runtime  runtime :3001 + session tracker
+│   └── studio/                elliot-studio        React + Vite :5173
+├── connectors/            your connector.json files
+├── templates/             starter connectors (elliot init --list)
+├── docs/
+│   ├── agentic-product-design.md  ← start here
+│   ├── architecture.md
+│   ├── user-stories.md
+│   └── test-plan.md
+├── tasks/                 79 ordered implementation tasks
+├── CLAUDE.md              AI agent instructions for this repo
+├── Procfile               honcho dev runner
+├── docker-compose.yml     production deployment
+└── .env.example           all env vars documented
+```
+
+---
+
+## Tech Stack
+
+| Layer | Language | Key Libraries |
+|---|---|---|
+| Core library | Python 3.12 | `pydantic`, `sqlite3`, `httpx`, `sqlalchemy` |
+| MCP plugin | Python | `mcp` (FastMCP), `fastapi`, `uvicorn`, `structlog` |
+| Connector runtime | Python | `mcp` (FastMCP), `fastapi`, `uvicorn`, `slowapi`, `pymysql` |
+| Studio UI | TypeScript | React 18, Vite, Tailwind, shadcn/ui, Zustand |
+| Package managers | Python → `uv` · TypeScript → `pnpm` | |
+
+---
+
+## Key Ports
+
+| Service | Port | Purpose |
+|---|---|---|
+| `elliot-mcp-plugin` | 3000 | MCP endpoint for agents + agentic builder tools |
+| `elliot-connector-runtime` | 3001 | Tool execution, session tracking, observation store |
+| `elliot-studio` | 5173 | Visual dashboard — sessions, tools, metrics, editor |
+
+---
+
 ## Documentation
 
 | Doc | Description |
 |---|---|
-| [docs/agentic-product-design.md](docs/agentic-product-design.md) | **Start here.** The 5 principles of agent-ready tools, the feedback loop, linter output, eval format, session console |
+| [docs/agentic-product-design.md](docs/agentic-product-design.md) | **Start here.** What AX means, the 5 principles, feedback loop, connector model |
 | [docs/user-stories.md](docs/user-stories.md) | Three personas, full journeys, what “good enough” looks like |
 | [docs/architecture.md](docs/architecture.md) | System diagram, package deps, directory tree, Pydantic models |
-| [docs/data-flow.md](docs/data-flow.md) | Sequence diagrams: tool call, cache, Studio, error handling |
-| [docs/product-overview.md](docs/product-overview.md) | Studio pages, component tree, state shape |
-| [docs/test-plan.md](docs/test-plan.md) | Test pyramid, coverage gates, CI pipeline, mocking strategy |
-| [tasks/README.md](tasks/README.md) | 65 ordered implementation tasks across 8 epic folders |
-| [docs/CORE_CONCEPTS.md](docs/CORE_CONCEPTS.md) | Domain model: Sources, Tools, Skills, Auth, Connectors |
-| [docs/PRODUCT_SPECIFICATION.md](docs/PRODUCT_SPECIFICATION.md) | All-phases spec, user stories, KPIs |
+| [docs/test-plan.md](docs/test-plan.md) | Test pyramid, coverage gates, CI pipeline |
+| [tasks/README.md](tasks/README.md) | 79 ordered implementation tasks with build phase sequence |
 
 ---
 

@@ -1,0 +1,39 @@
+from __future__ import annotations
+
+import logging
+import os
+import sys
+from typing import Any
+
+import structlog
+
+
+def configure_logging() -> None:
+    """Call once at process startup, before creating the FastAPI app."""
+    level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.add_logger_name,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.JSONRenderer(),
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(level),
+        context_class=dict,
+        logger_factory=structlog.PrintLoggerFactory(sys.stdout),
+    )
+
+    # Route stdlib logging (uvicorn, httpx, etc.) through structlog as JSON
+    logging.basicConfig(
+        format="%(message)s",
+        stream=sys.stdout,
+        level=level,
+    )
+
+
+def get_logger(name: str | None = None) -> Any:
+    return structlog.get_logger(name)

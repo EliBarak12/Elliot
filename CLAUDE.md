@@ -123,7 +123,7 @@ elliot/
 │   ├── core/                  elliot-core          Python 3.13
 │   ├── mcp-plugin/            elliot-mcp-plugin    :3000
 │   ├── connector-runtime/     elliot-connector-runtime  :3001
-│   └── studio/                elliot-studio        React 19 :5173
+│   └── studio/                elliot-studio        React 19 :5175
 ├── connectors/            user connector.json files
 ├── templates/             starter connectors
 ├── Procfile               honcho start
@@ -134,8 +134,7 @@ elliot/
 ## Key Ports
 
 | Service | Port |
-|---|
----|
+|---|---|
 | `elliot-mcp-plugin` | 3000 |
 | `elliot-connector-runtime` | 3001 |
 | `elliot-studio` | 5173 |

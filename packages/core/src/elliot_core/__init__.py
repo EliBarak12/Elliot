@@ -37,7 +37,9 @@ from elliot_core.types import (
     ToolDefinition,
     ToolResult,
 )
+from elliot_core.types.connector import ProductContext
 from elliot_core.types.sqlite import FlattenedTable, FlattenResult
+from elliot_core.workspace.store import WorkspaceStore
 
 __all__ = [
     "__version__",
@@ -54,6 +56,7 @@ __all__ = [
     "ApiRequestMapping",
     "AuthConfig",
     "ConnectorConfig",
+    "ProductContext",
     "FetchResult",
     "FilterCondition",
     "FilterGroup",
@@ -80,4 +83,6 @@ __all__ = [
     "deserialize_connector",
     "serialize_connector",
     "to_mcp_tool_schema",
+    # workspace
+    "WorkspaceStore",
 ]

@@ -6,6 +6,13 @@ from elliot_core.types.source import SourceConfig
 from elliot_core.types.tool import SkillDefinition, ToolDefinition
 
 
+class ProductContext(BaseModel):
+    name: str
+    description: str = ""
+    base_url: str = ""
+    version: str = ""
+
+
 class ConnectorConfig(BaseModel):
     name: str
     slug: str

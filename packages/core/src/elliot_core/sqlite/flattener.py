@@ -5,7 +5,7 @@ from typing import Any
 
 from elliot_core.sqlite.column_namer import deduplicate_names, safe_name
 from elliot_core.sqlite.type_inferrer import infer_column_type
-from elliot_core.types.sqlite import ColumnMeta, FlattenResult, FlattenedTable, FlattenWarning
+from elliot_core.types.sqlite import ColumnMeta, FlattenedTable, FlattenResult, FlattenWarning
 
 MAX_DEPTH = 5
 MAX_ARRAY_ROWS = 1000
@@ -56,11 +56,13 @@ def _flatten_obj(
         return {"value": _scalar(obj)}
 
     if id(obj) in visited:
-        warnings.append(FlattenWarning(
-            type="circular_reference",
-            path=warning_path,
-            message=f"Circular reference detected at {warning_path}",
-        ))
+        warnings.append(
+            FlattenWarning(
+                type="circular_reference",
+                path=warning_path,
+                message=f"Circular reference detected at {warning_path}",
+            )
+        )
         return {"value": "[Circular]"}
 
     visited = visited | {id(obj)}
@@ -93,18 +95,22 @@ def _process_field(
 
     elif isinstance(value, dict):
         if depth >= MAX_DEPTH:
-            warnings.append(FlattenWarning(
-                type="depth_exceeded",
-                path=field_path,
-                message=f"Depth limit {MAX_DEPTH} exceeded at {field_path}, serialized as TEXT",
-            ))
+            warnings.append(
+                FlattenWarning(
+                    type="depth_exceeded",
+                    path=field_path,
+                    message=f"Depth limit {MAX_DEPTH} exceeded at {field_path}, serialized as TEXT",
+                )
+            )
             row[col] = json.dumps(value)
         elif id(value) in visited:
-            warnings.append(FlattenWarning(
-                type="circular_reference",
-                path=field_path,
-                message=f"Circular reference at {field_path}",
-            ))
+            warnings.append(
+                FlattenWarning(
+                    type="circular_reference",
+                    path=field_path,
+                    message=f"Circular reference at {field_path}",
+                )
+            )
             row[col] = "[Circular]"
         else:
             child_table_name = f"{table_name}_{col}"
@@ -127,14 +133,16 @@ def _process_field(
             # Rule 4: array of objects → child table
             items: list[Any] = value
             if len(items) > MAX_ARRAY_ROWS:
-                warnings.append(FlattenWarning(
-                    type="array_truncated",
-                    path=field_path,
-                    message=(
-                        f"Array truncated from {len(items)} to {MAX_ARRAY_ROWS} "
-                        f"rows at {field_path}"
-                    ),
-                ))
+                warnings.append(
+                    FlattenWarning(
+                        type="array_truncated",
+                        path=field_path,
+                        message=(
+                            f"Array truncated from {len(items)} to {MAX_ARRAY_ROWS} "
+                            f"rows at {field_path}"
+                        ),
+                    )
+                )
                 items = items[:MAX_ARRAY_ROWS]
 
             if child_name not in child_tables:
@@ -142,8 +150,13 @@ def _process_field(
 
             for idx, item in enumerate(items):
                 child_row = _flatten_obj(
-                    item, child_name, f"{field_path}[{idx}]",
-                    depth + 1, visited, child_tables, warnings,
+                    item,
+                    child_name,
+                    f"{field_path}[{idx}]",
+                    depth + 1,
+                    visited,
+                    child_tables,
+                    warnings,
                 )
                 child_tables[child_name].append({"_parent_id": None, "_index": idx, **child_row})
     else:
@@ -163,7 +176,7 @@ def _build_columns(rows: list[dict[str, Any]]) -> list[ColumnMeta]:
                 keys.append(k)
     deduped = deduplicate_names(keys)
     columns: list[ColumnMeta] = []
-    for original, name in zip(keys, deduped):
+    for original, name in zip(keys, deduped, strict=True):
         samples = [row.get(original) for row in rows]
         sqlite_type = infer_column_type(samples)
         nullable = any(s is None for s in samples)

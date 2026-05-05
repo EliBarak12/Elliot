@@ -67,10 +67,12 @@ def test_short_description_raises():
 def test_undefined_filter_param_raises():
     data = {
         **VALID_READ,
-        "filter_groups": [{
-            "logic": "AND",
-            "conditions": [{"field": "category", "operator": "=", "parameter_name": "cat"}],
-        }],
+        "filter_groups": [
+            {
+                "logic": "AND",
+                "conditions": [{"field": "category", "operator": "=", "parameter_name": "cat"}],
+            }
+        ],
     }
     with pytest.raises(ElliotError):
         validate_tool_definition(data)

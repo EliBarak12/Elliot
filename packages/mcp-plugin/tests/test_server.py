@@ -1,11 +1,10 @@
-import pytest
-
 from elliot_core.types.connector import ConnectorConfig
 from elliot_mcp_plugin.server import build_tool_list, create_server
 
 _CONFIG = ConnectorConfig(
-    id="demo",
     name="Demo",
+    slug="demo",
+    version="0.1.0",
     description="Demo connector",
     sources=[{"id": "s1", "name": "Source 1", "type": "file", "path": "data.csv"}],
     tools=[

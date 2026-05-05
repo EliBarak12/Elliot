@@ -7,6 +7,9 @@ dependencies = [
     "mcp>=1.0",
 ]
 
+[tool.uv.sources]
+elliot-core = { workspace = true }
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

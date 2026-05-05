@@ -5,7 +5,12 @@ from typing import Any
 from elliot_core.types.tool import FilterGroup, ToolDefinition
 
 _OP_MAP: dict[str, str] = {
-    "=": "=", "!=": "!=", ">": ">", ">=": ">=", "<": "<", "<=": "<=",
+    "=": "=",
+    "!=": "!=",
+    ">": ">",
+    ">=": ">=",
+    "<": "<",
+    "<=": "<=",
     "contains": "LIKE",
     "in_list": "IN",
     "is_null": "IS NULL",
@@ -21,9 +26,7 @@ def build_select_sql(tool: ToolDefinition, params: dict[str, Any]) -> tuple[str,
     bound: dict[str, Any] = {}
 
     # ── SELECT clause ──────────────────────────────────────────────────────
-    has_agg = any(
-        rf.aggregation and rf.aggregation != "none" for rf in tool.return_fields
-    )
+    has_agg = any(rf.aggregation and rf.aggregation != "none" for rf in tool.return_fields)
     group_by_cols: list[str] = []
 
     if not tool.return_fields:
@@ -65,10 +68,7 @@ def build_select_sql(tool: ToolDefinition, params: dict[str, Any]) -> tuple[str,
 
     # ── ORDER BY ───────────────────────────────────────────────────────────
     if tool.order_by:
-        order_parts = [
-            f'"{of.field.replace(".", "_")}" {of.direction}'
-            for of in tool.order_by
-        ]
+        order_parts = [f'"{of.field.replace(".", "_")}" {of.direction}' for of in tool.order_by]
         sql += " ORDER BY " + ", ".join(order_parts)
 
     # ── LIMIT ──────────────────────────────────────────────────────────────

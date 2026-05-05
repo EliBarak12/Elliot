@@ -2,11 +2,34 @@ from __future__ import annotations
 
 import re
 
-SQL_RESERVED = frozenset({
-    "select", "from", "where", "group", "order", "limit", "index",
-    "table", "create", "drop", "insert", "update", "delete", "join",
-    "on", "as", "by", "and", "or", "not", "null", "is", "in", "values",
-})
+SQL_RESERVED = frozenset(
+    {
+        "select",
+        "from",
+        "where",
+        "group",
+        "order",
+        "limit",
+        "index",
+        "table",
+        "create",
+        "drop",
+        "insert",
+        "update",
+        "delete",
+        "join",
+        "on",
+        "as",
+        "by",
+        "and",
+        "or",
+        "not",
+        "null",
+        "is",
+        "in",
+        "values",
+    }
+)
 
 
 def safe_name(raw: str) -> str:

@@ -3,12 +3,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
-from elliot_core.errors import ElliotError, SourceFetchError
+from elliot_core.errors import SourceFetchError
 from elliot_core.types.source import FetchResult, SourceConfig
 
 _RETRY_STATUSES = {429, 500, 503}
@@ -18,6 +18,7 @@ _MAX_RETRIES = 3
 def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
     if key.startswith("{{ env:") and key.endswith(" }}"):
         import os
+
         env_var = key[7:-3].strip()
         return secrets.get(env_var) or os.environ.get(env_var, "")
     return secrets.get(key, key)
@@ -47,6 +48,7 @@ def _build_auth_query_params(config: SourceConfig, secrets: dict[str, str]) -> d
 def _extract_rows(data: Any, data_path: str | None) -> list[dict[str, Any]]:
     if data_path:
         import jmespath
+
         extracted = jmespath.search(data_path, data)
         return extracted if isinstance(extracted, list) else ([extracted] if extracted else [])
     if isinstance(data, list):
@@ -136,10 +138,7 @@ async def fetch_endpoint(config: SourceConfig, secrets: dict[str, str]) -> Fetch
                     break
                 page += 1
             elif pagination.strategy == "cursor":
-                cursor = (
-                    data.get("next_cursor")
-                    or data.get(pagination.cursor_field or "cursor")
-                )
+                cursor = data.get("next_cursor") or data.get(pagination.cursor_field or "cursor")
                 if not cursor:
                     break
             elif pagination.strategy == "link_header":
@@ -151,7 +150,7 @@ async def fetch_endpoint(config: SourceConfig, secrets: dict[str, str]) -> Fetch
 
     return FetchResult(
         rows=all_rows,
-        fetched_at=datetime.now(timezone.utc).isoformat(),
+        fetched_at=datetime.now(UTC).isoformat(),
         page_count=page_count,
         warnings=warnings,
     )

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
 
 class AuthConfig(BaseModel):
     type: Literal["api_key", "bearer", "basic", "oauth2"]
-    header_name: Optional[str] = None
-    query_param: Optional[str] = None
+    header_name: str | None = None
+    query_param: str | None = None
     secret_key: str  # resolved via {{ env:VAR }} at load time
 
 
@@ -16,8 +16,8 @@ class PaginationConfig(BaseModel):
     strategy: Literal["cursor", "offset", "page", "link_header", "none"] = "none"
     page_size: int = 100
     max_pages: int = 10
-    cursor_field: Optional[str] = None    # response field that holds the next cursor
-    next_url_field: Optional[str] = None  # response field that holds the next page URL
+    cursor_field: str | None = None  # response field that holds the next cursor
+    next_url_field: str | None = None  # response field that holds the next page URL
 
 
 class SourceConfig(BaseModel):
@@ -26,20 +26,20 @@ class SourceConfig(BaseModel):
     type: Literal["rest", "postgres", "mysql", "file"]
 
     # REST
-    url: Optional[str] = None
+    url: str | None = None
     method: Literal["GET", "POST"] = "GET"
-    auth: Optional[AuthConfig] = None
+    auth: AuthConfig | None = None
     pagination: PaginationConfig = PaginationConfig()
-    data_path: Optional[str] = None  # jmespath to extract list from response
+    data_path: str | None = None  # jmespath to extract list from response
     timeout_ms: int = 30_000
 
     # DB (postgres / mysql)
-    table: Optional[str] = None
-    query: Optional[str] = None
+    table: str | None = None
+    query: str | None = None
 
     # File
-    path: Optional[str] = None
-    format: Optional[Literal["csv", "json", "jsonl"]] = None
+    path: str | None = None
+    format: Literal["csv", "json", "jsonl"] | None = None
     encoding: str = "utf-8"
     delimiter: str = ","
 

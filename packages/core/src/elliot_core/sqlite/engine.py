@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from elliot_core.types.sqlite import FlattenResult, FlattenedTable
+from elliot_core.types.sqlite import FlattenedTable, FlattenResult
 
 
 class SQLiteEngine:
@@ -15,8 +15,7 @@ class SQLiteEngine:
 
     def load_table(self, table: FlattenedTable) -> None:
         cols = ", ".join(
-            f'"{c.name}" {c.sqlite_type}{"" if c.nullable else " NOT NULL"}'
-            for c in table.columns
+            f'"{c.name}" {c.sqlite_type}{"" if c.nullable else " NOT NULL"}' for c in table.columns
         )
         self._conn.execute(f'DROP TABLE IF EXISTS "{table.name}"')
         self._conn.execute(f'CREATE TABLE "{table.name}" ({cols})')
@@ -38,9 +37,7 @@ class SQLiteEngine:
         return [dict(row) for row in cursor.fetchall()]
 
     def get_table_names(self) -> list[str]:
-        rows = self._conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        rows = self._conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         return [row[0] for row in rows]
 
     def get_table_schema(self, table_name: str) -> list[dict[str, Any]]:

@@ -13,7 +13,6 @@ from elliot_core.types import (
     ToolDefinition,
 )
 
-
 SIMPLE_SOURCE = {
     "id": "products_api",
     "name": "Products API",
@@ -74,9 +73,7 @@ def test_connector_config_rejects_unknown_source():
 def test_filter_group_roundtrip():
     fg = FilterGroup(
         logic="AND",
-        conditions=[
-            FilterCondition(field="category", operator="=", parameter_name="category")
-        ],
+        conditions=[FilterCondition(field="category", operator="=", parameter_name="category")],
     )
     data = fg.model_dump()
     restored = FilterGroup.model_validate(data)

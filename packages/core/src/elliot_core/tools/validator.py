@@ -41,18 +41,16 @@ def _check_description(tool: ToolDefinition) -> None:
 
 
 def _check_category_requirements(tool: ToolDefinition) -> None:
-    if tool.category in ("READ",):
-        if not tool.source_ids:
-            raise ElliotError(
-                "INVALID_TOOL",
-                f"READ tool '{tool.id}' must have at least one source_id",
-            )
-    if tool.category in ("WRITE", "ACTION"):
-        if tool.api_mapping is None:
-            raise ElliotError(
-                "INVALID_TOOL",
-                f"WRITE/ACTION tool '{tool.id}' must have api_mapping",
-            )
+    if tool.category in ("READ",) and not tool.source_ids:
+        raise ElliotError(
+            "INVALID_TOOL",
+            f"READ tool '{tool.id}' must have at least one source_id",
+        )
+    if tool.category in ("WRITE", "ACTION") and tool.api_mapping is None:
+        raise ElliotError(
+            "INVALID_TOOL",
+            f"WRITE/ACTION tool '{tool.id}' must have api_mapping",
+        )
 
 
 def _check_filter_param_refs(tool: ToolDefinition) -> None:

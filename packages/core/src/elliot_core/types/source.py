@@ -43,6 +43,11 @@ class SourceConfig(BaseModel):
     encoding: str = "utf-8"
     delimiter: str = ","
 
+    # Runtime tracking (populated after a fetch)
+    table_name: str | None = None
+    row_count: int | None = None
+    config_snapshot: dict[str, Any] | None = None
+
 
 class FetchResult(BaseModel):
     rows: list[dict[str, Any]]

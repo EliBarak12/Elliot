@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -54,7 +54,7 @@ async def fetch_passthrough(
 
     return FetchResult(
         rows=rows,
-        fetched_at=datetime.now(timezone.utc).isoformat(),
+        fetched_at=datetime.now(UTC).isoformat(),
         page_count=1,
         pagination_meta=pagination_meta,
     )
@@ -83,6 +83,7 @@ def _extract_pagination_meta(
 
     elif pg.strategy == "link_header":
         import re
+
         link = headers.get("link", "")
         m = re.search(r'<([^>]+)>;\s*rel="next"', link)
         if m:

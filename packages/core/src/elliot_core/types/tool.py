@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -10,14 +10,16 @@ class ParameterDefinition(BaseModel):
     type: Literal["string", "integer", "number", "boolean", "date"]
     required: bool = True
     description: str = ""
-    default: Optional[Any] = None
+    default: Any | None = None
 
 
 class FilterCondition(BaseModel):
     field: str
-    operator: Literal["=", "!=", ">", ">=", "<", "<=", "in_list", "contains", "is_null", "is_not_null"]
-    value: Optional[Any] = None           # fixed value baked into the tool
-    parameter_name: Optional[str] = None  # runtime parameter passed by the agent
+    operator: Literal[
+        "=", "!=", ">", ">=", "<", "<=", "in_list", "contains", "is_null", "is_not_null"
+    ]
+    value: Any | None = None  # fixed value baked into the tool
+    parameter_name: str | None = None  # runtime parameter passed by the agent
 
 
 class FilterGroup(BaseModel):
@@ -27,7 +29,7 @@ class FilterGroup(BaseModel):
 
 class ReturnField(BaseModel):
     field: str
-    alias: Optional[str] = None
+    alias: str | None = None
     aggregation: Literal["none", "count", "sum", "avg", "min", "max"] = "none"
 
 
@@ -41,8 +43,9 @@ class ApiRequestMapping(BaseModel):
     For REST sources: how tool parameters map into the HTTP request.
     Used when category == 'WRITE' or 'ACTION'.
     """
+
     method: Literal["GET", "POST", "PUT", "DELETE", "PATCH"] = "POST"
-    path_template: Optional[str] = None  # e.g. "/users/{user_id}"
+    path_template: str | None = None  # e.g. "/users/{user_id}"
     query_params: list[str] = []
     body_params: list[str] = []
     body_format: Literal["json", "form"] = "json"
@@ -66,8 +69,8 @@ class ToolDefinition(BaseModel):
     # Elliot fetches all rows, loads into SQLite, runs a generated SELECT.
     filter_groups: list[FilterGroup] = []  # WHERE conditions
     return_fields: list[ReturnField] = []  # SELECT columns (with optional aggregation)
-    having: list[FilterGroup] = []         # HAVING conditions (post-aggregation)
-    order_by: list[OrderField] = []        # ORDER BY columns
+    having: list[FilterGroup] = []  # HAVING conditions (post-aggregation)
+    order_by: list[OrderField] = []  # ORDER BY columns
     limit: int = 100
 
     # ── READ / passthrough mode (large REST APIs with server-side filtering) ────
@@ -81,7 +84,7 @@ class ToolDefinition(BaseModel):
     rest_query_params: list[str] = []
 
     # ── WRITE / ACTION tools (REST sources) ───────────────────────────────
-    api_mapping: Optional[ApiRequestMapping] = None
+    api_mapping: ApiRequestMapping | None = None
 
     parameters: list[ParameterDefinition] = []
     response_shape: ResponseShape = ResponseShape()

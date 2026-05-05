@@ -7,8 +7,9 @@ from elliot_core.errors import ElliotError
 from elliot_mcp_plugin.connector_loader import load_connector, load_secrets
 
 _CONNECTOR = {
-    "id": "test",
     "name": "Test",
+    "slug": "test",
+    "version": "0.1.0",
     "description": "Test connector",
     "sources": [{"id": "s1", "name": "Source 1", "type": "file", "path": "/tmp/data.csv"}],
     "tools": [],
@@ -19,7 +20,7 @@ def test_load_from_file(tmp_path):
     p = tmp_path / "connector.json"
     p.write_text(json.dumps(_CONNECTOR))
     config = load_connector(str(p))
-    assert config.id == "test"
+    assert config.slug == "test"
 
 
 def test_load_from_env_path(tmp_path, monkeypatch):
@@ -38,12 +39,12 @@ def test_load_from_env_json(monkeypatch):
 
 def test_env_path_takes_priority_over_env_json(tmp_path, monkeypatch):
     p = tmp_path / "connector.json"
-    other = dict(_CONNECTOR, id="from-file")
+    other = dict(_CONNECTOR, slug="from-file")
     p.write_text(json.dumps(other))
     monkeypatch.setenv("ELLIOT_CONNECTOR_PATH", str(p))
     monkeypatch.setenv("ELLIOT_CONNECTOR_JSON", json.dumps(_CONNECTOR))
     config = load_connector()
-    assert config.id == "from-file"
+    assert config.slug == "from-file"
 
 
 def test_missing_raises(monkeypatch):

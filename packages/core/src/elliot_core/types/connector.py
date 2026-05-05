@@ -16,7 +16,7 @@ class ConnectorConfig(BaseModel):
     skills: list[SkillDefinition] = []
 
     @model_validator(mode="after")
-    def _validate_source_refs(self) -> "ConnectorConfig":
+    def _validate_source_refs(self) -> ConnectorConfig:
         source_ids = {s.id for s in self.sources}
         for tool in self.tools:
             for sid in tool.source_ids:
@@ -26,7 +26,5 @@ class ConnectorConfig(BaseModel):
                         f"Available: {sorted(source_ids)}"
                     )
             if tool.category == "READ" and not tool.source_ids:
-                raise ValueError(
-                    f"READ tool '{tool.id}' must declare at least one source_id"
-                )
+                raise ValueError(f"READ tool '{tool.id}' must declare at least one source_id")
         return self

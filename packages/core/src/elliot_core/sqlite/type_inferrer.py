@@ -21,9 +21,7 @@ def infer_column_type(samples: list[Any]) -> str:
 
 
 ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(T[\d:.Z+-]+)?$")
-UUID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
-)
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 EMAIL_RE = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
 
 

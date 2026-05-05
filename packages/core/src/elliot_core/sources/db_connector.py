@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import contextlib
+from datetime import UTC, datetime
 from typing import Any
 
 from elliot_core.errors import ElliotError, SourceFetchError
@@ -12,6 +13,7 @@ def _resolve_dsn(config: SourceConfig, secrets: dict[str, str]) -> str:
     url = config.url or ""
     if url.startswith("{{ env:") and url.endswith(" }}"):
         import os
+
         env_var = url[7:-3].strip()
         url = secrets.get(env_var) or os.environ.get(env_var, "")
     return url
@@ -32,7 +34,7 @@ def query_database(config: SourceConfig, secrets: dict[str, str]) -> FetchResult
     rows = _run_query(config, sql, secrets)
     return FetchResult(
         rows=rows,
-        fetched_at=datetime.now(timezone.utc).isoformat(),
+        fetched_at=datetime.now(UTC).isoformat(),
     )
 
 
@@ -62,7 +64,5 @@ def _run_query(config: SourceConfig, sql: str, secrets: dict[str, str]) -> list[
             f"Query failed on source '{config.id}': {type(exc).__name__}"
         ) from exc
     finally:
-        try:
+        with contextlib.suppress(Exception):
             engine.dispose()  # type: ignore[possibly-undefined]
-        except Exception:
-            pass

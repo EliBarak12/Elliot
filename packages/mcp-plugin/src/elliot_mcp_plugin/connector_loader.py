@@ -45,8 +45,4 @@ def _from_file(path: str) -> ConnectorConfig:
 
 def load_secrets(prefix: str = _SECRET_PREFIX) -> dict[str, str]:
     """Collect ELLIOT_SECRET_* env vars as a lowercase-keyed secrets dict."""
-    return {
-        k[len(prefix):].lower(): v
-        for k, v in os.environ.items()
-        if k.startswith(prefix)
-    }
+    return {k[len(prefix) :].lower(): v for k, v in os.environ.items() if k.startswith(prefix)}

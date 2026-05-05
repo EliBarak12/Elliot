@@ -16,7 +16,7 @@ class ConnectorBuilder:
         version: str,
         slug: str,
         description: str = "",
-    ) -> "ConnectorBuilder":
+    ) -> ConnectorBuilder:
         self._meta = {
             "name": name,
             "version": version,

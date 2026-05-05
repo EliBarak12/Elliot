@@ -31,7 +31,7 @@ def validate_tool_sql(sql: str) -> tuple[bool, str]:
 
 
 def run_tool_query(
-    engine: "SQLiteEngine",
+    engine: SQLiteEngine,
     sql: str,
     params: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:

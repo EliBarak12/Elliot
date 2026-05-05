@@ -17,17 +17,18 @@ from elliot_core.types.tool import ToolDefinition, ToolResult
 log = structlog.get_logger(__name__)
 
 
-async def _default_fetch_source(
-    source: SourceConfig, secrets: dict[str, str]
-) -> FetchResult:
+async def _default_fetch_source(source: SourceConfig, secrets: dict[str, str]) -> FetchResult:
     if source.type == "rest":
         from elliot_core.sources.api_fetcher import fetch_endpoint
+
         return await fetch_endpoint(source, secrets)
     if source.type == "file":
         from elliot_core.sources.file_reader import read_file
+
         return await asyncio.to_thread(read_file, source)
     if source.type in ("postgres", "mysql"):
         from elliot_core.sources.db_connector import query_database
+
         return await asyncio.to_thread(query_database, source, secrets)
     raise ElliotError("INVALID_TOOL", f"Unknown source type: {source.type}")
 
@@ -98,6 +99,7 @@ class ToolExecutor:
         log.debug("tool.passthrough", tool_id=tool.id, api_params=list(api_params))
 
         from elliot_core.sources.passthrough_fetcher import fetch_passthrough
+
         fetch_result = await fetch_passthrough(source, self._secrets, api_params)
 
         rows = fetch_result.rows
@@ -126,9 +128,7 @@ class ToolExecutor:
             },
         )
 
-    async def _execute_read_full(
-        self, tool: ToolDefinition, params: dict[str, Any]
-    ) -> ToolResult:
+    async def _execute_read_full(self, tool: ToolDefinition, params: dict[str, Any]) -> ToolResult:
         """
         Full-fetch mode: retrieve all pages from source, load into SQLite,
         run generated SELECT with filter_groups / return_fields / order_by.
@@ -181,6 +181,7 @@ class ToolExecutor:
         body = {k: params[k] for k in mapping.body_params if k in params}
 
         import httpx
+
         from elliot_core.sources.api_fetcher import _build_auth_headers
 
         headers = _build_auth_headers(source, self._secrets)
@@ -210,7 +211,9 @@ class ToolExecutor:
             log.error("tool.write.failed", tool_id=tool.id, error=str(exc))
             raise ElliotError("API_REQUEST_FAILED", str(exc)) from exc
 
-        return ToolResult(rows=rows, meta={"fetch_mode": "write", "row_count": len(rows), "url": url})
+        return ToolResult(
+            rows=rows, meta={"fetch_mode": "write", "row_count": len(rows), "url": url}
+        )
 
     async def _fetch_sources(self, source_ids: list[str]) -> dict[str, FetchResult]:
         async def _one(sid: str) -> tuple[str, FetchResult]:

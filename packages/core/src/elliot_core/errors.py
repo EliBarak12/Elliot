@@ -18,32 +18,38 @@ class ElliotError(Exception):
 
 # ── Typed subclasses ────────────────────────────────────────────────────────
 
+
 class ValidationError(ElliotError):
     """Bad input from caller (maps to HTTP 422)."""
+
     def __init__(self, message: str, detail: Any = None) -> None:
         super().__init__("VALIDATION_ERROR", message, detail)
 
 
 class NotFoundError(ElliotError):
     """Requested resource does not exist (maps to HTTP 404)."""
+
     def __init__(self, message: str, detail: Any = None) -> None:
         super().__init__("NOT_FOUND", message, detail)
 
 
 class AuthError(ElliotError):
     """Missing or invalid credentials (maps to HTTP 401)."""
+
     def __init__(self, message: str, detail: Any = None) -> None:
         super().__init__("AUTH_FAILED", message, detail)
 
 
 class SourceFetchError(ElliotError):
     """Upstream data source returned an error (maps to HTTP 502)."""
+
     def __init__(self, message: str, detail: Any = None) -> None:
         super().__init__("UPSTREAM_FETCH_FAILED", message, detail)
 
 
 class RateLimitError(ElliotError):
     """Rate limit exceeded (maps to HTTP 429)."""
+
     def __init__(self, message: str, detail: Any = None) -> None:
         super().__init__("RATE_LIMIT_EXCEEDED", message, detail)
 
@@ -64,6 +70,7 @@ SESSION_SAVE_FAILED = "SESSION_SAVE_FAILED"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
+
 
 def is_elliot_error(err: object) -> bool:
     return isinstance(err, ElliotError)

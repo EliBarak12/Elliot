@@ -30,6 +30,7 @@ def test_nested_object_inlined():
 def test_array_of_primitives_serialized_as_json():
     result = flatten([{"tags": ["a", "b", "c"]}], "items")
     import json
+
     assert json.loads(result.primary_table.rows[0]["tags"]) == ["a", "b", "c"]
 
 

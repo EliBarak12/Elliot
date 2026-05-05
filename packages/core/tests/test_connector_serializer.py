@@ -13,9 +13,7 @@ def _make_config() -> ConnectorConfig:
         name="Test",
         slug="test",
         version="1.0.0",
-        sources=[
-            SourceConfig(id="src", name="Source", type="rest", url="https://api.example.com")
-        ],
+        sources=[SourceConfig(id="src", name="Source", type="rest", url="https://api.example.com")],
         tools=[
             ToolDefinition(
                 id="list_items",
@@ -25,8 +23,10 @@ def _make_config() -> ConnectorConfig:
                 source_ids=["src"],
                 parameters=[
                     ParameterDefinition(
-                        name="category", type="string", required=False,
-                        description="Filter by category"
+                        name="category",
+                        type="string",
+                        required=False,
+                        description="Filter by category",
                     )
                 ],
             )

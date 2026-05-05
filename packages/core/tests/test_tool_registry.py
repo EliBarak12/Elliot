@@ -73,6 +73,7 @@ def test_delete():
 
 def test_skills_roundtrip():
     from elliot_core.types.tool import SkillDefinition, SkillStep
+
     reg = ToolRegistry()
     skill = SkillDefinition(
         id="my_skill",

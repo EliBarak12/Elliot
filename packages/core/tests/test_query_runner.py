@@ -1,5 +1,3 @@
-import pytest
-
 from elliot_core.sqlite.query_runner import validate_tool_sql
 
 

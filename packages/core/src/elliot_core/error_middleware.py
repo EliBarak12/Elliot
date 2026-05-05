@@ -43,6 +43,7 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(Exception)
     async def _generic_handler(request: Request, exc: Exception) -> JSONResponse:
         from elliot_core.logging_config import get_logger
+
         get_logger("error_handler").exception("unhandled_error", exc_info=exc)
         return JSONResponse(
             status_code=500,

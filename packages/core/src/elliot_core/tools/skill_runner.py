@@ -22,7 +22,9 @@ async def execute_skill(
     for step in skill.steps:
         tool = registry.get(step.tool_id)
         if not tool:
-            raise ElliotError("TOOL_NOT_FOUND", f"Skill step references unknown tool: '{step.tool_id}'")
+            raise ElliotError(
+                "TOOL_NOT_FOUND", f"Skill step references unknown tool: '{step.tool_id}'"
+            )
         resolved = _resolve_bindings(step.params, inputs, step_results)
         result = await executor.execute(step.tool_id, resolved)
         step_results[step.alias] = result

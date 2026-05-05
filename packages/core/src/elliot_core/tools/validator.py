@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -11,7 +12,7 @@ _SNAKE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _GENERIC_IDS = frozenset({"query", "get_data", "fetch", "run", "execute", "call"})
 
 
-def validate_tool_definition(data: dict) -> ToolDefinition:
+def validate_tool_definition(data: dict[str, Any]) -> ToolDefinition:
     """Parse and validate a tool definition dict. Raises ElliotError on failure."""
     try:
         tool = ToolDefinition.model_validate(data)
@@ -65,7 +66,7 @@ def _check_filter_param_refs(tool: ToolDefinition) -> None:
                 )
 
 
-def validate_skill_definition(data: dict) -> SkillDefinition:
+def validate_skill_definition(data: dict[str, Any]) -> SkillDefinition:
     try:
         return SkillDefinition.model_validate(data)
     except ValidationError as exc:

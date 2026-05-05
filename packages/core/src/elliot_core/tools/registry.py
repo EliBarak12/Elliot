@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from elliot_core.errors import ElliotError
 from elliot_core.types.tool import SkillDefinition, ToolDefinition
 
@@ -14,7 +16,7 @@ class ToolRegistry:
             raise ElliotError("TOOL_NAME_CONFLICT", f"Tool name already exists: {tool.name}")
         self._tools[tool.id] = tool
 
-    def update(self, tool_id: str, patch: dict) -> ToolDefinition:
+    def update(self, tool_id: str, patch: dict[str, Any]) -> ToolDefinition:
         existing = self.get(tool_id)
         if existing is None:
             raise ElliotError("TOOL_NOT_FOUND", f"Tool not found: {tool_id}")

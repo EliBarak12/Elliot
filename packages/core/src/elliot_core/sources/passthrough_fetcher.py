@@ -27,7 +27,7 @@ async def fetch_passthrough(
     source.pagination (cursor_field, next_url_field) so nothing is hardcoded.
     """
     headers = _build_auth_headers(source, secrets)
-    base_params: dict[str, Any] = dict(_build_auth_query_params(source, secrets))  # type: ignore[arg-type]
+    base_params: dict[str, Any] = dict(_build_auth_query_params(source, secrets))
     base_params.update({k: v for k, v in query_params.items() if v is not None})
 
     try:

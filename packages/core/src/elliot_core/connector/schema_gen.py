@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from elliot_core.types.tool import ToolDefinition
 
 _TYPE_MAP: dict[str, str] = {
@@ -11,7 +13,7 @@ _TYPE_MAP: dict[str, str] = {
 }
 
 
-def to_mcp_tool_schema(tool: ToolDefinition) -> dict:
+def to_mcp_tool_schema(tool: ToolDefinition) -> dict[str, Any]:
     """Convert ToolDefinition to MCP tools/list JSON Schema entry."""
     props = {
         p.name: {"type": _TYPE_MAP.get(p.type, "string"), "description": p.description}
@@ -29,7 +31,7 @@ def to_mcp_tool_schema(tool: ToolDefinition) -> dict:
     }
 
 
-def to_openai_function(tool: ToolDefinition) -> dict:
+def to_openai_function(tool: ToolDefinition) -> dict[str, Any]:
     """Convert ToolDefinition to OpenAI function-calling tool descriptor."""
     props = {
         p.name: {"type": _TYPE_MAP.get(p.type, "string"), "description": p.description}

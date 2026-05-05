@@ -2,6 +2,9 @@
 
 __version__ = "0.1.0"
 
+from elliot_core.connector.builder import ConnectorBuilder
+from elliot_core.connector.schema_gen import to_mcp_tool_schema
+from elliot_core.connector.serializer import deserialize_connector, serialize_connector
 from elliot_core.errors import (
     AuthError,
     ElliotError,
@@ -12,6 +15,11 @@ from elliot_core.errors import (
     is_elliot_error,
     to_mcp_error_content,
 )
+from elliot_core.sqlite.engine import SQLiteEngine
+from elliot_core.sqlite.flattener import flatten
+from elliot_core.tools.executor import ToolExecutor
+from elliot_core.tools.registry import ToolRegistry
+from elliot_core.tools.skill_runner import execute_skill
 from elliot_core.types import (
     ApiRequestMapping,
     AuthConfig,
@@ -29,6 +37,7 @@ from elliot_core.types import (
     ToolDefinition,
     ToolResult,
 )
+from elliot_core.types.sqlite import FlattenedTable, FlattenResult
 
 __all__ = [
     "__version__",
@@ -48,6 +57,8 @@ __all__ = [
     "FetchResult",
     "FilterCondition",
     "FilterGroup",
+    "FlattenResult",
+    "FlattenedTable",
     "PaginationConfig",
     "ParameterDefinition",
     "ResponseShape",
@@ -57,4 +68,16 @@ __all__ = [
     "SourceConfig",
     "ToolDefinition",
     "ToolResult",
+    # sqlite
+    "SQLiteEngine",
+    "flatten",
+    # tools
+    "ToolExecutor",
+    "ToolRegistry",
+    "execute_skill",
+    # connector
+    "ConnectorBuilder",
+    "deserialize_connector",
+    "serialize_connector",
+    "to_mcp_tool_schema",
 ]

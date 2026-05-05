@@ -30,11 +30,11 @@ def create_server(config: ConnectorConfig, secrets: dict[str, str]) -> Server:
     executor = ToolExecutor(config, secrets)
     tools = build_tool_list(config)
 
-    @server.list_tools()
+    @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
     async def list_tools() -> list[types.Tool]:
         return tools
 
-    @server.call_tool()
+    @server.call_tool()  # type: ignore[untyped-decorator]
     async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.Content]:
         try:
             result = await executor.execute(name, arguments or {})

@@ -65,4 +65,4 @@ def _run_query(config: SourceConfig, sql: str, secrets: dict[str, str]) -> list[
         ) from exc
     finally:
         with contextlib.suppress(Exception):
-            engine.dispose()  # type: ignore[possibly-undefined]
+            engine.dispose()

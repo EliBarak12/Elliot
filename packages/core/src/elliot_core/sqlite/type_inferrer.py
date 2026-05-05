@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
 
 
-def infer_column_type(samples: list[Any]) -> str:
+def infer_column_type(samples: list[Any]) -> Literal["INTEGER", "REAL", "TEXT"]:
     """Return 'INTEGER', 'REAL', or 'TEXT' based on majority vote over non-null samples."""
     non_null = [s for s in samples if s is not None]
     if not non_null:

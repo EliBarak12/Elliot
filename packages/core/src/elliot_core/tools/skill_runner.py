@@ -53,7 +53,7 @@ def _resolve_value(
     if full_match:
         return _lookup(full_match.group(1).strip(), inputs, step_results)
 
-    def _replace(m: re.Match) -> str:
+    def _replace(m: re.Match[str]) -> str:
         result = _lookup(m.group(1).strip(), inputs, step_results)
         return str(result) if result is not None else m.group(0)
 

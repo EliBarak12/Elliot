@@ -66,7 +66,7 @@ def _parse_link_next(link_header: str) -> str | None:
 
 async def fetch_endpoint(config: SourceConfig, secrets: dict[str, str]) -> FetchResult:
     headers = _build_auth_headers(config, secrets)
-    base_params: dict[str, Any] = _build_auth_query_params(config, secrets)  # type: ignore[assignment]
+    base_params: dict[str, Any] = _build_auth_query_params(config, secrets)
     pagination = config.pagination
     all_rows: list[dict[str, Any]] = []
     warnings: list[str] = []

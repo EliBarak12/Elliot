@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from elliot_core.errors import ElliotError
 from elliot_core.types.connector import ConnectorConfig
 from elliot_core.types.source import SourceConfig
@@ -8,7 +10,7 @@ from elliot_core.types.tool import SkillDefinition, ToolDefinition
 
 class ConnectorBuilder:
     def __init__(self) -> None:
-        self._meta: dict = {}
+        self._meta: dict[str, Any] = {}
 
     def set_meta(
         self,

@@ -15,7 +15,7 @@ log = structlog.get_logger(__name__)
 class WorkspaceStore:
     def __init__(self, cwd: str = ".") -> None:
         self._dir = Path(cwd) / ".elliot"
-        self._dir.mkdir(exist_ok=True)
+        self._dir.mkdir(parents=True, exist_ok=True)
 
     def load_session(self) -> dict | None:  # type: ignore[type-arg]
         path = self._dir / "session.json"

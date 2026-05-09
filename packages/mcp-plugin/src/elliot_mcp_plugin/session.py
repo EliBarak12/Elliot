@@ -6,7 +6,7 @@ from typing import Any
 import structlog
 
 from elliot_core import ConnectorBuilder, SQLiteEngine, ToolRegistry, WorkspaceStore
-from elliot_core.types.connector import ProductContext
+from elliot_core.types.connector import ConnectorConfig, ProductContext
 from elliot_core.types.source import SourceConfig
 
 log = structlog.get_logger(__name__)
@@ -21,6 +21,8 @@ class ElliotSession:
         self.sources: dict[str, SourceConfig] = {}
         self.product_context: ProductContext | None = None
         self.runtime_process: subprocess.Popen[Any] | None = None
+        self.tool_sql: dict[str, str] = {}
+        self.connector: ConnectorConfig | None = None
 
     def load(self) -> None:
         data = self.workspace.load_session()

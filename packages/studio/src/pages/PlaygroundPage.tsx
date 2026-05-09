@@ -156,13 +156,17 @@ export default function PlaygroundPage() {
           </Card>
         )}
 
-        {history.length > 0 && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">History</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-1 overflow-y-auto max-h-64">
-              {history.map((inv, i) => (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">History</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 overflow-y-auto max-h-64">
+            {history.length === 0 && (
+              <p className="text-xs text-muted-foreground text-center py-4">
+                No invocations yet. Select a tool and run it.
+              </p>
+            )}
+            {history.map((inv, i) => (
                 <button
                   key={i}
                   className="w-full text-left text-xs flex items-center gap-2 hover:bg-accent rounded px-2 py-1"
@@ -179,7 +183,6 @@ export default function PlaygroundPage() {
               ))}
             </CardContent>
           </Card>
-        )}
       </div>
     </div>
   );

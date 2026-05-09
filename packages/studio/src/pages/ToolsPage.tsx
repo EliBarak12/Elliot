@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useTools } from "@/hooks/useTools";
 import { ToolCard } from "@/components/tools/ToolCard";
@@ -19,6 +20,7 @@ export default function ToolsPage() {
   const handleSaved = () => {
     void queryClient.invalidateQueries({ queryKey: ["tools"] });
     setCreatingNew(false);
+    toast.success("Tool saved successfully");
   };
 
   return (
@@ -40,6 +42,20 @@ export default function ToolsPage() {
         </div>
 
         {isLoading && <p className="text-xs text-muted-foreground">Loading…</p>}
+
+        {!isLoading && tools.length === 0 && (
+          <div className="py-8 text-center text-xs text-muted-foreground space-y-2">
+            <p>No tools defined yet.</p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={() => { setSelectedId(null); setCreatingNew(true); }}
+            >
+              Create your first tool
+            </Button>
+          </div>
+        )}
 
         {tools.map((tool) => (
           <ToolCard

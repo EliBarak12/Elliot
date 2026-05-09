@@ -45,6 +45,20 @@ export default function SkillsPage() {
 
         {isLoading && <p className="text-xs text-muted-foreground">Loading…</p>}
 
+        {!isLoading && skills.length === 0 && (
+          <div className="py-8 text-center text-xs text-muted-foreground space-y-2">
+            <p>No skills defined yet.</p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={() => { setSelectedId(null); setCreatingNew(true); }}
+            >
+              Create your first skill
+            </Button>
+          </div>
+        )}
+
         {skills.map((skill) => (
           <button
             key={skill.id}

@@ -1,10 +1,12 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { toast } from "sonner";
 
 const SESSION_KEY = "elliot_mcp_session_id";
 
 let _client: Client | null = null;
 let _connected = false;
+let _connectionErrorShown = false;
 
 async function getMcpClient(): Promise<Client> {
   if (_client && _connected) return _client;
@@ -20,12 +22,32 @@ async function getMcpClient(): Promise<Client> {
   );
 
   _client = new Client({ name: "elliot-studio", version: "0.1.0" });
-  await _client.connect(transport);
-  _connected = true;
+  try {
+    await _client.connect(transport);
+    _connected = true;
+    _connectionErrorShown = false;
 
-  const sessionId = transport.sessionId;
-  if (sessionId) {
-    sessionStorage.setItem(SESSION_KEY, sessionId);
+    const sessionId = transport.sessionId;
+    if (sessionId) {
+      sessionStorage.setItem(SESSION_KEY, sessionId);
+    }
+  } catch (err) {
+    _client = null;
+    _connected = false;
+    if (!_connectionErrorShown) {
+      _connectionErrorShown = true;
+      toast.error("Cannot connect to Elliot plugin. Is it running on :3000?", {
+        duration: Infinity,
+        action: {
+          label: "Retry",
+          onClick: () => {
+            _connectionErrorShown = false;
+            void getMcpClient();
+          },
+        },
+      });
+    }
+    throw err;
   }
 
   return _client;

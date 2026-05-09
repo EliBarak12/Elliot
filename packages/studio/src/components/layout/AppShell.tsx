@@ -1,4 +1,5 @@
 import { Outlet } from "@tanstack/react-router";
+import { Toaster } from "sonner";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 
@@ -12,6 +13,7 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+      <Toaster position="bottom-right" richColors />
     </div>
   );
 }

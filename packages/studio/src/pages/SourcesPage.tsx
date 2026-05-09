@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,14 +32,24 @@ export default function SourcesPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const handleRefresh = async (sourceId: string) => {
-    await callTool("elliot_refresh_source", { source_id: sourceId });
-    await queryClient.invalidateQueries({ queryKey: ["sources"] });
+    try {
+      await callTool("elliot_refresh_source", { source_id: sourceId });
+      await queryClient.invalidateQueries({ queryKey: ["sources"] });
+      toast.success("Source refreshed");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Refresh failed");
+    }
   };
 
   const handleRemove = async (sourceId: string) => {
     if (!confirm(`Remove source "${sourceId}"?`)) return;
-    await callTool("elliot_remove_source", { source_id: sourceId });
-    await queryClient.invalidateQueries({ queryKey: ["sources"] });
+    try {
+      await callTool("elliot_remove_source", { source_id: sourceId });
+      await queryClient.invalidateQueries({ queryKey: ["sources"] });
+      toast.success("Source removed");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Remove failed");
+    }
   };
 
   return (
@@ -52,8 +63,11 @@ export default function SourcesPage() {
 
       {sources.length === 0 && !isLoading && (
         <Card>
-          <CardContent className="py-8 text-center text-sm text-muted-foreground">
-            No sources yet. Add a source to get started.
+          <CardContent className="py-8 text-center space-y-3">
+            <p className="text-sm text-muted-foreground">No sources loaded yet.</p>
+            <Button size="sm" onClick={() => setDialogOpen(true)}>
+              Add your first source
+            </Button>
           </CardContent>
         </Card>
       )}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import structlog
 from mcp.server.fastmcp import FastMCP
 
+from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.types.connector import ProductContext
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -20,18 +21,28 @@ def register_context_tools(mcp: FastMCP, session: ElliotSession) -> None:
         version: str = "",
     ) -> dict:  # type: ignore[type-arg]
         """Set the product context (name, description, base URL) for the current session."""
-        session.product_context = ProductContext(
-            name=name, description=description, base_url=base_url, version=version
-        )
-        session.save()
-        return {"status": "ok", "context": session.product_context.model_dump()}
+        try:
+            session.product_context = ProductContext(
+                name=name, description=description, base_url=base_url, version=version
+            )
+            session.save()
+            return {"status": "ok", "context": session.product_context.model_dump()}
+        except ElliotError as exc:
+            return to_mcp_error_content(exc)
+        except Exception as exc:
+            log.error("context.set.failed", error=str(exc), exc_info=True)
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_get_context() -> dict:  # type: ignore[type-arg]
         """Return the current product context for this session."""
-        if not session.product_context:
-            return {"context": None}
-        return {"context": session.product_context.model_dump()}
+        try:
+            if not session.product_context:
+                return {"context": None}
+            return {"context": session.product_context.model_dump()}
+        except Exception as exc:
+            log.error("context.get.failed", error=str(exc), exc_info=True)
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_get_session_state() -> dict:  # type: ignore[type-arg]
@@ -50,5 +61,5 @@ def register_context_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 "connector_built": session.connector is not None,
             }
         except Exception as exc:
-            log.error("session.state.failed", error=str(exc))
-            return {"error": str(exc)}
+            log.error("session.state.failed", error=str(exc), exc_info=True)
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))

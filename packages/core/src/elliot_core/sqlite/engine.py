@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from elliot_core.errors import ElliotError
 from elliot_core.types.sqlite import FlattenedTable, FlattenResult
 
 
@@ -54,8 +55,11 @@ class SQLiteEngine:
         self._conn.commit()
 
     def query(self, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        cursor = self._conn.execute(sql, params or {})
-        return [dict(row) for row in cursor.fetchall()]
+        try:
+            cursor = self._conn.execute(sql, params or {})
+            return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as exc:
+            raise ElliotError("INVALID_SQL", str(exc)) from exc
 
     def get_table_names(self) -> list[str]:
         rows = self._conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()

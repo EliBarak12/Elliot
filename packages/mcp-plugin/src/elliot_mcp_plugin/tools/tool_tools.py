@@ -5,7 +5,7 @@ from __future__ import annotations
 import structlog
 from mcp.server.fastmcp import FastMCP
 
-from elliot_core.errors import ElliotError
+from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.types.tool import ToolDefinition
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -49,10 +49,10 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             log.info("tool.created", tool_id=tool.id)
             return {"tool_id": tool.id, "status": "created"}
         except ElliotError as exc:
-            return {"error": f"[{exc.code}] {exc.message}"}
+            return to_mcp_error_content(exc)
         except Exception as exc:
             log.error("tool.create.failed", error=str(exc))
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_update_tool(tool_id: str, patch: dict) -> dict:  # type: ignore[type-arg]
@@ -69,9 +69,9 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             session.save()
             return {"tool_id": tool_id, "status": "updated"}
         except ElliotError as exc:
-            return {"error": f"[{exc.code}] {exc.message}"}
+            return to_mcp_error_content(exc)
         except Exception as exc:
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_list_tools() -> dict:  # type: ignore[type-arg]
@@ -90,7 +90,7 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 "count": len(session.registry.get_all()),
             }
         except Exception as exc:
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_get_tool(tool_id: str) -> dict:  # type: ignore[type-arg]
@@ -103,7 +103,7 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             result["sql"] = session.tool_sql.get(tool_id)
             return result
         except Exception as exc:
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_delete_tool(tool_id: str) -> dict:  # type: ignore[type-arg]
@@ -117,7 +117,7 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             log.info("tool.deleted", tool_id=tool_id)
             return {"status": "deleted", "tool_id": tool_id}
         except Exception as exc:
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_preview_tool(tool_id: str, params: dict) -> dict:  # type: ignore[type-arg]
@@ -132,7 +132,7 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             rows = session.engine.query(sql, params or {})
             return {"rows": rows, "row_count": len(rows)}
         except ElliotError as exc:
-            return {"error": f"[{exc.code}] {exc.message}"}
+            return to_mcp_error_content(exc)
         except Exception as exc:
             log.error("tool.preview.failed", tool_id=tool_id, error=str(exc))
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))

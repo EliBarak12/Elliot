@@ -71,7 +71,7 @@ def test_create_skill_unknown_tool_returns_error(mcp: FastMCP):
         steps=[{"alias": "step1", "tool_id": "nonexistent_tool", "params": {}}],
         input_parameters=[],
     )
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 def test_create_skill_registers(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
@@ -113,7 +113,7 @@ def test_get_skill_returns_definition(mcp: FastMCP, session: ElliotSession, tmp_
 
 def test_get_skill_not_found(mcp: FastMCP):
     result = _tool(mcp, "elliot_get_skill")(skill_id="ghost")
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 def test_delete_skill(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
@@ -132,7 +132,7 @@ def test_delete_skill(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
 
 def test_delete_skill_not_found(mcp: FastMCP):
     result = _tool(mcp, "elliot_delete_skill")(skill_id="ghost")
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +202,7 @@ def test_export_connector_writes_file(mcp: FastMCP, session: ElliotSession, tmp_
 
 def test_export_connector_without_build_returns_error(mcp: FastMCP):
     result = _tool(mcp, "elliot_export_connector")(path="/tmp/test.json")
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 def test_get_connection_config(mcp: FastMCP):

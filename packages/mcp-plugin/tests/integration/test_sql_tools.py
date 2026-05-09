@@ -40,7 +40,7 @@ def test_query_sql_with_filter(mcp: FastMCP):
 
 def test_query_sql_drop_rejected(mcp: FastMCP):
     result = _tool(mcp, "elliot_query_sql")(sql='DROP TABLE "products"')
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 def test_validate_sql_select_valid(mcp: FastMCP):

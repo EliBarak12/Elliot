@@ -9,7 +9,7 @@ import structlog
 from mcp.server.fastmcp import FastMCP
 
 from elliot_core.connector.serializer import serialize_connector
-from elliot_core.errors import ElliotError
+from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_mcp_plugin.session import ElliotSession
 
 log = structlog.get_logger(__name__)
@@ -58,10 +58,10 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 "source_count": len(sources),
             }
         except ElliotError as exc:
-            return {"error": f"[{exc.code}] {exc.message}"}
+            return to_mcp_error_content(exc)
         except Exception as exc:
             log.error("connector.build.failed", error=str(exc))
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_export_connector(path: str = ".elliot/connector.json") -> dict:  # type: ignore[type-arg]
@@ -76,7 +76,7 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return {"status": "exported", "path": str(dest)}
         except Exception as exc:
             log.error("connector.export.failed", error=str(exc))
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_save_session() -> dict:  # type: ignore[type-arg]
@@ -85,7 +85,7 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             session.save()
             return {"status": "ok"}
         except Exception as exc:
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_start_runtime(port: int = 3001) -> dict:  # type: ignore[type-arg]
@@ -106,7 +106,7 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             log.info("runtime.started", port=port, pid=session.runtime_process.pid)
             return {"url": f"http://localhost:{port}/mcp", "pid": session.runtime_process.pid}
         except Exception as exc:
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_stop_runtime() -> dict:  # type: ignore[type-arg]
@@ -119,7 +119,7 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             log.info("runtime.stopped")
             return {"status": "stopped"}
         except Exception as exc:
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_get_connection_config() -> dict:  # type: ignore[type-arg]

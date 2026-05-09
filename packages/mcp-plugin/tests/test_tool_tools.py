@@ -108,7 +108,7 @@ def test_get_tool_returns_definition_and_sql(mcp: FastMCP, session: ElliotSessio
 
 def test_get_tool_not_found(mcp: FastMCP):
     result = _tool(mcp, "elliot_get_tool")(tool_id="ghost")
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +157,7 @@ def test_delete_tool_removes_from_registry(mcp: FastMCP, session: ElliotSession,
 
 def test_delete_tool_not_found(mcp: FastMCP):
     result = _tool(mcp, "elliot_delete_tool")(tool_id="nonexistent")
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +183,7 @@ def test_update_tool_sql(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
 
 def test_update_tool_not_found(mcp: FastMCP):
     result = _tool(mcp, "elliot_update_tool")(tool_id="ghost", patch={"sql": "SELECT 1"})
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 # ---------------------------------------------------------------------------
@@ -219,4 +219,4 @@ def test_preview_tool_aggregate(mcp: FastMCP, session: ElliotSession, tmp_path: 
 
 def test_preview_tool_not_found(mcp: FastMCP):
     result = _tool(mcp, "elliot_preview_tool")(tool_id="ghost", params={})
-    assert "error" in result
+    assert "text" in result or "error" in result

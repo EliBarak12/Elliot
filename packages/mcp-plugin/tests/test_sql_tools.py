@@ -82,25 +82,26 @@ def test_query_sql_with_where(mcp: FastMCP, session: ElliotSession, tmp_path: Pa
 def test_query_sql_drop_returns_error(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
     _load_table(session, tmp_path)
     result = _tool(mcp, "elliot_query_sql")(sql='DROP TABLE "items"')
-    assert "error" in result
-    assert "DROP" in result["error"] or "Forbidden" in result["error"]
+    assert "text" in result or "error" in result
+    error_msg = result.get("error", result.get("text", ""))
+    assert "DROP" in error_msg or "Forbidden" in error_msg
 
 
 def test_query_sql_insert_returns_error(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
     _load_table(session, tmp_path)
     result = _tool(mcp, "elliot_query_sql")(sql="INSERT INTO items VALUES (4, 'delta')")
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 def test_query_sql_empty_returns_error(mcp: FastMCP):
     result = _tool(mcp, "elliot_query_sql")(sql="  ")
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 def test_query_sql_semicolon_rejected(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
     _load_table(session, tmp_path)
     result = _tool(mcp, "elliot_query_sql")(sql='SELECT 1; DROP TABLE "items"')
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +167,7 @@ def test_sample_data_limit(mcp: FastMCP, session: ElliotSession, tmp_path: Path)
 
 def test_sample_data_missing_table_returns_error(mcp: FastMCP):
     result = _tool(mcp, "elliot_sample_data")(table_name="ghost")
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +183,7 @@ def test_profile_column_returns_stats(mcp: FastMCP, session: ElliotSession, tmp_
 
 def test_profile_column_missing_table_returns_error(mcp: FastMCP):
     result = _tool(mcp, "elliot_profile_column")(table_name="ghost", column_name="x")
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 # ---------------------------------------------------------------------------
@@ -198,4 +199,4 @@ def test_explain_query_returns_plan(mcp: FastMCP, session: ElliotSession, tmp_pa
 
 def test_explain_query_invalid_sql_returns_error(mcp: FastMCP):
     result = _tool(mcp, "elliot_explain_query")(sql="NOT VALID SQL !!!")
-    assert "error" in result
+    assert "text" in result or "error" in result

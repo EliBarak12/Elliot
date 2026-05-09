@@ -100,7 +100,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(exc)
         except Exception as exc:
             log.error("source.discover.failed", error=str(exc))
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_list_sources() -> dict:  # type: ignore[type-arg]
@@ -121,7 +121,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             }
         except Exception as exc:
             log.error("source.list.failed", error=str(exc))
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_preview_source(table_name: str, limit: int = 10) -> dict:  # type: ignore[type-arg]
@@ -152,7 +152,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             }
         except Exception as exc:
             log.error("source.profile.failed", table=table_name, error=str(exc))
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_refresh_source(source_id: str) -> dict:  # type: ignore[type-arg]
@@ -170,7 +170,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 name=src.name,
             )
         except Exception as exc:
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_remove_source(source_id: str) -> dict:  # type: ignore[type-arg]
@@ -186,4 +186,4 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             log.info("source.removed", source_id=source_id, table=src.table_name)
             return {"status": "removed", "source_id": source_id, "table": src.table_name}
         except Exception as exc:
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))

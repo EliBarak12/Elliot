@@ -8,7 +8,7 @@ import uuid
 import structlog
 from mcp.server.fastmcp import FastMCP
 
-from elliot_core.errors import ElliotError
+from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.tools.skill_runner import execute_skill
 from elliot_core.tools.validator import validate_skill_definition
 from elliot_mcp_plugin.session import ElliotSession
@@ -47,10 +47,10 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
             log.info("skill.created", skill_id=skill.id)
             return {"skill_id": skill.id, "status": "created"}
         except ElliotError as exc:
-            return {"error": f"[{exc.code}] {exc.message}"}
+            return to_mcp_error_content(exc)
         except Exception as exc:
             log.error("skill.create.failed", error=str(exc))
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_list_skills() -> dict:  # type: ignore[type-arg]
@@ -64,7 +64,7 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 "count": len(session.registry.get_all_skills()),
             }
         except Exception as exc:
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_get_skill(skill_id: str) -> dict:  # type: ignore[type-arg]
@@ -75,7 +75,7 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 return {"error": f"Skill not found: {skill_id}"}
             return skill.model_dump()
         except Exception as exc:
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_preview_skill(skill_id: str, inputs: dict) -> dict:  # type: ignore[type-arg]
@@ -100,10 +100,10 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
             result = asyncio.run(execute_skill(skill, inputs or {}, session.registry, executor))
             return {"rows": result.rows, "meta": result.meta}
         except ElliotError as exc:
-            return {"error": f"[{exc.code}] {exc.message}"}
+            return to_mcp_error_content(exc)
         except Exception as exc:
             log.error("skill.preview.failed", skill_id=skill_id, error=str(exc))
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def elliot_delete_skill(skill_id: str) -> dict:  # type: ignore[type-arg]
@@ -116,4 +116,4 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
             log.info("skill.deleted", skill_id=skill_id)
             return {"status": "deleted", "skill_id": skill_id}
         except Exception as exc:
-            return {"error": str(exc)}
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))

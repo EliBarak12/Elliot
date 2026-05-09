@@ -98,7 +98,7 @@ def test_discover_source_unknown_type_returns_error(mcp: FastMCP):
         config={},
         name="x",
     )
-    assert "error" in result
+    assert "text" in result or "error" in result
     assert "ftp" in result["error"]
 
 
@@ -211,7 +211,7 @@ def test_preview_source_limit_respected(mcp: FastMCP, tmp_path: Path):
 
 def test_preview_source_missing_table_returns_error(mcp: FastMCP):
     result = _tool(mcp, "elliot_preview_source")(table_name="nonexistent")
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +234,7 @@ def test_profile_source_returns_column_stats(mcp: FastMCP, tmp_path: Path):
 
 def test_profile_source_missing_table_returns_error(mcp: FastMCP):
     result = _tool(mcp, "elliot_profile_source")(table_name="ghost")
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 # ---------------------------------------------------------------------------
@@ -278,12 +278,12 @@ def test_remove_source_table_no_longer_previewable(mcp: FastMCP, tmp_path: Path)
     )
     _tool(mcp, "elliot_remove_source")(source_id=disc["source_id"])
     result = _tool(mcp, "elliot_preview_source")(table_name="items")
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 def test_remove_source_not_found_returns_error(mcp: FastMCP):
     result = _tool(mcp, "elliot_remove_source")(source_id="no-such-id")
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +305,7 @@ def test_refresh_source_reloads_data(mcp: FastMCP, tmp_path: Path):
 
 def test_refresh_source_not_found_returns_error(mcp: FastMCP):
     result = _tool(mcp, "elliot_refresh_source")(source_id="bad-id")
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 # ---------------------------------------------------------------------------
@@ -320,10 +320,10 @@ def test_discover_exception_does_not_raise(mcp: FastMCP):
             config={"path": "/some/path.csv"},
             name="x",
         )
-    assert "error" in result
+    assert "text" in result or "error" in result
 
 
 def test_list_sources_exception_does_not_raise(mcp: FastMCP, session: ElliotSession):
     session.sources = None  # type: ignore[assignment]
     result = _tool(mcp, "elliot_list_sources")()
-    assert "error" in result
+    assert "text" in result or "error" in result

@@ -22,7 +22,7 @@ export interface ToolDefinition {
   id: string;
   name: string;
   description: string;
-  category: "READ" | "WRITE" | "ACTION";
+  category: "READ" | "WRITE" | "ACTION" | "AGGREGATE";
   source_ids: string[];
   sql: string | null;
   parameters: ParameterDefinition[];

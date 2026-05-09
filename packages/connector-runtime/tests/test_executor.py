@@ -6,14 +6,13 @@ import httpx
 import pytest
 import respx
 
-from elliot_core.types import ConnectorConfig, ParameterDefinition, SourceConfig, ToolDefinition
-
 from elliot_connector_runtime.executor import (
     ExecutorError,
     ToolExecutor,
     _extract_table_names,
     _interpolate,
 )
+from elliot_core.types import ConnectorConfig, ParameterDefinition, SourceConfig, ToolDefinition
 
 CONNECTOR = ConnectorConfig(
     name="Pets",
@@ -100,9 +99,7 @@ async def test_executor_no_sql_raises() -> None:
         name="Empty",
         slug="empty",
         version="1.0.0",
-        sources=[
-            SourceConfig(id="somewhere", name="Somewhere", type="rest", url="http://x.com")
-        ],
+        sources=[SourceConfig(id="somewhere", name="Somewhere", type="rest", url="http://x.com")],
         tools=[
             ToolDefinition(
                 id="no_sql_tool",

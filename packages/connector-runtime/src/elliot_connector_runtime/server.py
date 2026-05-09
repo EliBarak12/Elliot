@@ -14,6 +14,7 @@ from mcp.server.fastmcp import FastMCP
 from .audit import AuditLog
 from .cache import ConnectorCache
 from .executor import ToolExecutor
+from .loader import ConnectorLoadError
 from .protocols.openai import register_openai_routes
 
 _cache = ConnectorCache(ttl_seconds=30)
@@ -78,7 +79,18 @@ def create_app(
     secrets = secrets or {}
     audit_path = os.environ.get("ELLIOT_AUDIT_LOG", ".elliot/audit.ndjson")
 
-    config = _cache.get(connector_path)
+    try:
+        config = _cache.get(connector_path)
+    except ConnectorLoadError:
+        # Connector not yet available — return a minimal app so the module can be imported.
+        _app = FastAPI()
+
+        @_app.get("/health")
+        async def _health() -> dict[str, str]:
+            return {"status": "no_connector", "connector": connector_path or ""}
+
+        return _app
+
     executor = ToolExecutor(config, secrets)
     audit = AuditLog(audit_path)
 

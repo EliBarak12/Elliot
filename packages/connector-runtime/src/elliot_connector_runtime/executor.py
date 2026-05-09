@@ -9,6 +9,7 @@ import httpx
 import jmespath
 
 from elliot_core.sqlite.engine import SQLiteEngine
+from elliot_core.tools.query_builder import build_select_sql
 from elliot_core.types import (
     AuthConfig,
     ConnectorConfig,
@@ -30,23 +31,40 @@ class ToolExecutor:
     hydrates an ephemeral in-memory SQLiteEngine, and runs the tool's SQL.
     """
 
-    def __init__(self, config: ConnectorConfig, secrets: dict[str, str]) -> None:
+    def __init__(
+        self,
+        config: ConnectorConfig,
+        secrets: dict[str, str],
+        engine: SQLiteEngine | None = None,
+    ) -> None:
         self._config = config
         self._secrets = secrets
         self._sources: dict[str, SourceConfig] = {s.id: s for s in config.sources}
+        self._engine = engine  # injected engine for testing / pre-loaded data
 
     async def execute(
         self,
         tool: ToolDefinition,
         arguments: dict[str, Any],
     ) -> QueryResult:
-        if not tool.sql:
-            raise ExecutorError(f"Tool '{tool.id}' has no sql defined")
+        # Determine SQL: prefer explicit sql, fall back to build_select_sql for filter_groups tools
+        if tool.sql:
+            sql: str = tool.sql
+            params: dict[str, Any] = {p.name: arguments.get(p.name) for p in tool.parameters}
+        elif tool.filter_groups is not None or tool.return_fields:
+            sql, params = build_select_sql(tool, arguments)
+        else:
+            raise ExecutorError(f"Tool '{tool.id}' has no sql or filter_groups defined")
+
+        # Use injected engine or fetch from live sources into a fresh engine
+        if self._engine is not None:
+            rows = self._engine.query(sql, params)
+            return QueryResult(rows=rows, tool_id=tool.id)
 
         engine = SQLiteEngine()
         any_empty = False
 
-        for source_id in _extract_table_names(tool.sql):
+        for source_id in _extract_table_names(sql):
             source = self._sources.get(source_id)
             if source is None:
                 continue
@@ -59,8 +77,7 @@ class ToolExecutor:
         if any_empty:
             return QueryResult(rows=[], tool_id=tool.id)
 
-        params = {p.name: arguments.get(p.name) for p in tool.parameters}
-        rows = engine.query(tool.sql, params)
+        rows = engine.query(sql, params)
         return QueryResult(rows=rows, tool_id=tool.id)
 
     async def _fetch_source(

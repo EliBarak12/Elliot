@@ -32,6 +32,8 @@ class ConnectorConfig(BaseModel):
                         f"Tool '{tool.id}' references unknown source '{sid}'. "
                         f"Available: {sorted(source_ids)}"
                     )
-            if tool.category == "READ" and not tool.source_ids:
-                raise ValueError(f"READ tool '{tool.id}' must declare at least one source_id")
+            if tool.category == "READ" and not tool.source_ids and not tool.sql:
+                raise ValueError(
+                    f"READ tool '{tool.id}' must declare at least one source_id or sql"
+                )
         return self

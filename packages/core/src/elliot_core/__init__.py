@@ -29,6 +29,7 @@ from elliot_core.types import (
     FilterGroup,
     PaginationConfig,
     ParameterDefinition,
+    QueryResult,
     ResponseShape,
     ReturnField,
     SkillDefinition,
@@ -69,6 +70,7 @@ __all__ = [
     "SkillDefinition",
     "SkillStep",
     "SourceConfig",
+    "QueryResult",
     "ToolDefinition",
     "ToolResult",
     # sqlite

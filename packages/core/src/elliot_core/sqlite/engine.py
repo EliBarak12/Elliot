@@ -32,6 +32,27 @@ class SQLiteEngine:
         for t in result.related_tables:
             self.load_table(t)
 
+    def ingest(self, table_name: str, rows: list[dict[str, Any]]) -> None:
+        """Load a list of dicts into a SQLite table, inferring columns from the first row."""
+        if not rows:
+            self._conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+            self._conn.execute(f'CREATE TABLE "{table_name}" (_empty INTEGER)')
+            self._conn.commit()
+            return
+        cols = list(rows[0].keys())
+        col_defs = ", ".join(f'"{c}" TEXT' for c in cols)
+        self._conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+        self._conn.execute(f'CREATE TABLE "{table_name}" ({col_defs})')
+        placeholders = ", ".join(["?"] * len(cols))
+        self._conn.executemany(
+            f'INSERT INTO "{table_name}" VALUES ({placeholders})',
+            [
+                tuple(str(row.get(c)) if row.get(c) is not None else None for c in cols)
+                for row in rows
+            ],
+        )
+        self._conn.commit()
+
     def query(self, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         cursor = self._conn.execute(sql, params or {})
         return [dict(row) for row in cursor.fetchall()]

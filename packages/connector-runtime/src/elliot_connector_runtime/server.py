@@ -7,27 +7,28 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from mcp.server.fastmcp import FastMCP
 
+from .audit import AuditLog
 from .cache import ConnectorCache
 from .executor import ToolExecutor
+from .protocols.openai import register_openai_routes
 
 _cache = ConnectorCache(ttl_seconds=30)
 
 
-def create_runtime_server(connector_path: str, secrets: dict[str, str]) -> FastMCP:
+def create_runtime_server(config: Any, executor: ToolExecutor) -> FastMCP:
     """
     Build a FastMCP server whose tool list mirrors the connector's ToolDefinitions.
-    Called once at startup; the connector is cached and auto-reloaded on mtime change.
     """
+    from elliot_core.types import ConnectorConfig
+
+    cfg: ConnectorConfig = config
     mcp = FastMCP("elliot-runtime")
 
-    config = _cache.get(connector_path)
-    executor = ToolExecutor(config, secrets)
-
-    for tool_def in config.tools:
+    for tool_def in cfg.tools:
         _register_tool(mcp, executor, tool_def)
 
     return mcp
@@ -75,8 +76,13 @@ def create_app(
 ) -> FastAPI:
     connector_path = connector_path or os.environ.get("ELLIOT_CONNECTOR", "connector.json")
     secrets = secrets or {}
+    audit_path = os.environ.get("ELLIOT_AUDIT_LOG", ".elliot/audit.ndjson")
 
-    mcp = create_runtime_server(connector_path, secrets)
+    config = _cache.get(connector_path)
+    executor = ToolExecutor(config, secrets)
+    audit = AuditLog(audit_path)
+
+    mcp = create_runtime_server(config, executor)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Any:
@@ -90,6 +96,14 @@ def create_app(
         allow_headers=["*"],
     )
     app.mount("/mcp", mcp.streamable_http_app())
+
+    openai_router = APIRouter(prefix="/v1")
+    register_openai_routes(openai_router, config, executor, audit)
+    app.include_router(openai_router)
+
+    @app.get("/v1/audit")
+    async def get_audit(n: int = 100) -> list[dict[str, Any]]:
+        return audit.tail(n)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

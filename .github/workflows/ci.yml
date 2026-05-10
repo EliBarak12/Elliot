@@ -2,34 +2,57 @@ name: CI
 
 on:
   push:
-    branches: ["main", "epic/*", "fix/*", "claude/*"]
+    branches: [main, "epic/**", "claude/**"]
   pull_request:
-    branches: ["main"]
 
 jobs:
-  test:
-    name: Test
+  python:
+    name: Python (lint + typecheck + test)
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v4
         with:
-          enable-cache: true
+          version: "latest"
+          python-version: "3.13"
 
-      - name: Install dependencies
-        run: uv sync --all-packages
+      - run: uv sync
 
       - name: Lint
-        run: uv run ruff check packages/
+        run: uv run ruff check .
+
+      - name: Format check
+        run: uv run ruff format --check .
 
       - name: Type check
-        run: uv run mypy packages/core/src packages/mcp-plugin/src
-        continue-on-error: true
+        run: uv run mypy packages/core/src packages/mcp-plugin/src packages/connector-runtime/src
 
-      - name: Test
-        run: |
-          uv run pytest packages/core/tests/ packages/mcp-plugin/tests/ \
-            -v --tb=short --no-header
+      - name: Test with coverage
+        run: uv run pytest --tb=short --cov --cov-fail-under=85
+
+  studio:
+    name: Studio (typecheck + test + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm --filter @elliot/studio run typecheck
+
+      - name: Unit tests
+        run: pnpm --filter @elliot/studio run test --run
+
+      - name: Build
+        run: pnpm --filter @elliot/studio run build

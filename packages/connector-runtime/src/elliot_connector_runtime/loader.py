@@ -5,7 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import structlog
+
+from elliot_core.secrets import SecretResolutionError, resolve_secrets
 from elliot_core.types.connector import ConnectorConfig
+
+log = structlog.get_logger(__name__)
 
 
 class ConnectorLoadError(Exception):
@@ -23,9 +28,32 @@ def load_connector(path: str | Path) -> ConnectorConfig:
     except json.JSONDecodeError as exc:
         raise ConnectorLoadError(f"Invalid JSON in {p}: {exc}") from exc
     try:
-        return ConnectorConfig.model_validate(data)
+        resolved = resolve_secrets(data)
+        placeholder_count = _count_placeholders(data)
+        if placeholder_count:
+            log.info("connector.secrets_resolved", count=placeholder_count, path=str(p))
+    except SecretResolutionError as exc:
+        raise ConnectorLoadError(str(exc)) from exc
+    try:
+        return ConnectorConfig.model_validate(resolved)
     except Exception as exc:
         raise ConnectorLoadError(f"Schema validation failed for {p}: {exc}") from exc
+
+
+def _count_placeholders(obj: object) -> int:
+    import re
+
+    _placeholder = re.compile(r"\{\{\s*env:[A-Z0-9_]+\s*\}\}")
+    count = 0
+    if isinstance(obj, str):
+        count += len(_placeholder.findall(obj))
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            count += _count_placeholders(v)
+    elif isinstance(obj, list):
+        for item in obj:
+            count += _count_placeholders(item)
+    return count
 
 
 def discover_connectors(directory: str | Path) -> list[Path]:
@@ -34,3 +62,24 @@ def discover_connectors(directory: str | Path) -> list[Path]:
     if not d.is_dir():
         return []
     return sorted(d.rglob("*.connector.json"))
+
+
+def load_connectors_dir(directory: str | Path) -> dict[str, ConnectorConfig]:
+    """
+    Load all *.connector.json files in directory.
+    Returns {slug: ConnectorConfig}. Logs and skips files that fail to load.
+    Raises ConnectorLoadError if no valid connectors are found.
+    """
+    from elliot_core.types.connector import ConnectorConfig  # noqa: F401
+
+    configs: dict[str, ConnectorConfig] = {}
+    for path in sorted(Path(directory).glob("*.connector.json")):
+        try:
+            config = load_connector(path)
+            configs[config.slug] = config
+            log.info("connector.loaded", slug=config.slug, path=str(path))
+        except ConnectorLoadError as exc:
+            log.warning("connector.skipped", path=str(path), error=str(exc))
+    if not configs:
+        raise ConnectorLoadError(f"No valid connectors found in {directory}")
+    return configs

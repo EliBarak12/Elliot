@@ -156,3 +156,44 @@ def test_cache_ttl_expiry(tmp_path: Path) -> None:
     time.sleep(0.05)
     second = cache.get(p)
     assert first is not second
+
+
+def test_v1_health_no_sources(client: TestClient) -> None:
+    resp = client.get("/v1/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] in ("healthy", "degraded")
+    assert "connector" in data
+    assert data["connector"]["slug"] == "pets"
+    assert "sources" in data
+    assert "observation_db" in data
+    assert "uptime_seconds" in data
+
+
+def test_v1_health_with_rest_source(tmp_path: Path) -> None:
+    connector = {
+        **MINIMAL_CONNECTOR,
+        "sources": [
+            {
+                "id": "api",
+                "name": "API",
+                "type": "rest",
+                "url": "https://api.unreachable.invalid",
+            }
+        ],
+    }
+    p = tmp_path / "conn.connector.json"
+    p.write_text(json.dumps(connector))
+    app = create_app(connector_path=str(p))
+    c = TestClient(app)
+    resp = c.get("/v1/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "degraded"
+    assert data["sources"][0]["status"] == "error"
+
+
+def test_prune_endpoint(client: TestClient) -> None:
+    resp = client.post("/v1/observations/prune")
+    assert resp.status_code == 200
+    assert "deleted" in resp.json()

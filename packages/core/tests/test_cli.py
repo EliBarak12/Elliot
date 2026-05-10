@@ -1,0 +1,270 @@
+"""Tests for elliot_core.cli (lint and eval subcommands)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from elliot_core.types import ConnectorConfig
+
+GOOD_CONNECTOR = {
+    "name": "Test",
+    "slug": "test",
+    "version": "1.0.0",
+    "sources": [],
+    "tools": [
+        {
+            "id": "list_items",
+            "name": "List Items",
+            "description": "Return all items from the items table",
+            "category": "READ",
+            "source_ids": [],
+            "sql": "SELECT id, name FROM items WHERE (:f IS NULL OR name = :f) LIMIT 50",
+            "parameters": [
+                {
+                    "name": "filter_name",
+                    "type": "string",
+                    "required": False,
+                    "description": "Filter by item name",
+                }
+            ],
+        }
+    ],
+    "skills": [],
+}
+
+BAD_CONNECTOR = {
+    "name": "Bad",
+    "slug": "bad",
+    "version": "1.0.0",
+    "sources": [],
+    "tools": [
+        {
+            "id": "x",
+            "name": "X",
+            "description": "Bad",  # too short
+            "category": "READ",
+            "source_ids": [],
+            "sql": "SELECT * FROM items",  # unbounded
+            "parameters": [],
+        }
+    ],
+    "skills": [],
+}
+
+
+def _write_connector(tmp_path: Path, data: dict) -> Path:  # type: ignore[type-arg]
+    p = tmp_path / "test.connector.json"
+    p.write_text(json.dumps(data))
+    return p
+
+
+# ---------------------------------------------------------------------------
+# _load_connector helper
+# ---------------------------------------------------------------------------
+
+
+def test_load_connector_valid(tmp_path: Path) -> None:
+    from elliot_core.cli import _load_connector
+
+    p = _write_connector(tmp_path, GOOD_CONNECTOR)
+    config = _load_connector(str(p))
+    assert isinstance(config, ConnectorConfig)
+    assert config.slug == "test"
+
+
+def test_load_connector_missing_file_exits(tmp_path: Path) -> None:
+    from elliot_core.cli import _load_connector
+
+    with pytest.raises(SystemExit):
+        _load_connector(str(tmp_path / "nonexistent.json"))
+
+
+# ---------------------------------------------------------------------------
+# _cmd_lint via argparse simulation
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_lint_clean_connector_exits_0(tmp_path: Path) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_lint
+
+    p = _write_connector(tmp_path, GOOD_CONNECTOR)
+    args = argparse.Namespace(path=str(p))
+    with pytest.raises(SystemExit) as exc_info:
+        _cmd_lint(args)
+    assert exc_info.value.code == 0
+
+
+def test_cmd_lint_bad_connector_exits_1(tmp_path: Path) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_lint
+
+    p = _write_connector(tmp_path, BAD_CONNECTOR)
+    args = argparse.Namespace(path=str(p))
+    with pytest.raises(SystemExit) as exc_info:
+        _cmd_lint(args)
+    assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# main() dispatch
+# ---------------------------------------------------------------------------
+
+
+def test_main_no_command_exits_1(monkeypatch) -> None:
+    import sys
+
+    from elliot_core.cli import main
+
+    monkeypatch.setattr(sys, "argv", ["elliot"])
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 1
+
+
+def test_main_lint_clean_exits_0(tmp_path: Path, monkeypatch) -> None:
+    import sys
+
+    from elliot_core.cli import main
+
+    p = _write_connector(tmp_path, GOOD_CONNECTOR)
+    monkeypatch.setattr(sys, "argv", ["elliot", "lint", str(p)])
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 0
+
+
+def test_main_lint_bad_exits_1(tmp_path: Path, monkeypatch) -> None:
+    import sys
+
+    from elliot_core.cli import main
+
+    p = _write_connector(tmp_path, BAD_CONNECTOR)
+    monkeypatch.setattr(sys, "argv", ["elliot", "lint", str(p)])
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# init subcommand
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_init_list_templates(capsys: pytest.CaptureFixture[str]) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_init
+
+    args = argparse.Namespace(list=True, template=None, output=None)
+    _cmd_init(args)
+    out = capsys.readouterr().out
+    assert "rest-api-key" in out
+    assert "postgres-readonly" in out
+
+
+def test_cmd_init_creates_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_init
+
+    monkeypatch.chdir(tmp_path)
+    args = argparse.Namespace(list=False, template="rest-api-key", output=None)
+    _cmd_init(args)
+    assert (tmp_path / "rest-api-key.connector.json").exists()
+
+
+def test_cmd_init_unknown_template_exits(monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_init
+
+    args = argparse.Namespace(list=False, template="no-such-template", output=None)
+    with pytest.raises(SystemExit):
+        _cmd_init(args)
+
+
+def test_cmd_init_custom_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_init
+
+    monkeypatch.chdir(tmp_path)
+    args = argparse.Namespace(list=False, template="paginated-rest", output="my.connector.json")
+    _cmd_init(args)
+    assert (tmp_path / "my.connector.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# status subcommand
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_status_all_down_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+
+    import httpx
+
+    from elliot_core.cli import _cmd_status
+
+    def raise_connect_error(*a: object, **kw: object) -> None:
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(httpx, "get", raise_connect_error)
+
+    args = argparse.Namespace()
+    with pytest.raises(SystemExit) as exc_info:
+        _cmd_status(args)
+    assert exc_info.value.code == 1
+
+
+def test_cmd_status_all_up_exits_0(monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+
+    import httpx
+
+    from elliot_core.cli import _cmd_status
+
+    fake_response = type(
+        "R", (), {"status_code": 200, "json": lambda self: {"connector": "pets"}}
+    )()
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: fake_response)
+    # Patch DB check to succeed
+    monkeypatch.setattr(
+        "elliot_core.cli._cmd_status",
+        _cmd_status,
+    )
+
+    args = argparse.Namespace()
+
+    import sys
+
+    original = sys.modules.get("elliot_connector_runtime.observation_store")
+
+    class _FakeStore:
+        def __init__(self, *a: object, **kw: object) -> None:
+            pass
+
+        def recent_tool_calls(self, *a: object) -> list[object]:
+            return []
+
+    fake_mod = type(sys)("fake")
+    fake_mod.ObservationStore = _FakeStore  # type: ignore[attr-defined]
+    sys.modules["elliot_connector_runtime.observation_store"] = fake_mod  # type: ignore[assignment]
+    try:
+        # Should exit 0 — no services down
+        try:
+            _cmd_status(args)
+        except SystemExit as exc:
+            assert exc.code == 0
+    finally:
+        if original is None:
+            del sys.modules["elliot_connector_runtime.observation_store"]
+        else:
+            sys.modules["elliot_connector_runtime.observation_store"] = original

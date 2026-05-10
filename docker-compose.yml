@@ -1,0 +1,55 @@
+services:
+  plugin:
+    build:
+      context: .
+      dockerfile: packages/mcp-plugin/Dockerfile
+    ports:
+      - "3000:3000"
+    env_file: .env
+    volumes:
+      - ./connectors:/app/connectors:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/healthz"]
+      interval: 30s
+      retries: 3
+
+  runtime:
+    build:
+      context: .
+      dockerfile: packages/connector-runtime/Dockerfile
+    ports:
+      - "3001:3001"
+    env_file: .env
+    volumes:
+      - ./connectors:/app/connectors:ro
+      - elliot-data:/app/.elliot
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      retries: 3
+
+  studio:
+    build:
+      context: packages/studio
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    env_file: .env
+    depends_on:
+      - plugin
+      - runtime
+
+  mysql:
+    image: mysql:8.0
+    profiles: ["mysql"]
+    environment:
+      MYSQL_DATABASE: elliot
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+
+volumes:
+  elliot-data:
+  mysql-data:

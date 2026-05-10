@@ -8,6 +8,43 @@ import { callTool } from "@/lib/mcp-client";
 import { useTools } from "@/hooks/useTools";
 import type { ToolDefinition, SkillDefinition, ConnectorConfig } from "@/types/api";
 
+interface LintIssue {
+  code: string;
+  severity: "ERROR" | "WARN" | "INFO";
+  tool_id: string | null;
+  message: string;
+  suggestion: string;
+}
+
+function LintPanel({ issues }: { issues: LintIssue[] }) {
+  if (issues.length === 0) {
+    return (
+      <p className="text-xs text-green-700 px-1">No issues — connector looks good.</p>
+    );
+  }
+  return (
+    <div className="space-y-1">
+      {issues.map((issue, i) => (
+        <div key={i} className="flex items-start gap-2 text-xs py-1 border-b last:border-0">
+          <Badge
+            variant={issue.severity === "ERROR" ? "destructive" : "outline"}
+            className="text-xs shrink-0 mt-0.5"
+          >
+            {issue.severity}
+          </Badge>
+          {issue.tool_id && (
+            <span className="font-mono text-muted-foreground shrink-0">{issue.tool_id}</span>
+          )}
+          <div>
+            <p className="font-medium">{issue.message}</p>
+            <p className="text-muted-foreground">{issue.suggestion}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 interface ConnectionConfig {
   host: string;
   port: number;
@@ -35,10 +72,16 @@ export default function ConnectorPage() {
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(new Set());
   const [connectorName, setConnectorName] = useState("My Connector");
   const [connectorSlug, setConnectorSlug] = useState("my-connector");
+  const [dirty, setDirty] = useState(false);
   const [builtConnector, setBuiltConnector] = useState<ConnectorConfig | null>(null);
+  const [lintIssues, setLintIssues] = useState<LintIssue[]>([]);
+  const [lintLoading, setLintLoading] = useState(false);
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<{ type: "ok" | "error"; message: string } | null>(null);
+
+  const handleNameChange = (v: string) => { setConnectorName(v); setDirty(true); };
+  const handleSlugChange = (v: string) => { setConnectorSlug(v); setDirty(true); };
 
   const toggleTool = (id: string) =>
     setSelectedToolIds((prev) => {
@@ -65,10 +108,24 @@ export default function ConnectorPage() {
         skill_ids: Array.from(selectedSkillIds),
       });
       setBuiltConnector(res as ConnectorConfig);
+      setDirty(false);
       setStatus({ type: "ok", message: "Connector built ✓" });
       void queryClient.invalidateQueries({ queryKey: ["session"] });
     } catch (err) {
       setStatus({ type: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  const handleLint = async () => {
+    setLintLoading(true);
+    try {
+      const res = await callTool("studio_get_connector_info", {});
+      const data = res as { lint_issues?: LintIssue[] };
+      setLintIssues(data.lint_issues ?? []);
+    } catch {
+      setLintIssues([]);
+    } finally {
+      setLintLoading(false);
     }
   };
 
@@ -108,12 +165,26 @@ export default function ConnectorPage() {
 
   return (
     <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-semibold">
+          Connector
+          {dirty && (
+            <Badge variant="outline" className="ml-2 text-xs text-yellow-700 border-yellow-400">
+              Unsaved
+            </Badge>
+          )}
+        </h2>
+        <Button size="sm" variant="outline" onClick={() => void handleLint()} disabled={lintLoading}>
+          {lintLoading ? "Linting…" : "Lint"}
+        </Button>
+      </div>
+
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="text-xs font-medium text-muted-foreground">Connector name</label>
           <Input
             value={connectorName}
-            onChange={(e) => setConnectorName(e.target.value)}
+            onChange={(e) => handleNameChange(e.target.value)}
             className="mt-1 h-8 text-sm"
           />
         </div>
@@ -121,7 +192,7 @@ export default function ConnectorPage() {
           <label className="text-xs font-medium text-muted-foreground">Slug</label>
           <Input
             value={connectorSlug}
-            onChange={(e) => setConnectorSlug(e.target.value)}
+            onChange={(e) => handleSlugChange(e.target.value)}
             className="mt-1 h-8 text-sm"
           />
         </div>
@@ -247,6 +318,23 @@ export default function ConnectorPage() {
         <p className="text-sm text-green-600">
           Runtime running at <span className="font-mono">{runtimeInfo.url}</span>
         </p>
+      )}
+
+      {lintIssues.length > 0 && (
+        <Card data-testid="lint-panel">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              Lint
+              <Badge variant={lintIssues.some(i => i.severity === "ERROR") ? "destructive" : "outline"} className="text-xs">
+                {lintIssues.filter(i => i.severity === "ERROR").length} errors,{" "}
+                {lintIssues.filter(i => i.severity === "WARN").length} warnings
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <LintPanel issues={lintIssues} />
+          </CardContent>
+        </Card>
       )}
     </div>
   );

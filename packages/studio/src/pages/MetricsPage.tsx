@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,43 @@ interface ToolMetric {
 interface MetricsResponse {
   metrics: ToolMetric[];
   days: number;
+}
+
+interface TokenEfficiencyRow {
+  tool_id: string;
+  call_count: number;
+  avg_tokens: number;
+  max_tokens: number;
+  avg_duration_ms: number;
+  error_count: number;
+  risk: "low" | "medium" | "high";
+  suggestion: string | null;
+}
+
+interface TokenEfficiencyResponse {
+  tools: TokenEfficiencyRow[];
+}
+
+function tokenRiskBadge(risk: TokenEfficiencyRow["risk"]) {
+  if (risk === "high") return <Badge variant="destructive" className="text-xs">high</Badge>;
+  if (risk === "medium") return <Badge variant="outline" className="text-xs text-yellow-700 border-yellow-400">medium</Badge>;
+  return <Badge variant="secondary" className="text-xs text-green-700">low</Badge>;
+}
+
+function TokenBar({ avg, max }: { avg: number; max: number }) {
+  const barMax = Math.max(max, 1);
+  const avgPct = Math.min((avg / barMax) * 100, 100);
+  const color = avg > 1000 ? "bg-red-500" : avg > 300 ? "bg-yellow-500" : "bg-green-500";
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="flex-1 h-3 bg-muted rounded overflow-hidden">
+        <div className={`h-full rounded ${color}`} style={{ width: `${avgPct}%` }} />
+      </div>
+      <span className="text-xs w-14 text-right text-muted-foreground">
+        {avg.toFixed(0)}/{max.toFixed(0)}
+      </span>
+    </div>
+  );
 }
 
 const DATE_RANGES = [7, 14, 30, 90] as const;
@@ -45,6 +82,17 @@ export default function MetricsPage() {
   const { data: metricsRaw, isLoading } = useMetrics(days);
   const metricsData = metricsRaw as MetricsResponse | undefined;
   const metrics = metricsData?.metrics ?? [];
+
+  const { data: efficiencyRaw } = useQuery<TokenEfficiencyResponse>({
+    queryKey: ["token-efficiency"],
+    queryFn: async () => {
+      const r = await fetch("http://localhost:3001/v1/metrics/token-efficiency");
+      if (!r.ok) throw new Error("Failed to fetch token efficiency");
+      return r.json() as Promise<TokenEfficiencyResponse>;
+    },
+    refetchInterval: 30_000,
+  });
+  const efficiencyTools = efficiencyRaw?.tools ?? [];
 
   const handleRefresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["metrics"] });
@@ -170,6 +218,44 @@ export default function MetricsPage() {
           </table>
         </CardContent>
       </Card>
+
+      {efficiencyTools.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Token efficiency</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left py-1 text-xs font-medium text-muted-foreground">Tool</th>
+                  <th className="text-left py-1 text-xs font-medium text-muted-foreground w-40">
+                    Avg / Max tokens
+                  </th>
+                  <th className="text-right py-1 text-xs font-medium text-muted-foreground">Risk</th>
+                  <th className="text-left py-1 text-xs font-medium text-muted-foreground pl-3">
+                    Suggestion
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {efficiencyTools.map((row) => (
+                  <tr key={row.tool_id} className="border-b last:border-0">
+                    <td className="py-1.5 text-xs font-mono pr-3">{row.tool_id}</td>
+                    <td className="py-1.5 w-48">
+                      <TokenBar avg={row.avg_tokens} max={row.max_tokens} />
+                    </td>
+                    <td className="text-right py-1.5 pl-3">{tokenRiskBadge(row.risk)}</td>
+                    <td className="py-1.5 text-xs text-muted-foreground pl-3">
+                      {row.suggestion ?? "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

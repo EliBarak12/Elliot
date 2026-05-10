@@ -9,6 +9,7 @@ import {
   BarChart3,
   ClipboardCheck,
   Circle,
+  MonitorDot,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +21,7 @@ const NAV_ITEMS = [
   { to: "/connector", label: "Connector", icon: Package },
   { to: "/playground", label: "Playground", icon: FlaskConical },
   { to: "/metrics", label: "Metrics", icon: BarChart3 },
+  { to: "/console", label: "Agent Console", icon: MonitorDot },
   { to: "/evaluation", label: "Evaluation", icon: ClipboardCheck },
 ] as const;
 

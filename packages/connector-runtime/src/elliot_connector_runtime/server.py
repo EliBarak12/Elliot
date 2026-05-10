@@ -15,10 +15,23 @@ from .audit import AuditLog
 from .cache import ConnectorCache
 from .executor import ToolExecutor
 from .loader import ConnectorLoadError
+from .observation_store import ObservationStore
 from .protocols.openai import register_openai_routes
 from .session_tracker import SessionTracker
 
 _cache = ConnectorCache(ttl_seconds=30)
+
+
+def _suggest(tool_id: str, avg_tokens: float, max_tokens: float) -> str | None:
+    if avg_tokens > 1000:
+        return f"Average {avg_tokens:.0f} tokens is very high. Add LIMIT clause or SELECT only needed columns."
+    if max_tokens > 2000:
+        return (
+            f"Peak {max_tokens:.0f} tokens. Add a LIMIT or pagination parameter to cap result size."
+        )
+    if avg_tokens > 300:
+        return "Consider adding LIMIT or selecting fewer columns to reduce token cost."
+    return None
 
 
 def create_runtime_server(config: Any, executor: ToolExecutor) -> FastMCP:
@@ -80,6 +93,7 @@ def create_app(
     secrets = secrets or {}
     audit_path = os.environ.get("ELLIOT_AUDIT_LOG", ".elliot/audit.ndjson")
     sessions_path = os.environ.get("ELLIOT_SESSIONS_LOG", ".elliot/sessions.ndjson")
+    db_url = os.environ.get("ELLIOT_DB_URL", "sqlite:///.elliot/observations.db")
 
     try:
         config = _cache.get(connector_path)
@@ -96,6 +110,7 @@ def create_app(
     executor = ToolExecutor(config, secrets)
     audit = AuditLog(audit_path)
     tracker = SessionTracker(sessions_path)
+    store = ObservationStore(db_url)
 
     mcp = create_runtime_server(config, executor)
 
@@ -123,6 +138,33 @@ def create_app(
     @app.get("/v1/sessions")
     async def get_sessions(n: int = 20) -> list[dict[str, Any]]:
         return tracker.tail(n)
+
+    @app.get("/v1/metrics/token-efficiency")
+    async def token_efficiency() -> dict[str, Any]:
+        rows = store.token_efficiency()
+        tools = [
+            {
+                **row,
+                "risk": (
+                    "high"
+                    if (row["avg_tokens"] or 0) > 1000
+                    else "medium"
+                    if (row["avg_tokens"] or 0) > 300
+                    else "low"
+                ),
+                "suggestion": _suggest(
+                    str(row["tool_id"]),
+                    float(row["avg_tokens"] or 0),
+                    float(row["max_tokens"] or 0),
+                ),
+            }
+            for row in rows
+        ]
+        return {"tools": tools, "sessions_analysed": len(store.recent_sessions(200))}
+
+    @app.post("/v1/observations/prune")
+    async def prune_observations() -> dict[str, int]:
+        return {"deleted": store.prune()}
 
     @app.get("/health")
     async def health() -> dict[str, str]:

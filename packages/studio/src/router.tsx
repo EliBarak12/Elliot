@@ -8,6 +8,7 @@ import ConnectorPage from "./pages/ConnectorPage";
 import PlaygroundPage from "./pages/PlaygroundPage";
 import MetricsPage from "./pages/MetricsPage";
 import EvaluationPage from "./pages/EvaluationPage";
+import AgentConsole from "./pages/AgentConsole";
 
 const rootRoute = createRootRoute({ component: AppShell });
 
@@ -52,6 +53,11 @@ const evalRoute = createRoute({
   path: "/evaluation",
   component: EvaluationPage,
 });
+const consoleRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/console",
+  component: AgentConsole,
+});
 
 const routeTree = rootRoute.addChildren([
   dashboardRoute,
@@ -62,6 +68,7 @@ const routeTree = rootRoute.addChildren([
   playgroundRoute,
   metricsRoute,
   evalRoute,
+  consoleRoute,
 ]);
 
 export const router = createRouter({ routeTree });

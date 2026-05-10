@@ -1,2 +1,4 @@
 packages:
   - 'packages/studio'
+allowBuilds:
+  esbuild: false

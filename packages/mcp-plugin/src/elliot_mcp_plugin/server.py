@@ -58,7 +58,7 @@ def create_elliot_server(session: Any) -> FastMCP:
     from elliot_mcp_plugin.tools.studio_tools import register_studio_tools
     from elliot_mcp_plugin.tools.tool_tools import register_tool_tools
 
-    mcp = FastMCP("elliot")
+    mcp = FastMCP("elliot", streamable_http_path="/", stateless_http=True)
     register_source_tools(mcp, session)
     register_sql_tools(mcp, session)
     register_tool_tools(mcp, session)

@@ -12,9 +12,8 @@ import AgentConsole from "./pages/AgentConsole";
 
 const rootRoute = createRootRoute({ component: AppShell });
 
-const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/" });
 const dashboardRoute = createRoute({
-  getParentRoute: () => indexRoute,
+  getParentRoute: () => rootRoute,
   path: "/",
   component: Dashboard,
 });

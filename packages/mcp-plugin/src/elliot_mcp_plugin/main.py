@@ -16,11 +16,14 @@ session = ElliotSession(cwd=os.environ.get("ELLIOT_WORKSPACE", "."))
 session.load()
 
 mcp = create_elliot_server(session)
+# Initialize the session manager by calling streamable_http_app once at module level
+_mcp_app = mcp.streamable_http_app()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    yield
+    async with mcp.session_manager.run():
+        yield
     session.save()
 
 
@@ -32,4 +35,4 @@ app.add_middleware(
     allow_methods=["*"],
 )
 
-app.mount("/mcp", mcp.streamable_http_app())
+app.mount("/mcp", _mcp_app)

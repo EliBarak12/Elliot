@@ -1,0 +1,60 @@
+{
+  "name": "Petstore API",
+  "slug": "petstore",
+  "version": "1.0.0",
+  "description": "Full Petstore example connector for documentation and tutorials",
+  "sources": [
+    {
+      "id": "pets",
+      "name": "Pet List",
+      "type": "rest",
+      "url": "https://petstore3.swagger.io/api/v3/pet/findByStatus",
+      "auth": null,
+      "pagination": {
+        "strategy": "none",
+        "page_size": 100,
+        "max_pages": 1
+      },
+      "data_path": null
+    }
+  ],
+  "tools": [
+    {
+      "id": "list_pets",
+      "name": "List Pets",
+      "description": "List pets filtered by availability status",
+      "category": "READ",
+      "source_ids": ["pets"],
+      "parameters": [
+        {
+          "name": "status",
+          "type": "string",
+          "required": false,
+          "description": "Filter by pet status: available, pending, or sold",
+          "default": "available"
+        }
+      ],
+      "filter_groups": [
+        {
+          "logic": "AND",
+          "conditions": [
+            {
+              "field": "status",
+              "operator": "=",
+              "parameter_name": "status"
+            }
+          ]
+        }
+      ],
+      "return_fields": [
+        {"field": "id", "alias": null, "aggregation": "none"},
+        {"field": "name", "alias": null, "aggregation": "none"},
+        {"field": "status", "alias": null, "aggregation": "none"}
+      ],
+      "order_by": [],
+      "limit": 50,
+      "offset_parameter": null
+    }
+  ],
+  "skills": []
+}

@@ -1,0 +1,61 @@
+{
+  "name": "PostgreSQL Read-Only",
+  "slug": "postgres-readonly",
+  "version": "1.0.0",
+  "description": "PostgreSQL read-only connector for querying tables",
+  "sources": [
+    {
+      "id": "db",
+      "name": "Database",
+      "type": "postgres",
+      "url": "{{ env:DATABASE_URL }}",
+      "table": "users",
+      "query": "SELECT * FROM users LIMIT 10000"
+    }
+  ],
+  "tools": [
+    {
+      "id": "list_users",
+      "name": "List Users",
+      "description": "List users with optional email filter",
+      "category": "READ",
+      "source_ids": ["db"],
+      "parameters": [
+        {
+          "name": "email",
+          "type": "string",
+          "required": false,
+          "description": "Filter by email address"
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "required": false,
+          "description": "Maximum rows to return",
+          "default": 20
+        }
+      ],
+      "filter_groups": [
+        {
+          "logic": "AND",
+          "conditions": [
+            {
+              "field": "email",
+              "operator": "contains",
+              "parameter_name": "email"
+            }
+          ]
+        }
+      ],
+      "return_fields": [
+        {"field": "id", "alias": null, "aggregation": "none"},
+        {"field": "email", "alias": null, "aggregation": "none"},
+        {"field": "created_at", "alias": null, "aggregation": "none"}
+      ],
+      "order_by": [{"field": "created_at", "direction": "DESC"}],
+      "limit": 20,
+      "offset_parameter": null
+    }
+  ],
+  "skills": []
+}

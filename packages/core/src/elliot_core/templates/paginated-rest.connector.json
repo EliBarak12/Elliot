@@ -1,0 +1,66 @@
+{
+  "name": "Paginated REST API",
+  "slug": "paginated-rest",
+  "version": "1.0.0",
+  "description": "REST API with cursor-based pagination",
+  "sources": [
+    {
+      "id": "main",
+      "name": "Main API",
+      "type": "rest",
+      "url": "https://api.example.com/v1/records",
+      "auth": {
+        "type": "bearer",
+        "secret_key": "{{ env:API_TOKEN }}"
+      },
+      "pagination": {
+        "strategy": "cursor",
+        "page_size": 100,
+        "max_pages": 10,
+        "cursor_field": "next_cursor"
+      },
+      "data_path": "results"
+    }
+  ],
+  "tools": [
+    {
+      "id": "list_records",
+      "name": "List Records",
+      "description": "List records with optional status filter and pagination",
+      "category": "READ",
+      "source_ids": ["main"],
+      "parameters": [
+        {
+          "name": "status",
+          "type": "string",
+          "required": false,
+          "description": "Filter by record status (active, inactive)"
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "required": false,
+          "description": "Maximum number of records to return",
+          "default": 50
+        }
+      ],
+      "filter_groups": [
+        {
+          "logic": "AND",
+          "conditions": [
+            {
+              "field": "status",
+              "operator": "=",
+              "parameter_name": "status"
+            }
+          ]
+        }
+      ],
+      "return_fields": [],
+      "order_by": [],
+      "limit": 50,
+      "offset_parameter": null
+    }
+  ],
+  "skills": []
+}

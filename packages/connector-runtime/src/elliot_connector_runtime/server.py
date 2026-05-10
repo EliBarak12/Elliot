@@ -16,6 +16,7 @@ from .cache import ConnectorCache
 from .executor import ToolExecutor
 from .loader import ConnectorLoadError
 from .protocols.openai import register_openai_routes
+from .session_tracker import SessionTracker
 
 _cache = ConnectorCache(ttl_seconds=30)
 
@@ -78,6 +79,7 @@ def create_app(
     connector_path = connector_path or os.environ.get("ELLIOT_CONNECTOR", "connector.json")
     secrets = secrets or {}
     audit_path = os.environ.get("ELLIOT_AUDIT_LOG", ".elliot/audit.ndjson")
+    sessions_path = os.environ.get("ELLIOT_SESSIONS_LOG", ".elliot/sessions.ndjson")
 
     try:
         config = _cache.get(connector_path)
@@ -93,6 +95,7 @@ def create_app(
 
     executor = ToolExecutor(config, secrets)
     audit = AuditLog(audit_path)
+    tracker = SessionTracker(sessions_path)
 
     mcp = create_runtime_server(config, executor)
 
@@ -116,6 +119,10 @@ def create_app(
     @app.get("/v1/audit")
     async def get_audit(n: int = 100) -> list[dict[str, Any]]:
         return audit.tail(n)
+
+    @app.get("/v1/sessions")
+    async def get_sessions(n: int = 20) -> list[dict[str, Any]]:
+        return tracker.tail(n)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

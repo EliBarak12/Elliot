@@ -17,7 +17,11 @@ dependencies = [
     "asyncpg>=0.29",
     "structlog>=24.1",
     "fastapi>=0.115",
+    "pyyaml>=6.0",
 ]
+
+[project.scripts]
+elliot = "elliot_core.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/elliot_core"]

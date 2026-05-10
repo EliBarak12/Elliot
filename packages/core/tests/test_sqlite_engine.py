@@ -60,3 +60,11 @@ def test_query_with_params(engine: SQLiteEngine):
     rows = engine.query('SELECT * FROM "users" WHERE "name" = :name', {"name": "Alice"})
     assert len(rows) == 1
     assert rows[0]["name"] == "Alice"
+
+
+def test_bad_sql_raises_elliot_error(engine: SQLiteEngine):
+    from elliot_core.errors import ElliotError
+
+    with pytest.raises(ElliotError) as exc_info:
+        engine.query("THIS IS NOT VALID SQL !!!")
+    assert exc_info.value.code == "INVALID_SQL"

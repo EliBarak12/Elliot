@@ -56,6 +56,11 @@ class ResponseShape(BaseModel):
     rename: dict[str, str] = {}  # old_name -> new_name in output
 
 
+class QueryResult(BaseModel):
+    rows: list[dict[str, Any]]
+    tool_id: str
+
+
 class ToolDefinition(BaseModel):
     id: str
     name: str
@@ -63,7 +68,10 @@ class ToolDefinition(BaseModel):
     category: Literal["READ", "WRITE", "ACTION"]
 
     # Which sources to pull data from.
-    source_ids: list[str]
+    source_ids: list[str] = []
+
+    # Raw SQL query — when set, executor runs this directly against ingested source data.
+    sql: str | None = None
 
     # ── READ / full-fetch mode (DB, file, or small REST) ───────────────────────
     # Elliot fetches all rows, loads into SQLite, runs a generated SELECT.

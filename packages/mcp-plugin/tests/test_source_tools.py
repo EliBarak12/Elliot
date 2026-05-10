@@ -1,0 +1,329 @@
+"""Tests for source MCP tools: discover, list, preview, profile, refresh, remove."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+from mcp.server.fastmcp import FastMCP
+
+from elliot_mcp_plugin.session import ElliotSession
+from elliot_mcp_plugin.tools.source_tools import register_source_tools
+
+
+@pytest.fixture()
+def session(tmp_path: Path) -> ElliotSession:
+    return ElliotSession(cwd=str(tmp_path))
+
+
+@pytest.fixture()
+def mcp(session: ElliotSession) -> FastMCP:
+    server = FastMCP("test")
+    register_source_tools(server, session)
+    return server
+
+
+def _tool(mcp: FastMCP, name: str):
+    return mcp._tool_manager._tools[name].fn
+
+
+def _is_error(result: dict) -> bool:  # type: ignore[type-arg]
+    """Accept both {"error": ...} and to_mcp_error_content {"type":"text","text":"..."} formats."""
+    return "error" in result or result.get("type") == "text"
+
+
+def _csv_file(tmp_path: Path) -> Path:
+    p = tmp_path / "items.csv"
+    p.write_text("id,name,price\n1,Apple,1.5\n2,Banana,0.75\n3,Cherry,2.0\n")
+    return p
+
+
+# ---------------------------------------------------------------------------
+# elliot_discover_source — file
+# ---------------------------------------------------------------------------
+
+
+def test_discover_source_csv_returns_expected_keys(mcp: FastMCP, tmp_path: Path):
+    csv_path = _csv_file(tmp_path)
+    result = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(csv_path), "format": "csv"},
+        name="items",
+    )
+    assert "source_id" in result
+    assert result["table_name"] == "items"
+    assert result["row_count"] == 3
+    assert "columns" in result
+    assert "warnings" in result
+
+
+def test_discover_source_csv_columns_match(mcp: FastMCP, tmp_path: Path):
+    csv_path = _csv_file(tmp_path)
+    result = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(csv_path), "format": "csv"},
+        name="items",
+    )
+    assert set(result["columns"]) >= {"id", "name", "price"}
+
+
+def test_discover_source_registers_in_session(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    csv_path = _csv_file(tmp_path)
+    result = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(csv_path)},
+        name="things",
+    )
+    sid = result["source_id"]
+    assert sid in session.sources
+    assert session.sources[sid].table_name == "things"
+
+
+def test_discover_source_json_file(mcp: FastMCP, tmp_path: Path):
+    p = tmp_path / "data.json"
+    p.write_text(json.dumps([{"a": 1}, {"a": 2}]))
+    result = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(p), "format": "json"},
+        name="data",
+    )
+    assert result["row_count"] == 2
+
+
+def test_discover_source_unknown_type_returns_error(mcp: FastMCP):
+    result = _tool(mcp, "elliot_discover_source")(
+        source_type="ftp",
+        config={},
+        name="x",
+    )
+    assert "text" in result or "error" in result
+    assert "ftp" in result["error"]
+
+
+def test_discover_source_missing_file_returns_error(mcp: FastMCP, tmp_path: Path):
+    result = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(tmp_path / "missing.csv")},
+        name="x",
+    )
+    assert _is_error(result)
+
+
+def test_discover_source_api_success(mcp: FastMCP, session: ElliotSession):
+    from elliot_core.types.source import FetchResult
+
+    fake_result = FetchResult(
+        rows=[{"id": 1, "val": "a"}, {"id": 2, "val": "b"}],
+        fetched_at="2026-01-01T00:00:00+00:00",
+    )
+    with patch("elliot_mcp_plugin.tools.source_tools.asyncio.run", return_value=fake_result):
+        result = _tool(mcp, "elliot_discover_source")(
+            source_type="api",
+            config={"url": "https://api.example.com/items"},
+            name="api_items",
+        )
+    assert result["row_count"] == 2
+    assert result["table_name"] == "api_items"
+
+
+def test_discover_source_db_success(mcp: FastMCP):
+    from elliot_core.types.source import FetchResult
+
+    fake_result = FetchResult(
+        rows=[{"col": "val"}],
+        fetched_at="2026-01-01T00:00:00+00:00",
+    )
+    with patch("elliot_mcp_plugin.tools.source_tools.query_database", return_value=fake_result):
+        result = _tool(mcp, "elliot_discover_source")(
+            source_type="db",
+            config={"table": "users"},
+            name="users",
+        )
+    assert result["row_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# elliot_list_sources
+# ---------------------------------------------------------------------------
+
+
+def test_list_sources_empty(mcp: FastMCP):
+    result = _tool(mcp, "elliot_list_sources")()
+    assert result["count"] == 0
+    assert result["sources"] == []
+
+
+def test_list_sources_after_discover(mcp: FastMCP, tmp_path: Path):
+    csv_path = _csv_file(tmp_path)
+    _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(csv_path)},
+        name="tbl",
+    )
+    result = _tool(mcp, "elliot_list_sources")()
+    assert result["count"] == 1
+    assert result["sources"][0]["name"] == "tbl"
+
+
+def test_list_sources_count_multiple(mcp: FastMCP, tmp_path: Path):
+    for i in range(3):
+        p = tmp_path / f"f{i}.json"
+        p.write_text(json.dumps([{"x": i}]))
+        _tool(mcp, "elliot_discover_source")(
+            source_type="file",
+            config={"path": str(p)},
+            name=f"t{i}",
+        )
+    result = _tool(mcp, "elliot_list_sources")()
+    assert result["count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# elliot_preview_source
+# ---------------------------------------------------------------------------
+
+
+def test_preview_source_returns_rows_and_schema(mcp: FastMCP, tmp_path: Path):
+    csv_path = _csv_file(tmp_path)
+    _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(csv_path)},
+        name="items",
+    )
+    result = _tool(mcp, "elliot_preview_source")(table_name="items")
+    assert result["row_count"] == 3
+    assert len(result["rows"]) == 3
+    assert isinstance(result["schema"], list)
+
+
+def test_preview_source_limit_respected(mcp: FastMCP, tmp_path: Path):
+    csv_path = _csv_file(tmp_path)
+    _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(csv_path)},
+        name="items",
+    )
+    result = _tool(mcp, "elliot_preview_source")(table_name="items", limit=2)
+    assert result["row_count"] == 2
+
+
+def test_preview_source_missing_table_returns_error(mcp: FastMCP):
+    result = _tool(mcp, "elliot_preview_source")(table_name="nonexistent")
+    assert "text" in result or "error" in result
+
+
+# ---------------------------------------------------------------------------
+# elliot_profile_source
+# ---------------------------------------------------------------------------
+
+
+def test_profile_source_returns_column_stats(mcp: FastMCP, tmp_path: Path):
+    csv_path = _csv_file(tmp_path)
+    _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(csv_path)},
+        name="items",
+    )
+    result = _tool(mcp, "elliot_profile_source")(table_name="items")
+    assert result["table"] == "items"
+    assert result["row_count"] == 3
+    assert "columns" in result
+
+
+def test_profile_source_missing_table_returns_error(mcp: FastMCP):
+    result = _tool(mcp, "elliot_profile_source")(table_name="ghost")
+    assert "text" in result or "error" in result
+
+
+# ---------------------------------------------------------------------------
+# elliot_remove_source
+# ---------------------------------------------------------------------------
+
+
+def test_remove_source_removes_from_session(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    csv_path = _csv_file(tmp_path)
+    disc = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(csv_path)},
+        name="items",
+    )
+    sid = disc["source_id"]
+    result = _tool(mcp, "elliot_remove_source")(source_id=sid)
+    assert result["status"] == "removed"
+    assert sid not in session.sources
+
+
+def test_remove_source_drops_table(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    csv_path = _csv_file(tmp_path)
+    disc = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(csv_path)},
+        name="items",
+    )
+    sid = disc["source_id"]
+    _tool(mcp, "elliot_remove_source")(source_id=sid)
+    # Table should no longer appear in list_sources
+    lst = _tool(mcp, "elliot_list_sources")()
+    assert lst["count"] == 0
+
+
+def test_remove_source_table_no_longer_previewable(mcp: FastMCP, tmp_path: Path):
+    csv_path = _csv_file(tmp_path)
+    disc = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(csv_path)},
+        name="items",
+    )
+    _tool(mcp, "elliot_remove_source")(source_id=disc["source_id"])
+    result = _tool(mcp, "elliot_preview_source")(table_name="items")
+    assert "text" in result or "error" in result
+
+
+def test_remove_source_not_found_returns_error(mcp: FastMCP):
+    result = _tool(mcp, "elliot_remove_source")(source_id="no-such-id")
+    assert "text" in result or "error" in result
+
+
+# ---------------------------------------------------------------------------
+# elliot_refresh_source
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_source_reloads_data(mcp: FastMCP, tmp_path: Path):
+    csv_path = _csv_file(tmp_path)
+    disc = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(csv_path)},
+        name="items",
+    )
+    sid = disc["source_id"]
+    result = _tool(mcp, "elliot_refresh_source")(source_id=sid)
+    assert result["row_count"] == 3
+
+
+def test_refresh_source_not_found_returns_error(mcp: FastMCP):
+    result = _tool(mcp, "elliot_refresh_source")(source_id="bad-id")
+    assert "text" in result or "error" in result
+
+
+# ---------------------------------------------------------------------------
+# Error containment — no raw exception escapes
+# ---------------------------------------------------------------------------
+
+
+def test_discover_exception_does_not_raise(mcp: FastMCP):
+    with patch("elliot_mcp_plugin.tools.source_tools.read_file", side_effect=RuntimeError("boom")):
+        result = _tool(mcp, "elliot_discover_source")(
+            source_type="file",
+            config={"path": "/some/path.csv"},
+            name="x",
+        )
+    assert "text" in result or "error" in result
+
+
+def test_list_sources_exception_does_not_raise(mcp: FastMCP, session: ElliotSession):
+    session.sources = None  # type: ignore[assignment]
+    result = _tool(mcp, "elliot_list_sources")()
+    assert "text" in result or "error" in result

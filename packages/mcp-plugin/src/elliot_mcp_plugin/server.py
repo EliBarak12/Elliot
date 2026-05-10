@@ -5,6 +5,7 @@ from typing import Any
 
 import mcp.types as types
 from mcp.server import Server
+from mcp.server.fastmcp import FastMCP
 from mcp.server.stdio import stdio_server
 
 from elliot_core.connector.schema_gen import to_mcp_tool_schema
@@ -44,6 +45,29 @@ def create_server(config: ConnectorConfig, secrets: dict[str, str]) -> Server:
             return [types.TextContent(type="text", text=content["text"])]
 
     return server
+
+
+def create_elliot_server(session: Any) -> FastMCP:
+    """Create a FastMCP server with all Elliot tool groups registered."""
+    from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
+    from elliot_mcp_plugin.tools.context_tools import register_context_tools
+    from elliot_mcp_plugin.tools.eval_tools import register_eval_tools
+    from elliot_mcp_plugin.tools.skill_tools import register_skill_tools
+    from elliot_mcp_plugin.tools.source_tools import register_source_tools
+    from elliot_mcp_plugin.tools.sql_tools import register_sql_tools
+    from elliot_mcp_plugin.tools.studio_tools import register_studio_tools
+    from elliot_mcp_plugin.tools.tool_tools import register_tool_tools
+
+    mcp = FastMCP("elliot")
+    register_source_tools(mcp, session)
+    register_sql_tools(mcp, session)
+    register_tool_tools(mcp, session)
+    register_skill_tools(mcp, session)
+    register_context_tools(mcp, session)
+    register_connector_tools(mcp, session)
+    register_studio_tools(mcp, session)
+    register_eval_tools(mcp, session)
+    return mcp
 
 
 async def run_stdio(config: ConnectorConfig, secrets: dict[str, str]) -> None:

@@ -149,3 +149,122 @@ def test_main_lint_bad_exits_1(tmp_path: Path, monkeypatch) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main()
     assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# init subcommand
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_init_list_templates(capsys: pytest.CaptureFixture[str]) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_init
+
+    args = argparse.Namespace(list=True, template=None, output=None)
+    _cmd_init(args)
+    out = capsys.readouterr().out
+    assert "rest-api-key" in out
+    assert "postgres-readonly" in out
+
+
+def test_cmd_init_creates_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_init
+
+    monkeypatch.chdir(tmp_path)
+    args = argparse.Namespace(list=False, template="rest-api-key", output=None)
+    _cmd_init(args)
+    assert (tmp_path / "rest-api-key.connector.json").exists()
+
+
+def test_cmd_init_unknown_template_exits(monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_init
+
+    args = argparse.Namespace(list=False, template="no-such-template", output=None)
+    with pytest.raises(SystemExit):
+        _cmd_init(args)
+
+
+def test_cmd_init_custom_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_init
+
+    monkeypatch.chdir(tmp_path)
+    args = argparse.Namespace(list=False, template="paginated-rest", output="my.connector.json")
+    _cmd_init(args)
+    assert (tmp_path / "my.connector.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# status subcommand
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_status_all_down_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+
+    import httpx
+
+    from elliot_core.cli import _cmd_status
+
+    def raise_connect_error(*a: object, **kw: object) -> None:
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(httpx, "get", raise_connect_error)
+
+    args = argparse.Namespace()
+    with pytest.raises(SystemExit) as exc_info:
+        _cmd_status(args)
+    assert exc_info.value.code == 1
+
+
+def test_cmd_status_all_up_exits_0(monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+
+    import httpx
+
+    from elliot_core.cli import _cmd_status
+
+    fake_response = type(
+        "R", (), {"status_code": 200, "json": lambda self: {"connector": "pets"}}
+    )()
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: fake_response)
+    # Patch DB check to succeed
+    monkeypatch.setattr(
+        "elliot_core.cli._cmd_status",
+        _cmd_status,
+    )
+
+    args = argparse.Namespace()
+
+    import sys
+
+    original = sys.modules.get("elliot_connector_runtime.observation_store")
+
+    class _FakeStore:
+        def __init__(self, *a: object, **kw: object) -> None:
+            pass
+
+        def recent_tool_calls(self, *a: object) -> list[object]:
+            return []
+
+    fake_mod = type(sys)("fake")
+    fake_mod.ObservationStore = _FakeStore  # type: ignore[attr-defined]
+    sys.modules["elliot_connector_runtime.observation_store"] = fake_mod  # type: ignore[assignment]
+    try:
+        # Should exit 0 — no services down
+        try:
+            _cmd_status(args)
+        except SystemExit as exc:
+            assert exc.code == 0
+    finally:
+        if original is None:
+            del sys.modules["elliot_connector_runtime.observation_store"]
+        else:
+            sys.modules["elliot_connector_runtime.observation_store"] = original

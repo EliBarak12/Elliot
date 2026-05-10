@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import inspect
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from mcp.server.fastmcp import FastMCP
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from .audit import AuditLog
 from .cache import ConnectorCache
@@ -20,6 +24,14 @@ from .protocols.openai import register_openai_routes
 from .session_tracker import SessionTracker
 
 _cache = ConnectorCache(ttl_seconds=30)
+_start_time = time.time()
+
+
+def _build_limiter() -> Limiter:
+    import os
+
+    limit = os.environ.get("ELLIOT_RATE_LIMIT", "120/minute")
+    return Limiter(key_func=get_remote_address, default_limits=[limit])
 
 
 def _suggest(tool_id: str, avg_tokens: float, max_tokens: float) -> str | None:
@@ -118,7 +130,10 @@ def create_app(
     async def lifespan(app: FastAPI) -> Any:
         yield
 
+    limiter = _build_limiter()
     app = FastAPI(lifespan=lifespan)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173"],
@@ -170,7 +185,57 @@ def create_app(
     async def health() -> dict[str, str]:
         return {"status": "ok", "connector": connector_path or ""}
 
+    @app.get("/v1/health")
+    async def detailed_health() -> dict[str, Any]:
+        sources_out: list[dict[str, Any]] = []
+        all_ok = True
+        for source in config.sources:
+            try:
+                t0 = time.monotonic()
+                await _ping_source(source)
+                latency = round((time.monotonic() - t0) * 1000, 1)
+                sources_out.append(
+                    {"id": source.id, "type": source.type, "status": "ok", "latency_ms": latency}
+                )
+            except Exception as exc:
+                sources_out.append(
+                    {"id": source.id, "type": source.type, "status": "error", "error": str(exc)}
+                )
+                all_ok = False
+
+        db_status = "ok"
+        db_count = 0
+        try:
+            db_count = len(store.recent_tool_calls(10000))
+        except Exception:
+            db_status = "error"
+            all_ok = False
+
+        return {
+            "status": "healthy" if all_ok else "degraded",
+            "connector": {
+                "slug": config.slug,
+                "name": config.name,
+                "version": config.version,
+                "tool_count": len(config.tools),
+                "source_count": len(config.sources),
+            },
+            "sources": sources_out,
+            "observation_db": {"status": db_status, "tool_calls_total": db_count},
+            "uptime_seconds": int(time.time() - _start_time),
+        }
+
     return app
+
+
+async def _ping_source(source: Any) -> None:
+    """Lightweight reachability check for a source."""
+    import httpx
+
+    if source.type == "rest":
+        async with httpx.AsyncClient(timeout=3) as client:
+            await client.head(source.url or "")
+    # DB and file sources: skip ping — they're checked when tools execute
 
 
 # Entry point: uvicorn elliot_connector_runtime.server:app

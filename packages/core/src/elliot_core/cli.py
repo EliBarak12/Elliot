@@ -1,14 +1,24 @@
-"""Elliot CLI — lint and eval subcommands."""
+"""Elliot CLI — lint, eval, init, and status subcommands."""
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from elliot_core.types import ConnectorConfig
+
+_TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+_TEMPLATE_DESCRIPTIONS = {
+    "rest-api-key": "REST API with API key header auth",
+    "postgres-readonly": "PostgreSQL read-only connector",
+    "paginated-rest": "REST API with cursor/offset pagination",
+    "openapi-petstore": "Full Petstore example (docs/tutorials)",
+}
 
 
 def _load_connector(path: str | Path) -> ConnectorConfig:  # noqa: F821
@@ -75,6 +85,86 @@ def _cmd_eval(args: argparse.Namespace) -> None:
     sys.exit(0 if passed == len(results) else 1)
 
 
+def _cmd_init(args: argparse.Namespace) -> None:
+    if args.list:
+        print("Available templates:")
+        for name, desc in _TEMPLATE_DESCRIPTIONS.items():
+            print(f"  {name:<25} {desc}")
+        return
+
+    if not args.template:
+        print("Error: provide --template NAME or --list", file=sys.stderr)
+        sys.exit(1)
+
+    src = _TEMPLATES_DIR / f"{args.template}.connector.json"
+    if not src.exists():
+        print(
+            f"Error: unknown template '{args.template}'. Run: elliot init --list", file=sys.stderr
+        )
+        sys.exit(1)
+
+    dest = Path(args.output or f"{args.template}.connector.json")
+    dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    print(f"Created {dest}")
+    print(f"Next: elliot lint {dest}")
+
+
+def _cmd_status(args: argparse.Namespace) -> None:
+    import httpx
+
+    plugin_url = os.environ.get("ELLIOT_PLUGIN_URL", "http://localhost:3000")
+    runtime_url = os.environ.get("ELLIOT_RUNTIME_URL", "http://localhost:3001")
+    studio_url = os.environ.get("ELLIOT_STUDIO_URL", "http://localhost:5173")
+    db_url = os.environ.get("ELLIOT_DB_URL", "sqlite:///.elliot/observations.db")
+
+    results: list[tuple[str, str, bool, str]] = []
+
+    for name, url, detail_path in [
+        ("plugin", plugin_url, "/health"),
+        ("runtime", runtime_url, "/health"),
+        ("studio", studio_url, None),
+    ]:
+        try:
+            path = detail_path or "/"
+            r = httpx.get(f"{url}{path}", timeout=3)
+            detail = ""
+            if r.status_code == 200 and detail_path:
+                data = r.json()
+                if name == "runtime":
+                    connector = data.get("connector", "")
+                    detail = f"  connector: {connector}" if connector else ""
+            results.append((name, url, True, detail))
+        except Exception:
+            results.append((name, url, False, ""))
+
+    try:
+        from elliot_connector_runtime.observation_store import ObservationStore
+
+        store = ObservationStore(db_url)
+        count = len(store.recent_tool_calls(10000))
+        results.append(("database", db_url, True, f"  {count} tool calls"))
+    except Exception:
+        results.append(("database", db_url, False, ""))
+
+    print("\nElliot Services")
+    print("─" * 56)
+    all_ok = True
+    for name, url, ok, detail in results:
+        icon = "✓" if ok else "✗"
+        state = "running" if ok else "not reachable"
+        print(f"  {name:<10} {url:<35} {icon} {state}{detail}")
+        if not ok:
+            all_ok = False
+
+    print()
+    if all_ok:
+        print("  All services healthy.")
+    else:
+        failed = sum(1 for _, _, ok, _ in results if not ok)
+        print(f"  {failed} service(s) not reachable. Is honcho running? Try: honcho start")
+        sys.exit(1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="elliot", description="Elliot developer tools")
     sub = parser.add_subparsers(dest="command")
@@ -86,12 +176,23 @@ def main() -> None:
     eval_cmd.add_argument("path", help="Path to .eval.yaml")
     eval_cmd.add_argument("--connector", help="Override connector .json path")
 
+    init_cmd = sub.add_parser("init", help="Create a connector from a starter template")
+    init_cmd.add_argument("--template", help="Template name (see --list)")
+    init_cmd.add_argument("--list", action="store_true", help="Show available templates")
+    init_cmd.add_argument("output", nargs="?", help="Output filename")
+
+    sub.add_parser("status", help="Show running status of all Elliot services")
+
     args = parser.parse_args()
 
     if args.command == "lint":
         _cmd_lint(args)
     elif args.command == "eval":
         _cmd_eval(args)
+    elif args.command == "init":
+        _cmd_init(args)
+    elif args.command == "status":
+        _cmd_status(args)
     else:
         parser.print_help()
         sys.exit(1)

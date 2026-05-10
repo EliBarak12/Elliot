@@ -62,3 +62,24 @@ def discover_connectors(directory: str | Path) -> list[Path]:
     if not d.is_dir():
         return []
     return sorted(d.rglob("*.connector.json"))
+
+
+def load_connectors_dir(directory: str | Path) -> dict[str, ConnectorConfig]:
+    """
+    Load all *.connector.json files in directory.
+    Returns {slug: ConnectorConfig}. Logs and skips files that fail to load.
+    Raises ConnectorLoadError if no valid connectors are found.
+    """
+    from elliot_core.types.connector import ConnectorConfig  # noqa: F401
+
+    configs: dict[str, ConnectorConfig] = {}
+    for path in sorted(Path(directory).glob("*.connector.json")):
+        try:
+            config = load_connector(path)
+            configs[config.slug] = config
+            log.info("connector.loaded", slug=config.slug, path=str(path))
+        except ConnectorLoadError as exc:
+            log.warning("connector.skipped", path=str(path), error=str(exc))
+    if not configs:
+        raise ConnectorLoadError(f"No valid connectors found in {directory}")
+    return configs

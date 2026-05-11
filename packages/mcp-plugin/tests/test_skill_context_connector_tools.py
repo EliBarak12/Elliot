@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 from pathlib import Path
 
@@ -31,7 +33,18 @@ def mcp(session: ElliotSession) -> FastMCP:
 
 
 def _tool(mcp: FastMCP, name: str):
-    return mcp._tool_manager._tools[name].fn
+    fn = mcp._tool_manager._tools[name].fn
+    if inspect.iscoroutinefunction(fn):
+        try:
+            asyncio.get_running_loop()
+            return fn
+        except RuntimeError:
+
+            def sync_wrapper(*args, **kwargs):
+                return asyncio.run(fn(*args, **kwargs))
+
+            return sync_wrapper
+    return fn
 
 
 def _load_and_create_tool(mcp: FastMCP, session: ElliotSession, tmp_path: Path) -> str:
@@ -41,9 +54,7 @@ def _load_and_create_tool(mcp: FastMCP, session: ElliotSession, tmp_path: Path) 
     register_source_tools(s, session)
     p = tmp_path / "items.csv"
     p.write_text("id,val\n1,a\n2,b\n")
-    s._tool_manager._tools["elliot_discover_source"].fn(
-        source_type="file", config={"path": str(p)}, name="items"
-    )
+    _tool(s, "elliot_discover_source")(source_type="file", config={"path": str(p)}, name="items")
     r = _tool(mcp, "elliot_create_tool")(
         name="count_items",
         description="Returns the count of all items in stock",

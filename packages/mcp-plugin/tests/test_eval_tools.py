@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 from pathlib import Path
 
@@ -25,10 +27,21 @@ def mcp(session: ElliotSession) -> FastMCP:
 
 
 def _tool(mcp: FastMCP, name: str):
-    return mcp._tool_manager._tools[name].fn
+    fn = mcp._tool_manager._tools[name].fn
+    if inspect.iscoroutinefunction(fn):
+        try:
+            asyncio.get_running_loop()
+            return fn
+        except RuntimeError:
+
+            def sync_wrapper(*args, **kwargs):
+                return asyncio.run(fn(*args, **kwargs))
+
+            return sync_wrapper
+    return fn
 
 
-def _load_table_and_build_connector(session: ElliotSession, tmp_path: Path) -> None:
+async def _load_table_and_build_connector(session: ElliotSession, tmp_path: Path) -> None:
     """Load a CSV, create a tool, and build a connector on the session."""
     from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
     from elliot_mcp_plugin.tools.source_tools import register_source_tools
@@ -38,7 +51,7 @@ def _load_table_and_build_connector(session: ElliotSession, tmp_path: Path) -> N
     register_source_tools(s, session)
     p = tmp_path / "items.csv"
     p.write_text("id,val\n1,alpha\n2,beta\n")
-    s._tool_manager._tools["elliot_discover_source"].fn(
+    await s._tool_manager._tools["elliot_discover_source"].fn(
         source_type="file", config={"path": str(p)}, name="items"
     )
 
@@ -107,7 +120,7 @@ async def test_run_eval_empty_suite(
         "elliot_mcp_plugin.tools.eval_tools.EVAL_RESULTS_DIR",
         str(tmp_path / ".elliot" / "eval-results"),
     )
-    _load_table_and_build_connector(session, tmp_path)
+    await _load_table_and_build_connector(session, tmp_path)
 
     suite = {"id": "empty_suite", "name": "Empty", "cases": []}
     _write_eval_suite(tmp_path, suite, "empty_suite")
@@ -131,7 +144,7 @@ async def test_run_eval_with_cases(
         "elliot_mcp_plugin.tools.eval_tools.EVAL_RESULTS_DIR",
         str(tmp_path / ".elliot" / "eval-results"),
     )
-    _load_table_and_build_connector(session, tmp_path)
+    await _load_table_and_build_connector(session, tmp_path)
 
     suite = {
         "id": "data_suite",
@@ -170,7 +183,7 @@ def test_quality_scan_with_connector(
         "elliot_mcp_plugin.tools.eval_tools.EVAL_RESULTS_DIR",
         str(tmp_path / ".elliot" / "eval-results"),
     )
-    _load_table_and_build_connector(session, tmp_path)
+    asyncio.run(_load_table_and_build_connector(session, tmp_path))
 
     result = _tool(mcp, "elliot_quality_scan")()
     assert "overall_score" in result
@@ -202,7 +215,7 @@ def test_quality_scan_with_previous_eval(
     )
     save_result(prev, results_dir)
 
-    _load_table_and_build_connector(session, tmp_path)
+    asyncio.run(_load_table_and_build_connector(session, tmp_path))
 
     result = _tool(mcp, "elliot_quality_scan")()
     assert "last_eval_score" in result

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from pathlib import Path
 
 import pytest
@@ -24,7 +26,18 @@ def mcp(session: ElliotSession) -> FastMCP:
 
 
 def _tool(mcp: FastMCP, name: str):
-    return mcp._tool_manager._tools[name].fn
+    fn = mcp._tool_manager._tools[name].fn
+    if inspect.iscoroutinefunction(fn):
+        try:
+            asyncio.get_running_loop()
+            return fn
+        except RuntimeError:
+
+            def sync_wrapper(*args, **kwargs):
+                return asyncio.run(fn(*args, **kwargs))
+
+            return sync_wrapper
+    return fn
 
 
 def _load_table(session: ElliotSession, tmp_path: Path) -> None:
@@ -34,9 +47,7 @@ def _load_table(session: ElliotSession, tmp_path: Path) -> None:
     register_source_tools(s, session)
     p = tmp_path / "orders.csv"
     p.write_text("id,amount\n1,100\n2,200\n3,300\n")
-    s._tool_manager._tools["elliot_discover_source"].fn(
-        source_type="file", config={"path": str(p)}, name="orders"
-    )
+    _tool(s, "elliot_discover_source")(source_type="file", config={"path": str(p)}, name="orders")
 
 
 # ---------------------------------------------------------------------------

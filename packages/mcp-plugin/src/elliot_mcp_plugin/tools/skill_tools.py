@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 
 import structlog
@@ -78,7 +77,7 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
-    def elliot_preview_skill(skill_id: str, inputs: dict) -> dict:  # type: ignore[type-arg]
+    async def elliot_preview_skill(skill_id: str, inputs: dict) -> dict:  # type: ignore[type-arg]
         """Execute all skill steps against session SQLite data and return the final result."""
         try:
             skill = session.registry.get_skill(skill_id)
@@ -97,7 +96,7 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
             )
             secrets = session.workspace.load_secrets()
             executor = ToolExecutor(config, secrets)
-            result = asyncio.run(execute_skill(skill, inputs or {}, session.registry, executor))
+            result = await execute_skill(skill, inputs or {}, session.registry, executor)
             return {"rows": result.rows, "meta": result.meta}
         except ElliotError as exc:
             return to_mcp_error_content(exc)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from pathlib import Path
 
 import pytest
@@ -13,7 +15,18 @@ from elliot_mcp_plugin.session import ElliotSession
 
 
 def _tool(mcp: FastMCP, name: str):
-    return mcp._tool_manager._tools[name].fn
+    fn = mcp._tool_manager._tools[name].fn
+    if inspect.iscoroutinefunction(fn):
+        try:
+            asyncio.get_running_loop()
+            return fn
+        except RuntimeError:
+
+            def sync_wrapper(*args, **kwargs):
+                return asyncio.run(fn(*args, **kwargs))
+
+            return sync_wrapper
+    return fn
 
 
 @pytest.fixture()

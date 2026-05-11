@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from typing import Any
 
@@ -38,7 +37,7 @@ def _build_source_config(
 
 def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
     @mcp.tool()
-    def elliot_discover_source(
+    async def elliot_discover_source(
         source_type: str,
         config: dict,  # type: ignore[type-arg]
         name: str,
@@ -65,7 +64,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 rows = result.rows
 
             elif source_type == "api":
-                result = asyncio.run(fetch_endpoint(cfg, secrets))
+                result = await fetch_endpoint(cfg, secrets)
                 rows = result.rows
 
             else:  # db
@@ -155,7 +154,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
-    def elliot_refresh_source(source_id: str) -> dict:  # type: ignore[type-arg]
+    async def elliot_refresh_source(source_id: str) -> dict:  # type: ignore[type-arg]
         """Re-fetch a source from its origin and reload the table in SQLite."""
         try:
             src = session.sources.get(source_id)
@@ -164,7 +163,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             # Map SourceConfig.type back to friendly type
             reverse_map = {v: k for k, v in _TYPE_MAP.items()}
             friendly_type = reverse_map.get(src.type, src.type)
-            return elliot_discover_source(
+            return await elliot_discover_source(
                 source_type=friendly_type,
                 config=src.config_snapshot or {},
                 name=src.name,

@@ -40,9 +40,27 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             referenced_source_ids = {sid for t in selected_tools for sid in t.source_ids}
             sources = [s for sid, s in session.sources.items() if sid in referenced_source_ids]
 
+            # GAP-2: inject SQL that was stored separately back into ToolDefinition objects
+            tools_with_sql = []
+            for tool in selected_tools:
+                sql = session.tool_sql.get(tool.id)
+                if sql:
+                    tool = tool.model_copy(update={"sql": sql})
+                tools_with_sql.append(tool)
+
+            # GAP-3: replace UUID source IDs with human-readable source names
+            uuid_to_name = {sid: src.name for sid, src in session.sources.items()}
+            sources_named = [src.model_copy(update={"id": src.name}) for src in sources]
+            tools_remapped = [
+                tool.model_copy(
+                    update={"source_ids": [uuid_to_name.get(sid, sid) for sid in tool.source_ids]}
+                )
+                for tool in tools_with_sql
+            ]
+
             config = session.builder.set_meta(
                 name=name, slug=slug, version=version, description=description
-            ).build(sources=sources, tools=selected_tools, skills=selected_skills)
+            ).build(sources=sources_named, tools=tools_remapped, skills=selected_skills)
 
             session.connector = config
             log.info(

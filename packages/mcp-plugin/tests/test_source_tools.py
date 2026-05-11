@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from mcp.server.fastmcp import FastMCP
@@ -118,7 +118,10 @@ def test_discover_source_api_success(mcp: FastMCP, session: ElliotSession):
         rows=[{"id": 1, "val": "a"}, {"id": 2, "val": "b"}],
         fetched_at="2026-01-01T00:00:00+00:00",
     )
-    with patch("elliot_mcp_plugin.tools.source_tools.asyncio.run", return_value=fake_result):
+    with patch(
+        "elliot_mcp_plugin.tools.source_tools.fetch_endpoint",
+        new=AsyncMock(return_value=fake_result),
+    ):
         result = _tool(mcp, "elliot_discover_source")(
             source_type="api",
             config={"url": "https://api.example.com/items"},

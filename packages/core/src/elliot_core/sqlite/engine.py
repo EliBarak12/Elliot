@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from typing import Any
 
@@ -92,3 +93,7 @@ class SQLiteEngine:
 
     def close(self) -> None:
         self._conn.close()
+
+    def __del__(self) -> None:
+        with contextlib.suppress(Exception):
+            self._conn.close()

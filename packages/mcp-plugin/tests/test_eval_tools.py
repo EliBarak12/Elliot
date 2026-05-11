@@ -195,7 +195,7 @@ def test_quality_scan_with_previous_eval(
 
     prev = EvalRunResult(
         suite_id="prev",
-        run_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        run_at=datetime.datetime.now(datetime.UTC).isoformat(),
         score=0.8,
         passed=4,
         failed=1,

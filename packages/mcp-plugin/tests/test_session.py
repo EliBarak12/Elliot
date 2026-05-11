@@ -71,3 +71,29 @@ def test_save_with_no_context(session: ElliotSession, tmp_path: Path):
     restored = ElliotSession(cwd=str(tmp_path))
     restored.load()
     assert restored.product_context is None
+
+
+def test_save_and_load_tool_sql(session: ElliotSession, tmp_path: Path):
+    session.tool_sql["list_orders"] = 'SELECT * FROM "orders" LIMIT 50'
+    session.tool_sql["total_revenue"] = 'SELECT SUM(amount) AS total FROM "orders"'
+    session.save()
+
+    restored = ElliotSession(cwd=str(tmp_path))
+    restored.load()
+    assert restored.tool_sql["list_orders"] == 'SELECT * FROM "orders" LIMIT 50'
+    assert restored.tool_sql["total_revenue"] == 'SELECT SUM(amount) AS total FROM "orders"'
+
+
+def test_load_session_without_tool_sql_key(session: ElliotSession, tmp_path: Path):
+    # Older sessions saved before tool_sql was added should load without error
+    session.save()
+    data_path = tmp_path / ".elliot" / "session.json"
+    import json
+
+    data = json.loads(data_path.read_text())
+    del data["tool_sql"]
+    data_path.write_text(json.dumps(data))
+
+    restored = ElliotSession(cwd=str(tmp_path))
+    restored.load()
+    assert restored.tool_sql == {}

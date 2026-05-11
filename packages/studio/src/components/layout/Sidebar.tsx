@@ -30,12 +30,17 @@ export function Sidebar() {
   const currentPath = routerState.location.pathname;
 
   return (
-    <aside className="flex flex-col w-56 shrink-0 border-r bg-background h-screen">
-      <div className="flex items-center h-14 px-4 border-b">
-        <span className="font-bold text-lg tracking-tight">Elliot</span>
+    <aside className="flex flex-col w-56 shrink-0 border-r bg-secondary h-screen">
+      {/* Logo */}
+      <div className="flex items-center gap-2.5 h-14 px-4 border-b border-border/60">
+        <div className="h-6 w-6 rounded-md bg-primary flex items-center justify-center shrink-0">
+          <span className="text-primary-foreground text-xs font-bold leading-none">E</span>
+        </div>
+        <span className="font-bold text-base tracking-tight text-foreground">Elliot</span>
       </div>
 
-      <nav className="flex-1 overflow-y-auto py-2">
+      {/* Nav */}
+      <nav className="flex-1 overflow-y-auto py-2 px-2">
         {NAV_ITEMS.map(({ to, label, icon: Icon }) => {
           const isActive = to === "/" ? currentPath === "/" : currentPath.startsWith(to);
           return (
@@ -43,8 +48,10 @@ export function Sidebar() {
               key={to}
               to={to}
               className={cn(
-                "flex items-center gap-3 px-4 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground",
-                isActive && "bg-accent text-accent-foreground"
+                "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+                isActive
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "text-foreground/70 hover:bg-accent hover:text-accent-foreground"
               )}
             >
               <Icon className="h-4 w-4 shrink-0" />
@@ -54,8 +61,9 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="flex items-center gap-2 px-4 py-3 border-t text-xs text-muted-foreground">
-        <Circle className="h-2 w-2 fill-red-500 text-red-500" />
+      {/* Plugin status */}
+      <div className="flex items-center gap-2 px-4 py-3 border-t border-border/60 text-xs text-muted-foreground">
+        <Circle className="h-2 w-2 fill-red-400 text-red-400" />
         Plugin disconnected
       </div>
     </aside>

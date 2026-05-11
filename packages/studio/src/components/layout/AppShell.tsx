@@ -5,7 +5,7 @@ import { Header } from "./Header";
 
 export function AppShell() {
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-screen overflow-hidden bg-muted">
       <Sidebar />
       <div className="flex flex-col flex-1 overflow-hidden">
         <Header />

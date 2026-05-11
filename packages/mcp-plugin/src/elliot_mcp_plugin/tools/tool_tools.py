@@ -75,18 +75,10 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
     @mcp.tool()
     def elliot_list_tools() -> dict:  # type: ignore[type-arg]
-        """List all defined tools with id, name, category, and description."""
+        """List all user-defined connector tools with their full definitions."""
         try:
             return {
-                "tools": [
-                    {
-                        "id": t.id,
-                        "name": t.name,
-                        "category": t.category,
-                        "description": t.description,
-                    }
-                    for t in session.registry.get_all()
-                ],
+                "tools": [t.model_dump() for t in session.registry.get_all()],
                 "count": len(session.registry.get_all()),
             }
         except Exception as exc:

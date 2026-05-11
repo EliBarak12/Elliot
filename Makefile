@@ -6,6 +6,7 @@ dev:
 setup:
 	uv sync
 	pnpm install
+	uv run elliot connect
 
 test:
 	uv run pytest --tb=short

@@ -1,9 +1,11 @@
-"""Elliot CLI — lint, eval, init, and status subcommands."""
+"""Elliot CLI — lint, eval, init, status, and connect subcommands."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -165,6 +167,88 @@ def _cmd_status(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _write_json_merge(path: Path, key: str, entry_key: str, entry_value: object) -> bool:
+    """Merge {key: {entry_key: entry_value}} into a JSON file. Returns True if changed."""
+    data: dict[str, dict[str, object]] = {}
+    if path.exists():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                data = raw
+        except json.JSONDecodeError:
+            pass
+    servers = data.setdefault(key, {})
+    if servers.get(entry_key) == entry_value:
+        return False
+    servers[entry_key] = entry_value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return True
+
+
+def _cmd_connect(args: argparse.Namespace) -> None:
+    """Register Elliot MCP server with every AI coding agent found on this machine."""
+    cwd = Path.cwd()
+    home = Path.home()
+    plugin_url = os.environ.get("ELLIOT_PLUGIN_URL", "http://localhost:3000")
+    mcp_url = f"{plugin_url}/mcp"
+
+    results: list[tuple[str, Path, str]] = []  # (agent, path, status)
+
+    # ── Claude Code ────────────────────────────────────────────────────────
+    # .mcp.json in project root; also write if claude binary exists globally
+    claude_config = cwd / ".mcp.json"
+    entry = {"type": "http", "url": mcp_url}
+    changed = _write_json_merge(claude_config, "mcpServers", "elliot", entry)
+    results.append(("Claude Code", claude_config, "updated" if changed else "already configured"))
+
+    # ── VS Code / GitHub Copilot ───────────────────────────────────────────
+    if shutil.which("code") or (cwd / ".vscode").exists():
+        vscode_config = cwd / ".vscode" / "mcp.json"
+        vs_entry = {"type": "http", "url": mcp_url}
+        changed = _write_json_merge(vscode_config, "servers", "elliot", vs_entry)
+        results.append(
+            ("VS Code / Copilot", vscode_config, "updated" if changed else "already configured")
+        )
+
+    # ── Cursor ─────────────────────────────────────────────────────────────
+    if shutil.which("cursor") or (home / ".cursor").exists() or (cwd / ".cursor").exists():
+        cursor_config = cwd / ".cursor" / "mcp.json"
+        cursor_entry = {"type": "http", "url": mcp_url}
+        changed = _write_json_merge(cursor_config, "mcpServers", "elliot", cursor_entry)
+        results.append(("Cursor", cursor_config, "updated" if changed else "already configured"))
+
+    # ── Windsurf ───────────────────────────────────────────────────────────
+    windsurf_dir = home / ".codeium" / "windsurf"
+    if windsurf_dir.exists():
+        windsurf_config = windsurf_dir / "mcp_config.json"
+        ws_entry = {"serverUrl": mcp_url}
+        changed = _write_json_merge(windsurf_config, "mcpServers", "elliot", ws_entry)
+        results.append(
+            ("Windsurf", windsurf_config, "updated" if changed else "already configured")
+        )
+
+    print("\nElliot MCP Connect")
+    print("─" * 60)
+    print(f"  MCP server: {mcp_url}\n")
+
+    for agent, path, status in results:
+        icon = "✓" if "configured" in status else "+"
+        print(f"  {icon} {agent:<22} {status}")
+        print(f"    └ {path}")
+
+    if not results:
+        print("  No supported agents detected.")
+        print("  Supported: Claude Code, VS Code/Copilot, Cursor, Windsurf")
+
+    print()
+    print("  Next steps:")
+    print("  1. Start Elliot:          honcho start")
+    print("  2. Reload your agent      (restart or run /reconnect-mcp)")
+    print("  3. Ask your agent:        'I have an API at https://... — help me build a connector'")
+    print()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="elliot", description="Elliot developer tools")
     sub = parser.add_subparsers(dest="command")
@@ -182,6 +266,10 @@ def main() -> None:
     init_cmd.add_argument("output", nargs="?", help="Output filename")
 
     sub.add_parser("status", help="Show running status of all Elliot services")
+    sub.add_parser(
+        "connect",
+        help="Register Elliot MCP server with Claude Code, Cursor, VS Code, and Windsurf",
+    )
 
     args = parser.parse_args()
 
@@ -193,6 +281,8 @@ def main() -> None:
         _cmd_init(args)
     elif args.command == "status":
         _cmd_status(args)
+    elif args.command == "connect":
+        _cmd_connect(args)
     else:
         parser.print_help()
         sys.exit(1)

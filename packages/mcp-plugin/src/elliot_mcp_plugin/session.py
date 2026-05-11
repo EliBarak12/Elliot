@@ -33,6 +33,7 @@ class ElliotSession:
         for s in data.get("sources", []):
             src = SourceConfig.model_validate(s)
             self.sources[src.id] = src
+        self.tool_sql = data.get("tool_sql", {})
         log.info("session.loaded", sources=len(self.sources))
 
     def save(self) -> None:
@@ -44,6 +45,7 @@ class ElliotSession:
                 "sources": [s.model_dump() for s in self.sources.values()],
                 "tools": [t.model_dump() for t in self.registry.get_all()],
                 "skills": [s.model_dump() for s in self.registry.get_all_skills()],
+                "tool_sql": self.tool_sql,
             }
         )
         log.info(

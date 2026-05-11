@@ -65,7 +65,7 @@ def test_runtime_health_and_audit(tmp_path: Path) -> None:
             "ELLIOT_CONNECTOR": str(connector_file),
             "ELLIOT_AUDIT_LOG": str(audit_file),
         },
-        cwd=str(Path(__file__).parents[2]),
+        cwd=str(Path(__file__).parents[4]),  # repo root
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

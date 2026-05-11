@@ -19,8 +19,11 @@ export function Header() {
 
   return (
     <header className="flex items-center justify-between h-14 px-6 border-b bg-background shrink-0">
-      <h1 className="text-base font-semibold">{title}</h1>
-      <Badge variant="outline" className="text-xs text-muted-foreground">
+      <h1 className="text-sm font-semibold text-foreground">{title}</h1>
+      <Badge
+        variant="outline"
+        className="text-xs border-border text-muted-foreground font-normal"
+      >
         Connector: not built
       </Badge>
     </header>

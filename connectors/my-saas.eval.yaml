@@ -1,0 +1,112 @@
+name: My SaaS Analytics
+connector: my-saas
+version: "1.0.0"
+cases:
+  # ── list_customers ────────────────────────────────────────────────────────
+  - id: list-customers-no-filter
+    description: Returns all customers when no filters are given
+    tool_id: list_customers
+    arguments: {}
+    expect:
+      no_error: true
+      min_rows: 10
+      fields_present: [id, name, email, plan, mrr, status, last_active_at]
+      max_token_estimate: 800
+
+  - id: list-customers-by-plan
+    description: Filters to only pro-plan customers
+    tool_id: list_customers
+    arguments: { plan: pro }
+    expect:
+      no_error: true
+      min_rows: 1
+      all_rows_match: { field: plan, value: pro }
+
+  - id: list-customers-by-status
+    description: Filters to only active customers
+    tool_id: list_customers
+    arguments: { status: active }
+    expect:
+      no_error: true
+      min_rows: 1
+      all_rows_match: { field: status, value: active }
+
+  - id: list-customers-plan-and-status
+    description: Combines plan and status filters
+    tool_id: list_customers
+    arguments: { plan: enterprise, status: active }
+    expect:
+      no_error: true
+      min_rows: 1
+      all_rows_match: { field: plan, value: enterprise }
+
+  # ── mrr_by_plan ───────────────────────────────────────────────────────────
+  - id: mrr-by-plan-active
+    description: Returns MRR grouped by plan for active customers only
+    tool_id: mrr_by_plan
+    arguments: { status: active }
+    expect:
+      no_error: true
+      min_rows: 1
+      fields_present: [plan, total_mrr, customer_count]
+      max_token_estimate: 300
+
+  - id: mrr-by-plan-no-filter
+    description: Returns MRR across all statuses when no filter given
+    tool_id: mrr_by_plan
+    arguments: {}
+    expect:
+      no_error: true
+      min_rows: 1
+      fields_present: [plan, total_mrr, customer_count]
+
+  # ── churned_customers ─────────────────────────────────────────────────────
+  - id: churned-customers-returns-rows
+    description: Returns only churned customers
+    tool_id: churned_customers
+    arguments: {}
+    expect:
+      no_error: true
+      min_rows: 1
+      fields_present: [id, name, plan, mrr, last_active_at]
+
+  - id: churned-customers-bounded
+    description: Result set is bounded by the connector limit
+    tool_id: churned_customers
+    arguments: {}
+    expect:
+      no_error: true
+      max_rows: 20
+      max_token_estimate: 500
+
+  # ── feature_adoption ──────────────────────────────────────────────────────
+  - id: feature-adoption-filtered
+    description: Returns only feature_used events with usage counts
+    tool_id: feature_adoption
+    arguments: { event_type: feature_used }
+    expect:
+      no_error: true
+      min_rows: 1
+      fields_present: [feature, usage_count]
+      max_token_estimate: 300
+
+  - id: feature-adoption-no-filter
+    description: Returns events across all types when no filter given
+    tool_id: feature_adoption
+    arguments: {}
+    expect:
+      no_error: true
+      min_rows: 1
+      fields_present: [feature, usage_count]
+
+  # ── new_signups ────────────────────────────────────────────────────────────
+  - id: new-signups-returns-rows
+    description: Returns recent signups ordered by signup date
+    tool_id: new_signups
+    arguments: {}
+    expect:
+      no_error: true
+      min_rows: 1
+      max_rows: 10
+      fields_present: [id, name, email, plan]
+      max_token_estimate: 600

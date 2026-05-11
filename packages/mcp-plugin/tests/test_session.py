@@ -62,8 +62,9 @@ def test_save_and_load_tools(session: ElliotSession, tmp_path: Path):
 
     restored = ElliotSession(cwd=str(tmp_path))
     restored.load()
-    # sources are restored; tools are in saved JSON but registry is empty on fresh session
     assert "api" in restored.sources
+    assert len(restored.registry.get_all()) == 1
+    assert restored.registry.get_all()[0].id == "list_items"
 
 
 def test_save_with_no_context(session: ElliotSession, tmp_path: Path):

@@ -8,6 +8,7 @@ import structlog
 from elliot_core import ConnectorBuilder, SQLiteEngine, ToolRegistry, WorkspaceStore
 from elliot_core.types.connector import ConnectorConfig, ProductContext
 from elliot_core.types.source import SourceConfig
+from elliot_core.types.tool import SkillDefinition, ToolDefinition
 
 log = structlog.get_logger(__name__)
 
@@ -33,8 +34,12 @@ class ElliotSession:
         for s in data.get("sources", []):
             src = SourceConfig.model_validate(s)
             self.sources[src.id] = src
+        for t in data.get("tools", []):
+            self.registry.add(ToolDefinition.model_validate(t))
+        for sk in data.get("skills", []):
+            self.registry.add_skill(SkillDefinition.model_validate(sk))
         self.tool_sql = data.get("tool_sql", {})
-        log.info("session.loaded", sources=len(self.sources))
+        log.info("session.loaded", sources=len(self.sources), tools=len(self.registry.get_all()))
 
     def save(self) -> None:
         self.workspace.save_session(

@@ -70,8 +70,10 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
 
 async function listTools(): Promise<unknown> {
   const client = await getMcpClient();
-  const result = await client.listTools();
-  return result.tools;
+  const result = await client.callTool({ name: "elliot_list_tools", arguments: {} });
+  const content = result.content as Array<{ type: string; text: string }>;
+  const parsed = JSON.parse(content[0]?.text ?? "{}") as { tools?: unknown[] };
+  return parsed.tools ?? [];
 }
 
 export { getMcpClient, callTool, listTools };

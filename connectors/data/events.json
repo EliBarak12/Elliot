@@ -1,0 +1,17 @@
+[
+  {"id": 1, "customer_id": 1, "event": "login", "feature": "dashboard", "ts": "2026-05-10T08:12:00Z"},
+  {"id": 2, "customer_id": 1, "event": "feature_used", "feature": "reports", "ts": "2026-05-10T08:14:00Z"},
+  {"id": 3, "customer_id": 3, "event": "login", "feature": "dashboard", "ts": "2026-05-10T09:00:00Z"},
+  {"id": 4, "customer_id": 3, "event": "feature_used", "feature": "exports", "ts": "2026-05-10T09:05:00Z"},
+  {"id": 5, "customer_id": 3, "event": "feature_used", "feature": "api_access", "ts": "2026-05-10T09:10:00Z"},
+  {"id": 6, "customer_id": 6, "event": "login", "feature": "dashboard", "ts": "2026-05-10T10:30:00Z"},
+  {"id": 7, "customer_id": 7, "event": "feature_used", "feature": "reports", "ts": "2026-05-10T11:00:00Z"},
+  {"id": 8, "customer_id": 7, "event": "feature_used", "feature": "team_management", "ts": "2026-05-10T11:15:00Z"},
+  {"id": 9, "customer_id": 9, "event": "signup", "feature": "onboarding", "ts": "2026-05-10T14:00:00Z"},
+  {"id": 10, "customer_id": 2, "event": "feature_used", "feature": "reports", "ts": "2026-05-09T16:00:00Z"},
+  {"id": 11, "customer_id": 8, "event": "login", "feature": "dashboard", "ts": "2026-05-09T17:30:00Z"},
+  {"id": 12, "customer_id": 1, "event": "feature_used", "feature": "api_access", "ts": "2026-05-11T07:00:00Z"},
+  {"id": 13, "customer_id": 9, "event": "feature_used", "feature": "reports", "ts": "2026-05-11T08:00:00Z"},
+  {"id": 14, "customer_id": 6, "event": "feature_used", "feature": "exports", "ts": "2026-05-11T09:00:00Z"},
+  {"id": 15, "customer_id": 3, "event": "feature_used", "feature": "api_access", "ts": "2026-05-11T10:00:00Z"}
+]

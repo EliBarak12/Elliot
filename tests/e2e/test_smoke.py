@@ -62,7 +62,7 @@ def test_runtime_health_and_audit(tmp_path: Path) -> None:
         ],
         env={
             **__import__("os").environ,
-            "ELLIOT_CONNECTOR_PATH": str(connector_file),
+            "ELLIOT_CONNECTOR": str(connector_file),
             "ELLIOT_AUDIT_LOG": str(audit_file),
         },
         cwd=str(Path(__file__).parents[2]),

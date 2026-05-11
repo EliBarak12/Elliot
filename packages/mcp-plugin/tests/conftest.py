@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -12,8 +13,10 @@ from elliot_mcp_plugin.session import ElliotSession
 
 
 @pytest.fixture()
-def session(tmp_path: Path) -> ElliotSession:
-    return ElliotSession(cwd=str(tmp_path))
+def session(tmp_path: Path) -> Generator[ElliotSession]:
+    s = ElliotSession(cwd=str(tmp_path))
+    yield s
+    s.engine.close()
 
 
 @pytest.fixture()

@@ -51,7 +51,7 @@ class ToolExecutor:
         if tool.sql:
             sql: str = tool.sql
             params: dict[str, Any] = {p.name: arguments.get(p.name) for p in tool.parameters}
-        elif tool.filter_groups is not None or tool.return_fields:
+        elif tool.filter_groups or tool.return_fields:
             sql, params = build_select_sql(tool, arguments)
         else:
             raise ExecutorError(f"Tool '{tool.id}' has no sql or filter_groups defined")
@@ -89,7 +89,15 @@ class ToolExecutor:
             return await self._fetch_rest(source, arguments)
         if source.type in ("postgres", "mysql"):
             return await self._fetch_db(source)
+        if source.type == "file":
+            return self._fetch_file(source)
         raise ExecutorError(f"Unsupported source type: {source.type!r}")
+
+    def _fetch_file(self, source: SourceConfig) -> list[dict[str, Any]]:
+        from elliot_core.sources.file_reader import read_file
+
+        result = read_file(source)
+        return result.rows
 
     async def _fetch_rest(
         self,
@@ -144,12 +152,16 @@ class ToolExecutor:
 
 
 def _extract_table_names(sql: str) -> list[str]:
-    """Extract table identifiers after FROM and JOIN keywords."""
+    """Extract table identifiers after FROM and JOIN keywords.
+
+    Handles both unquoted (FROM items) and double-quoted (FROM "items") forms,
+    since build_select_sql always generates double-quoted table names.
+    """
     pattern = re.compile(
-        r"\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+        r'\b(?:FROM|JOIN)\s+(?:"([a-zA-Z_][a-zA-Z0-9_]*)"|([a-zA-Z_][a-zA-Z0-9_]*))',
         re.IGNORECASE,
     )
-    return list(dict.fromkeys(m.group(1) for m in pattern.finditer(sql)))
+    return list(dict.fromkeys(m.group(1) or m.group(2) for m in pattern.finditer(sql)))
 
 
 def _interpolate(template: str, values: dict[str, Any]) -> str:

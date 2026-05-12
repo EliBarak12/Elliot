@@ -2,3 +2,10 @@ packages:
   - 'packages/studio'
 allowBuilds:
   esbuild: false
+# Reject packages published less than 3 days ago — defends against
+# supply-chain attacks where a compromised package is yanked within hours.
+minimumReleaseAge: 4320
+# Glob patterns exempted from the age policy. Keep empty by default;
+# add entries (e.g. "@elliot/internal-thing", "@types/*") only when a
+# genuine fresh-patch need outweighs the supply-chain risk.
+minimumReleaseAgeExclude: []

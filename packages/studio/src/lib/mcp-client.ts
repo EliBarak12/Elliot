@@ -65,7 +65,25 @@ async function getMcpClient(): Promise<Client> {
 async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   const client = await getMcpClient();
   const result = await client.callTool({ name, arguments: args });
-  return result;
+  const content = result.content as Array<{ type: string; text?: string }>;
+  const text = content[0]?.text ?? "{}";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = text;
+  }
+  if (result.isError) {
+    const err = parsed as Record<string, unknown> | undefined;
+    const msg =
+      typeof err?.error === "string"
+        ? err.error
+        : typeof (err?.error as Record<string, unknown> | undefined)?.message === "string"
+          ? ((err!.error as Record<string, unknown>).message as string)
+          : text;
+    throw new Error(msg);
+  }
+  return parsed;
 }
 
 async function listTools(): Promise<unknown> {

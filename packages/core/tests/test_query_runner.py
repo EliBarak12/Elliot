@@ -33,3 +33,9 @@ def test_empty_sql():
     ok, reason = validate_tool_sql("")
     assert ok is False
     assert "empty" in reason
+
+
+def test_non_select_keyword_rejected():
+    ok, reason = validate_tool_sql("SHOW TABLES")  # no forbidden keywords, but not SELECT
+    assert ok is False
+    assert "SELECT" in reason

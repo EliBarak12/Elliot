@@ -73,3 +73,18 @@ def test_load_secrets_empty(monkeypatch):
     for k in [k for k in os.environ if k.startswith("ELLIOT_SECRET_")]:
         monkeypatch.delenv(k, raising=False)
     assert load_secrets() == {}
+
+
+def test_load_connector_invalid_json_raises(tmp_path):
+    bad = tmp_path / "bad.json"
+    bad.write_text("NOT JSON {{{")
+    with pytest.raises(ElliotError) as exc_info:
+        load_connector(str(bad))
+    assert exc_info.value.code == "INVALID_CONNECTOR"
+
+
+def test_from_file_os_error_raises_invalid_connector(tmp_path):
+    # tmp_path is a directory — exists() returns True but read_text() raises IsADirectoryError
+    with pytest.raises(ElliotError) as exc_info:
+        load_connector(str(tmp_path))
+    assert exc_info.value.code == "INVALID_CONNECTOR"

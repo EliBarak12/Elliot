@@ -85,3 +85,26 @@ async def test_eval_runner_tool_not_found() -> None:
     assert len(results) == 1
     assert results[0].passed is False
     assert "not found" in results[0].failures[0]
+
+
+def test_score_shape_same_keys_same_length() -> None:
+    from elliot_core.eval.runner import _score
+
+    actual = [{"id": 1, "name": "a"}]
+    expected = [{"id": 2, "name": "b"}]
+    assert _score(actual, expected, "shape") is True
+
+
+def test_score_shape_empty_returns_true() -> None:
+    from elliot_core.eval.runner import _score
+
+    assert _score([], [], "shape") is True
+
+
+def test_load_results_skips_corrupt_files(tmp_path):
+    from elliot_core.eval.runner import load_results
+
+    bad = tmp_path / "bad.json"
+    bad.write_text("NOT JSON")
+    results = load_results(tmp_path)
+    assert results == []

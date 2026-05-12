@@ -57,9 +57,10 @@ describe("ToolEditor", () => {
     await user.click(screen.getByRole("button", { name: /save/i }));
 
     await waitFor(() => {
+      // Flat-args shape: name=snake_case id, no nested tool wrapper
       expect(callTool).toHaveBeenCalledWith(
         "elliot_create_tool",
-        expect.objectContaining({ tool: expect.objectContaining({ id: "get_users", name: "Get Users" }) })
+        expect.objectContaining({ name: "get_users", description: expect.any(String) })
       );
     });
   });

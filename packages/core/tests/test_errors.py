@@ -53,3 +53,8 @@ def test_to_mcp_error_content_generic():
 def test_elliot_error_with_detail():
     err = ElliotError("VALIDATION_ERROR", "bad param", detail={"field": "name"})
     assert err.detail == {"field": "name"}
+
+
+def test_elliot_error_repr():
+    err = ElliotError("NOT_FOUND", "thing missing")
+    assert repr(err) == "ElliotError(code='NOT_FOUND', message='thing missing')"

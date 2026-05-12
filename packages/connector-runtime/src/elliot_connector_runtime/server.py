@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import os
 import time
@@ -98,6 +99,15 @@ def _register_tool(
     run_async: bool = getattr(td, "run_async", False)
 
     async def _handler(**kwargs: Any) -> dict[str, Any]:
+        import time
+
+        from mcp.server.fastmcp import Context
+
+        ctx: Context[Any, Any, Any] | None = None
+        with contextlib.suppress(Exception):
+            ctx = mcp.get_context()
+            await ctx.info(f"tool.call.start: {td.id}", logger="elliot.runtime")
+
         if run_async:
 
             async def _work() -> dict[str, Any]:
@@ -113,11 +123,26 @@ def _register_tool(
                     f"Call elliot_get_task(task_id='{task_id}') to retrieve results."
                 ),
             }
+
+        t0 = time.monotonic()
         try:
             result = await executor.execute(td, kwargs)
+            duration_ms = round((time.monotonic() - t0) * 1000, 1)
+            if ctx is not None:
+                with contextlib.suppress(Exception):
+                    await ctx.info(
+                        f"tool.call.complete: {td.id} rows={len(result.rows)} duration_ms={duration_ms}",
+                        logger="elliot.runtime",
+                    )
             return {"rows": result.rows, "count": len(result.rows)}
         except ElliotError as exc:
             error_content = to_mcp_error_content(exc)
+            if ctx is not None:
+                with contextlib.suppress(Exception):
+                    await ctx.warning(
+                        f"tool.call.error: {td.id} code={exc.code}",
+                        logger="elliot.runtime",
+                    )
             raise ValueError(error_content["text"]) from exc
 
     _handler.__name__ = td.id

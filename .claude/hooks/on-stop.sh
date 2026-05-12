@@ -1,31 +1,21 @@
 #!/usr/bin/env bash
-# Stop hook — gates session completion on lint passing for any modified connector.
-# Returns exit 2 to prevent Claude from stopping if lint fails.
+# Stop hook — gates session on the full Elliot check suite.
+# Returns exit 2 to prevent Claude from stopping if any check fails.
 set -euo pipefail
 
-CONNECTORS_DIR="${CLAUDE_PROJECT_DIR}/connectors"
+cd "${CLAUDE_PROJECT_DIR}"
 
-# Find any connector files modified in the last session (within 5 minutes)
-RECENT=$(find "$CONNECTORS_DIR" -name "*.connector.json" -newer "${CLAUDE_PROJECT_DIR}/.elliot/last-stop.txt" 2>/dev/null || true)
+ERRORS=()
 
-if [[ -z "$RECENT" ]]; then
-  # No connectors changed — allow stop
-  touch "${CLAUDE_PROJECT_DIR}/.elliot/last-stop.txt" 2>/dev/null || true
-  exit 0
-fi
+uv run ruff check . --quiet 2>&1 || ERRORS+=("ruff: lint failed")
+uv run ruff format --check . --quiet 2>&1 || ERRORS+=("ruff: formatting needed")
+uv run mypy packages/core/src packages/mcp-plugin/src packages/connector-runtime/src --no-error-summary 2>&1 || ERRORS+=("mypy: type errors found")
+uv run pytest --tb=line -q 2>&1 || ERRORS+=("pytest: tests failing")
 
-# Run lint on each changed connector
-FAILED=()
-for f in $RECENT; do
-  RESULT=$(uv run elliot lint "$f" 2>&1) || FAILED+=("$f: $RESULT")
-done
-
-touch "${CLAUDE_PROJECT_DIR}/.elliot/last-stop.txt" 2>/dev/null || true
-
-if [[ ${#FAILED[@]} -gt 0 ]]; then
-  echo "Lint failed for modified connector(s). Fix before finishing:" >&2
-  for msg in "${FAILED[@]}"; do
-    echo "  $msg" >&2
+if [[ ${#ERRORS[@]} -gt 0 ]]; then
+  echo "Check suite failed — fix before finishing:" >&2
+  for e in "${ERRORS[@]}"; do
+    echo "  • $e" >&2
   done
   exit 2
 fi

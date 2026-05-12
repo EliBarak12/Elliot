@@ -85,3 +85,42 @@ def test_skills_roundtrip():
     assert reg.get_skill("my_skill") == skill
     reg.delete_skill("my_skill")
     assert reg.get_skill("my_skill") is None
+
+
+def test_get_by_name_found_and_missing():
+    reg = ToolRegistry()
+    reg.add(TOOL_A)
+    assert reg.get_by_name("List products") == TOOL_A
+    assert reg.get_by_name("nonexistent") is None
+
+
+def test_get_all_skills_empty_and_populated():
+    from elliot_core.types.tool import SkillDefinition, SkillStep
+
+    reg = ToolRegistry()
+    assert reg.get_all_skills() == []
+    skill = SkillDefinition(
+        id="s1",
+        name="S1",
+        description="d",
+        steps=[SkillStep(alias="a", tool_id="list_products", params={})],
+    )
+    reg.add_skill(skill)
+    assert len(reg.get_all_skills()) == 1
+
+
+def test_clear_removes_all_tools_and_skills():
+    from elliot_core.types.tool import SkillDefinition, SkillStep
+
+    reg = ToolRegistry()
+    reg.add(TOOL_A)
+    skill = SkillDefinition(
+        id="s1",
+        name="S1",
+        description="d",
+        steps=[SkillStep(alias="a", tool_id="list_products", params={})],
+    )
+    reg.add_skill(skill)
+    reg.clear()
+    assert reg.get_all() == []
+    assert reg.get_all_skills() == []

@@ -158,3 +158,26 @@ def test_cache_reloads_on_ttl_expiry(tmp_path: Path):
 def test_cache_invalidate_nonexistent_path(tmp_path: Path):
     cache = ConnectorCache()
     cache.invalidate(tmp_path / "ghost.json")  # should not raise
+
+
+def test_load_connector_invalid_json_raises(tmp_path: Path):
+    bad = tmp_path / "bad.connector.json"
+    bad.write_text("THIS IS NOT JSON {{{")
+    with pytest.raises(ConnectorLoadError):
+        load_connector(str(bad))
+
+
+def test_load_connector_with_resolved_secret(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CONNECTOR_DISPLAY_NAME", "Test Connector")
+    data = {**MINIMAL, "name": "{{ env:CONNECTOR_DISPLAY_NAME }}"}
+    p = write_connector(tmp_path, "secret.connector.json", data)
+    cfg = load_connector(p)
+    assert cfg.slug == "test"
+
+
+def test_load_connector_missing_secret_raises(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("MISSING_SECRET_VAR", raising=False)
+    data = {**MINIMAL, "name": "{{ env:MISSING_SECRET_VAR }}"}
+    p = write_connector(tmp_path, "missing_secret.connector.json", data)
+    with pytest.raises(ConnectorLoadError, match="MISSING_SECRET_VAR"):
+        load_connector(p)

@@ -68,3 +68,9 @@ def test_bad_sql_raises_elliot_error(engine: SQLiteEngine):
     with pytest.raises(ElliotError) as exc_info:
         engine.query("THIS IS NOT VALID SQL !!!")
     assert exc_info.value.code == "INVALID_SQL"
+
+
+def test_ingest_empty_rows_creates_placeholder_table(engine: SQLiteEngine):
+    engine.ingest("empty_tbl", [])
+    tables = engine.get_table_names()
+    assert "empty_tbl" in tables

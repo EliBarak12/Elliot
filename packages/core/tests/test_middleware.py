@@ -137,6 +137,19 @@ def test_error_middleware_auth_error_returns_401():
     assert resp.status_code == 401
 
 
+def test_error_middleware_unknown_code_prefix_returns_500():
+    app = FastAPI()
+    register_error_handlers(app)
+
+    @app.get("/unknown-code")
+    async def unknown_code() -> None:
+        raise ElliotError("COMPLETELY_UNKNOWN_CODE", "no prefix match")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.get("/unknown-code")
+    assert resp.status_code == 500
+
+
 # ── RequestLoggingMiddleware ──────────────────────────────────────────────────
 
 

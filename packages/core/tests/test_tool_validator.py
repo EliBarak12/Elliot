@@ -76,3 +76,23 @@ def test_undefined_filter_param_raises():
     }
     with pytest.raises(ElliotError):
         validate_tool_definition(data)
+
+
+def test_invalid_pydantic_schema_raises_invalid_tool():
+    with pytest.raises(ElliotError) as exc_info:
+        validate_tool_definition({"id": "x", "name": "X"})  # missing required fields
+    assert exc_info.value.code == "INVALID_TOOL"
+
+
+def test_generic_id_raises():
+    with pytest.raises(ElliotError) as exc_info:
+        validate_tool_definition({**VALID_READ, "id": "query"})
+    assert exc_info.value.code == "INVALID_TOOL"
+
+
+def test_invalid_skill_definition_raises():
+    from elliot_core.tools.validator import validate_skill_definition
+
+    with pytest.raises(ElliotError) as exc_info:
+        validate_skill_definition({"id": "x", "name": "X"})  # missing steps/description
+    assert exc_info.value.code == "INVALID_SKILL"

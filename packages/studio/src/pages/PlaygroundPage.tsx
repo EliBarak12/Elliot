@@ -73,7 +73,13 @@ export default function PlaygroundPage() {
                   : params[p.name];
         }
       }
-      const result = await callTool({ name: selectedTool.id, args });
+      // User-defined connector tools are not exposed as MCP tools by the plugin;
+      // invoke them through the meta-tool 'elliot_preview_tool' which executes
+      // the registered SQL against the session's SQLite engine.
+      const result = await callTool({
+        name: "elliot_preview_tool",
+        args: { tool_id: selectedTool.id, params: args },
+      });
       const latencyMs = performance.now() - t0;
       setCurrentResult({ result, latencyMs });
       setHistory((prev) => [

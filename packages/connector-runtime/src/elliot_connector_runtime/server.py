@@ -49,10 +49,19 @@ def _suggest(tool_id: str, avg_tokens: float, max_tokens: float) -> str | None:
     return None
 
 
-def create_runtime_server(config: Any, executor: ToolExecutor) -> FastMCP:
+def create_runtime_server(
+    config: Any,
+    executor: ToolExecutor,
+    audit: AuditLog | None = None,
+    tracker: SessionTracker | None = None,
+    store: ObservationStore | None = None,
+) -> FastMCP:
     """
     Build a FastMCP server whose tool list mirrors the connector's ToolDefinitions.
     Registers tools, resources (schema/sample/source status), and prompts (skills).
+
+    When audit / tracker / store are supplied, MCP tool invocations are recorded
+    so observability matches the OpenAI-protocol path.
     """
     import json
 
@@ -68,11 +77,23 @@ def create_runtime_server(config: Any, executor: ToolExecutor) -> FastMCP:
             "Use list_tools to see available tools, then call them with the required parameters."
         )
     )
-    mcp = FastMCP("elliot-runtime", instructions=instructions)
+    # streamable_http_path="/" so that mounting at /mcp exposes the MCP
+    # endpoint at /mcp/ (matching the plugin and the docs), not /mcp/mcp/.
+    mcp = FastMCP("elliot-runtime", instructions=instructions, streamable_http_path="/")
 
     task_store = get_task_store()
+    connector_slug = getattr(cfg, "slug", None)
     for tool_def in cfg.tools:
-        _register_tool(mcp, executor, tool_def, task_store)
+        _register_tool(
+            mcp,
+            executor,
+            tool_def,
+            task_store,
+            audit=audit,
+            tracker=tracker,
+            store=store,
+            connector_slug=connector_slug,
+        )
 
     _register_resources(mcp, cfg, executor, json)
     _register_prompts(mcp, cfg)
@@ -82,7 +103,14 @@ def create_runtime_server(config: Any, executor: ToolExecutor) -> FastMCP:
 
 
 def _register_tool(
-    mcp: FastMCP, executor: ToolExecutor, tool_def: Any, task_store: TaskStore
+    mcp: FastMCP,
+    executor: ToolExecutor,
+    tool_def: Any,
+    task_store: TaskStore,
+    audit: AuditLog | None = None,
+    tracker: SessionTracker | None = None,
+    store: ObservationStore | None = None,
+    connector_slug: str | None = None,
 ) -> None:
     from elliot_core.errors import ElliotError, to_mcp_error_content
     from elliot_core.types import ToolDefinition
@@ -98,15 +126,75 @@ def _register_tool(
     )
     run_async: bool = getattr(td, "run_async", False)
 
+    def _observe(
+        tool_id: str,
+        arguments: dict[str, Any],
+        result_rows: list[dict[str, Any]],
+        duration_ms: float,
+        error: str | None,
+        session_id: str | None,
+    ) -> None:
+        """Record one tool call to audit log, session tracker, and observation store."""
+        row_count = len(result_rows)
+        if audit is not None:
+            with contextlib.suppress(Exception):
+                audit.record(tool_id, arguments, row_count, duration_ms, error=error)
+        token_estimate = 0
+        if session_id is not None:
+            if tracker is not None:
+                with contextlib.suppress(Exception):
+                    tracker.get_or_start_session(session_id, agent_hint="mcp")
+                    tracker.record_tool_call(
+                        session_id=session_id,
+                        tool_id=tool_id,
+                        arguments=arguments,
+                        result_rows=row_count,
+                        result_data=result_rows,
+                        duration_ms=duration_ms,
+                        error=error,
+                    )
+                    # Each MCP request is its own short-lived session — flush
+                    # to NDJSON now so /v1/sessions reflects activity immediately.
+                    tracker.close_session(session_id)
+                # mirror SessionTracker's internal token estimate so the
+                # observation store agrees with /v1/sessions
+                from .session_tracker import _estimate_tokens
+
+                token_estimate = _estimate_tokens(result_rows)
+            if store is not None:
+                with contextlib.suppress(Exception):
+                    store.open_session(
+                        session_id,
+                        agent_hint="mcp",
+                        connector_slug=connector_slug,
+                    )
+                    store.write_tool_call(
+                        session_id=session_id,
+                        tool_id=tool_id,
+                        arguments=arguments,
+                        result_row_count=row_count,
+                        result_token_estimate=token_estimate,
+                        duration_ms=duration_ms,
+                        error=error,
+                        connector_slug=connector_slug,
+                    )
+                    store.close_session(session_id)
+
     async def _handler(**kwargs: Any) -> dict[str, Any]:
         import time
 
         from mcp.server.fastmcp import Context
 
         ctx: Context[Any, Any, Any] | None = None
+        session_id: str | None = None
         with contextlib.suppress(Exception):
             ctx = mcp.get_context()
             await ctx.info(f"tool.call.start: {td.id}", logger="elliot.runtime")
+        if ctx is not None:
+            # Use the FastMCP request_id as a session correlation id so every
+            # MCP-driven invocation is traceable in the observation store.
+            with contextlib.suppress(Exception):
+                session_id = ctx.request_id
 
         if run_async:
 
@@ -128,6 +216,7 @@ def _register_tool(
         try:
             result = await executor.execute(td, kwargs)
             duration_ms = round((time.monotonic() - t0) * 1000, 1)
+            _observe(td.id, kwargs, result.rows, duration_ms, None, session_id)
             if ctx is not None:
                 with contextlib.suppress(Exception):
                     await ctx.info(
@@ -136,6 +225,8 @@ def _register_tool(
                     )
             return {"rows": result.rows, "count": len(result.rows)}
         except ElliotError as exc:
+            duration_ms = round((time.monotonic() - t0) * 1000, 1)
+            _observe(td.id, kwargs, [], duration_ms, str(exc), session_id)
             error_content = to_mcp_error_content(exc)
             if ctx is not None:
                 with contextlib.suppress(Exception):
@@ -309,12 +400,16 @@ def _register_skill_prompt(mcp: FastMCP, skill: Any) -> None:
                     }
                 ]
 
-            # Build signature so FastMCP can introspect parameter names
+            # Build signature so FastMCP can introspect parameter names,
+            # and also set __annotations__ so pydantic's validate_call can
+            # resolve type hints via typing.get_type_hints.
             sig_params = [
                 inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, annotation=str)
                 for name in params
             ]
             object.__setattr__(prompt_fn_with_args, "__signature__", inspect.Signature(sig_params))
+            prompt_fn_with_args.__annotations__ = {name: str for name in params}
+            prompt_fn_with_args.__annotations__["return"] = list[dict[str, Any]]
             prompt_fn_with_args.__name__ = skill_id
             prompt_fn_with_args.__doc__ = skill_description
             return prompt_fn_with_args
@@ -350,7 +445,7 @@ def create_app(
     tracker = SessionTracker(sessions_path)
     store = ObservationStore(db_url)
 
-    mcp = create_runtime_server(config, executor)
+    mcp = create_runtime_server(config, executor, audit=audit, tracker=tracker, store=store)
 
     _mcp_app = mcp.streamable_http_app()
 

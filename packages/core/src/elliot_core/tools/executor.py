@@ -131,16 +131,25 @@ class ToolExecutor:
     async def _execute_read_full(self, tool: ToolDefinition, params: dict[str, Any]) -> ToolResult:
         """
         Full-fetch mode: retrieve all pages from source, load into SQLite,
-        run generated SELECT with filter_groups / return_fields / order_by.
+        then run the tool's SQL (preferring tool.sql when set, otherwise the
+        SELECT generated from filter_groups / return_fields / order_by).
         """
         fetch_results = await self._fetch_sources(tool.source_ids)
 
         engine = SQLiteEngine()
         try:
             for source_id, fetch_result in fetch_results.items():
-                engine.load_result(flatten(fetch_result.rows, source_id))
+                # Prefer the discovered table_name (matches user SQL like FROM customers)
+                # falling back to source.id (the built-connector case where id == name).
+                source = self._source_map.get(source_id)
+                table_name = source.table_name if source and source.table_name else source_id
+                engine.load_result(flatten(fetch_result.rows, table_name))
 
-            sql, sql_params = build_select_sql(tool, params)
+            if tool.sql:
+                sql = tool.sql
+                sql_params = {p.name: params.get(p.name) for p in tool.parameters}
+            else:
+                sql, sql_params = build_select_sql(tool, params)
             try:
                 rows = engine.query(sql, sql_params)
             except Exception as exc:

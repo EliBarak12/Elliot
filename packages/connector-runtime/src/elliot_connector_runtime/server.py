@@ -15,6 +15,10 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+from elliot_core.auth_middleware import ApiKeyMiddleware
+from elliot_core.error_middleware import register_error_handlers
+from elliot_core.http_middleware import RequestLoggingMiddleware
+
 from .audit import AuditLog
 from .cache import ConnectorCache
 from .executor import ToolExecutor
@@ -137,12 +141,15 @@ def create_app(
     app = FastAPI(lifespan=lifespan)
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+    app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(ApiKeyMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173"],
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    register_error_handlers(app)
     app.mount("/mcp", _mcp_app)
 
     openai_router = APIRouter(prefix="/v1")

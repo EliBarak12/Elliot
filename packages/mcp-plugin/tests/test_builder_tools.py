@@ -168,3 +168,76 @@ def test_analyze_api_spec_invalid_returns_error() -> None:
 def test_update_draft_not_found_returns_error() -> None:
     result = update_tool_in_draft("badid", "tool", "{}")
     assert "error" in result
+
+
+def test_register_builder_tools_registers_all_tools() -> None:
+    from mcp.server.fastmcp import FastMCP
+
+    from elliot_mcp_plugin.tools.builder_tools import register_builder_tools
+
+    mcp = FastMCP("test")
+    register_builder_tools(mcp)
+    names = {t for t in mcp._tool_manager._tools}
+    expected = {
+        "elliot_analyze_api_spec",
+        "elliot_create_draft",
+        "elliot_list_drafts",
+        "elliot_update_tool_in_draft",
+        "elliot_remove_tool_from_draft",
+        "elliot_add_tool_to_draft",
+        "elliot_run_draft_lint",
+        "elliot_save_draft",
+        "elliot_discard_draft",
+        "elliot_list_saved_connectors",
+    }
+    assert expected.issubset(names)
+
+
+def test_registered_list_drafts_and_create_draft(tmp_path: Path) -> None:
+    import asyncio
+
+    from mcp.server.fastmcp import FastMCP
+
+    from elliot_mcp_plugin.tools.builder_tools import _drafts, register_builder_tools
+
+    _drafts.clear()
+    mcp = FastMCP("test")
+    register_builder_tools(mcp)
+
+    tools = mcp._tool_manager._tools
+
+    async def run() -> None:
+        drafts = await tools["elliot_list_drafts"].run({})
+        assert drafts == []
+
+        draft = await tools["elliot_create_draft"].run(
+            {"proposed_connector_json": json.dumps({"name": "X", "slug": "x", "tools": []})}
+        )
+        assert "draft_id" in draft
+
+        drafts2 = await tools["elliot_list_drafts"].run({})
+        assert len(drafts2) == 1
+
+        did = draft["draft_id"]
+        discarded = await tools["elliot_discard_draft"].run({"draft_id": did})
+        assert discarded["discarded"] is True
+
+    asyncio.run(run())
+
+
+def test_registered_list_saved_connectors(tmp_path: Path) -> None:
+    import asyncio
+
+    from mcp.server.fastmcp import FastMCP
+
+    from elliot_mcp_plugin.tools.builder_tools import register_builder_tools
+
+    mcp = FastMCP("test")
+    register_builder_tools(mcp)
+    tools = mcp._tool_manager._tools
+
+    async def run() -> None:
+        result = await tools["elliot_list_saved_connectors"].run({"connectors_dir": str(tmp_path)})
+        assert result == []
+
+    asyncio.run(run())

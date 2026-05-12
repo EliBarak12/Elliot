@@ -7,16 +7,20 @@ analyze an OpenAPI spec → create a draft → refine tools → lint → save.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from pathlib import Path
 from typing import Any
 
 import structlog
+from mcp.server.fastmcp import FastMCP
 
 log = structlog.get_logger(__name__)
 
 # In-memory drafts per session, keyed by draft_id
 _drafts: dict[str, dict[str, Any]] = {}
+
+_DEFAULT_CONNECTORS_DIR = os.environ.get("ELLIOT_CONNECTORS_DIR", "connectors")
 
 
 def analyze_api_spec(spec_url_or_json: str) -> dict[str, Any]:
@@ -191,3 +195,86 @@ def list_saved_connectors(connectors_dir: str) -> list[dict[str, Any]]:
         except Exception:
             result.append({"file": f.name, "error": "parse error"})
     return result
+
+
+def register_builder_tools(mcp: FastMCP) -> None:
+    """Register all agentic connector builder tools with the MCP server."""
+
+    @mcp.tool()
+    def elliot_analyze_api_spec(spec_url_or_json: str) -> dict:  # type: ignore[type-arg]
+        """Analyze an OpenAPI spec and return a proposed connector structure.
+
+        Pass a URL (https://...) or raw JSON string of an OpenAPI 3.x spec.
+        Returns proposed tools with descriptions, parameters, and token risk per tool.
+        Show the result to the user and ask which tools to keep before creating a draft.
+        """
+        return analyze_api_spec(spec_url_or_json)
+
+    @mcp.tool()
+    def elliot_create_draft(proposed_connector_json: str) -> dict:  # type: ignore[type-arg]
+        """Create a new connector draft from a ProposedConnector JSON.
+
+        Filter the proposed tools to only those the user needs before calling this.
+        Returns a draft_id to use in subsequent calls.
+        """
+        return create_draft(proposed_connector_json)
+
+    @mcp.tool()
+    def elliot_list_drafts() -> list:  # type: ignore[type-arg]
+        """List all active connector drafts in this session."""
+        return list_drafts()
+
+    @mcp.tool()
+    def elliot_update_tool_in_draft(draft_id: str, tool_id: str, updates_json: str) -> dict:  # type: ignore[type-arg]
+        """Update a specific tool in a draft with partial fields.
+
+        Use this to refine descriptions, trim response_fields, rename parameters,
+        or change the tool category. Only the provided fields are updated.
+        """
+        return update_tool_in_draft(draft_id, tool_id, updates_json)
+
+    @mcp.tool()
+    def elliot_remove_tool_from_draft(draft_id: str, tool_id: str) -> dict:  # type: ignore[type-arg]
+        """Remove a tool from a draft when the user says they don't need it."""
+        return remove_tool_from_draft(draft_id, tool_id)
+
+    @mcp.tool()
+    def elliot_add_tool_to_draft(draft_id: str, tool_json: str) -> dict:  # type: ignore[type-arg]
+        """Add a new custom tool to a draft.
+
+        `tool_json` must be a full ProposedTool object.
+        """
+        return add_tool_to_draft(draft_id, tool_json)
+
+    @mcp.tool()
+    def elliot_run_draft_lint(draft_id: str) -> dict:  # type: ignore[type-arg]
+        """Run the tool quality linter on a draft.
+
+        Returns issues with severity, location, and fix suggestions.
+        Present errors to the user and ask for their input to fix them.
+        """
+        return run_draft_lint(draft_id)
+
+    @mcp.tool()
+    def elliot_save_draft(
+        draft_id: str,
+        filename: str,
+        connectors_dir: str = _DEFAULT_CONNECTORS_DIR,
+    ) -> dict:  # type: ignore[type-arg]
+        """Save a draft as a .connector.json file.
+
+        `filename` should end in .connector.json, e.g. "my-api.connector.json".
+        """
+        return save_draft(draft_id, filename, connectors_dir)
+
+    @mcp.tool()
+    def elliot_discard_draft(draft_id: str) -> dict:  # type: ignore[type-arg]
+        """Discard a draft without saving. Use if the user wants to start over."""
+        return discard_draft(draft_id)
+
+    @mcp.tool()
+    def elliot_list_saved_connectors(
+        connectors_dir: str = _DEFAULT_CONNECTORS_DIR,
+    ) -> list:  # type: ignore[type-arg]
+        """List all saved .connector.json files with name, slug, version, and tool count."""
+        return list_saved_connectors(connectors_dir)

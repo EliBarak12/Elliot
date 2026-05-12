@@ -9,6 +9,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from elliot_core.auth_middleware import ApiKeyMiddleware
+from elliot_core.error_middleware import register_error_handlers
+from elliot_core.http_middleware import RequestLoggingMiddleware
 from elliot_mcp_plugin.server import create_elliot_server
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -28,11 +31,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(ApiKeyMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
     allow_headers=["*"],
     allow_methods=["*"],
 )
+register_error_handlers(app)
 
 app.mount("/mcp", _mcp_app)

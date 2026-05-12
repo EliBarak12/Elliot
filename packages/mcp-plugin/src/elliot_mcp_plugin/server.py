@@ -49,6 +49,7 @@ def create_server(config: ConnectorConfig, secrets: dict[str, str]) -> Server:
 
 def create_elliot_server(session: Any) -> FastMCP:
     """Create a FastMCP server with all Elliot tool groups registered."""
+    from elliot_mcp_plugin.tools.builder_tools import register_builder_tools
     from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
     from elliot_mcp_plugin.tools.context_tools import register_context_tools
     from elliot_mcp_plugin.tools.eval_tools import register_eval_tools
@@ -67,6 +68,7 @@ def create_elliot_server(session: Any) -> FastMCP:
     register_connector_tools(mcp, session)
     register_studio_tools(mcp, session)
     register_eval_tools(mcp, session)
+    register_builder_tools(mcp)
     return mcp
 
 

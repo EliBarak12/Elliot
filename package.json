@@ -14,5 +14,34 @@
     "prettier": "^3.3.0",
     "typescript": "^5.5.0",
     "vitest": "^1.6.0"
+  },
+  "eslintConfig": {
+    "root": true,
+    "parser": "@typescript-eslint/parser",
+    "plugins": ["@typescript-eslint"],
+    "extends": [
+      "eslint:recommended",
+      "plugin:@typescript-eslint/recommended"
+    ],
+    "rules": {
+      "@typescript-eslint/no-explicit-any": "error",
+      "@typescript-eslint/no-unused-vars": "error",
+      "@typescript-eslint/consistent-type-imports": [
+        "error",
+        { "prefer": "type-imports", "fixStyle": "inline-type-imports" }
+      ]
+    },
+    "env": {
+      "node": true,
+      "browser": true,
+      "es2022": true
+    },
+    "ignorePatterns": ["dist/", "node_modules/", "*.config.ts"]
+  },
+  "prettier": {
+    "semi": true,
+    "singleQuote": true,
+    "trailingComma": "all",
+    "printWidth": 100
   }
 }

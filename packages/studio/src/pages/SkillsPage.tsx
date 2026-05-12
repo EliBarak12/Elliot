@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { Plus, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -7,17 +7,14 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
-import { callTool } from "@/lib/mcp-client";
 import { SkillEditor } from "@/components/skills/SkillEditor";
+import { useSkills } from "@/hooks/useSkills";
 import { cn } from "@/lib/utils";
 import type { SkillDefinition } from "@/types/api";
 
 export default function SkillsPage() {
   const queryClient = useQueryClient();
-  const { data: skillsRaw, isLoading } = useQuery({
-    queryKey: ["skills"],
-    queryFn: () => callTool("elliot_list_skills", {}),
-  });
+  const { data: skillsRaw, isLoading } = useSkills();
   const skills = Array.isArray(skillsRaw) ? (skillsRaw as SkillDefinition[]) : [];
 
   const [selectedId, setSelectedId] = useState<string | null>(null);

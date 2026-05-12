@@ -54,11 +54,17 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
     @mcp.tool()
     def elliot_list_skills() -> dict:  # type: ignore[type-arg]
-        """List all defined skills with id, name, and step count."""
+        """List all defined skills with their full definitions.
+
+        Each entry includes id, name, description, steps, and input_parameters
+        so the Studio and any other client can render the skill without an
+        extra elliot_get_skill round-trip. The convenience field step_count
+        is also included for clients that only need a summary.
+        """
         try:
             return {
                 "skills": [
-                    {"id": s.id, "name": s.name, "step_count": len(s.steps)}
+                    {**s.model_dump(), "step_count": len(s.steps)}
                     for s in session.registry.get_all_skills()
                 ],
                 "count": len(session.registry.get_all_skills()),

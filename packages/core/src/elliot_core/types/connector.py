@@ -18,6 +18,7 @@ class ConnectorConfig(BaseModel):
     slug: str
     version: str
     description: str = ""
+    instructions: str = ""
     sources: list[SourceConfig] = []
     tools: list[ToolDefinition] = []
     skills: list[SkillDefinition] = []

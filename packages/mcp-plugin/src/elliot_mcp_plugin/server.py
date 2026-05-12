@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import mcp.types as types
@@ -14,16 +13,32 @@ from elliot_core.tools.executor import ToolExecutor
 from elliot_core.types.connector import ConnectorConfig
 
 
+def _make_annotations(schema: dict[str, Any]) -> types.ToolAnnotations:
+    ann = schema.get("annotations", {})
+    return types.ToolAnnotations(
+        title=ann.get("title"),
+        readOnlyHint=ann.get("readOnlyHint"),
+        destructiveHint=ann.get("destructiveHint"),
+        idempotentHint=ann.get("idempotentHint"),
+        openWorldHint=ann.get("openWorldHint"),
+    )
+
+
 def build_tool_list(config: ConnectorConfig) -> list[types.Tool]:
     """Pure function: ConnectorConfig -> list of MCP Tool objects."""
-    return [
-        types.Tool(
-            name=schema["name"],
-            description=schema["description"],
-            inputSchema=schema["inputSchema"],
+    tools = []
+    for t in config.tools:
+        schema = to_mcp_tool_schema(t)
+        tools.append(
+            types.Tool(
+                name=schema["name"],
+                description=schema["description"],
+                inputSchema=schema["inputSchema"],
+                annotations=_make_annotations(schema),
+                outputSchema=schema.get("outputSchema"),
+            )
         )
-        for schema in (to_mcp_tool_schema(t) for t in config.tools)
-    ]
+    return tools
 
 
 def create_server(config: ConnectorConfig, secrets: dict[str, str]) -> Server:
@@ -36,13 +51,22 @@ def create_server(config: ConnectorConfig, secrets: dict[str, str]) -> Server:
         return tools
 
     @server.call_tool()  # type: ignore[untyped-decorator]
-    async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.Content]:
+    async def call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
         try:
             result = await executor.execute(name, arguments or {})
-            return [types.TextContent(type="text", text=json.dumps(result.rows, default=str))]
+            structured = {"rows": result.rows, "count": len(result.rows)}
+            summary = f"{len(result.rows)} row(s) returned"
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=summary)],
+                structuredContent=structured,
+                isError=False,
+            )
         except ElliotError as exc:
             content = to_mcp_error_content(exc)
-            return [types.TextContent(type="text", text=content["text"])]
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=content["text"])],
+                isError=True,
+            )
 
     return server
 
@@ -58,7 +82,16 @@ def create_elliot_server(session: Any) -> FastMCP:
     from elliot_mcp_plugin.tools.studio_tools import register_studio_tools
     from elliot_mcp_plugin.tools.tool_tools import register_tool_tools
 
-    mcp = FastMCP("elliot", streamable_http_path="/", stateless_http=True)
+    instructions = (
+        "Elliot helps you build agent-ready MCP connectors from any API or database. "
+        "Start with elliot_set_context to name your connector, then elliot_discover_source "
+        "to describe your data source. Use elliot_create_tool to define agent-callable tools "
+        "with verb-first descriptions. Run elliot_lint_connector before saving. "
+        "Use elliot_run_eval to validate tool quality against expected outputs."
+    )
+    mcp = FastMCP(
+        "elliot", instructions=instructions, streamable_http_path="/", stateless_http=True
+    )
     register_source_tools(mcp, session)
     register_sql_tools(mcp, session)
     register_tool_tools(mcp, session)

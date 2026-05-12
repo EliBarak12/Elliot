@@ -11,6 +11,7 @@ class ParameterDefinition(BaseModel):
     required: bool = True
     description: str = ""
     default: Any | None = None
+    enum: list[str] | None = None
 
 
 class FilterCondition(BaseModel):
@@ -96,6 +97,8 @@ class ToolDefinition(BaseModel):
 
     parameters: list[ParameterDefinition] = []
     response_shape: ResponseShape = ResponseShape()
+    output_schema: dict[str, Any] | None = None
+    run_async: bool = False
 
 
 class SkillStep(BaseModel):

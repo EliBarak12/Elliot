@@ -95,16 +95,24 @@ class SessionTracker:
         self._active: dict[str, AgentSession] = {}
         self._lock = Lock()
 
-    def start_session(self, agent_hint: str | None = None) -> str:
-        session_id = uuid.uuid4().hex[:8]
+    def start_session(self, agent_hint: str | None = None, session_id: str | None = None) -> str:
+        """Create a new session. If session_id is given, use it as the key; otherwise generate one."""
+        sid = session_id or uuid.uuid4().hex[:8]
         with self._lock:
-            self._active[session_id] = AgentSession(
-                session_id=session_id,
+            self._active[sid] = AgentSession(
+                session_id=sid,
                 started_at=time.time(),
                 agent_hint=agent_hint,
             )
-        log.info("session.started", session_id=session_id, agent_hint=agent_hint)
-        return session_id
+        log.info("session.started", session_id=sid, agent_hint=agent_hint)
+        return sid
+
+    def get_or_start_session(self, session_id: str, agent_hint: str | None = None) -> str:
+        """Return session_id if already active; otherwise create it."""
+        with self._lock:
+            if session_id in self._active:
+                return session_id
+        return self.start_session(agent_hint=agent_hint, session_id=session_id)
 
     def record_tools_list(self, session_id: str, tool_count: int, duration_ms: float) -> None:
         with self._lock:

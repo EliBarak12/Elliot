@@ -31,8 +31,10 @@ import { AddSourceDialog } from "@/components/sources/AddSourceDialog";
 
 interface SourceSummary {
   id: string;
+  source_id?: string;
   name: string;
   type: string;
+  table_name?: string;
   table_count?: number;
   row_count?: number;
   last_fetched?: string;

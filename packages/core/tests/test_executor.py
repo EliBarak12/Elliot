@@ -220,6 +220,63 @@ async def test_fetch_sources_wraps_exception():
         await executor.execute("list_items", {})
 
 
+# ── tool.sql precedence (regression: Bug #4) ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_execute_read_uses_tool_sql_when_set():
+    """When tool.sql is set, the executor runs that SQL instead of generating
+    one from filter_groups/return_fields. Without this, tools created via the
+    agentic-builder MCP path are run as `SELECT * FROM <source>` regardless
+    of the actual SQL the user wrote.
+    """
+    rows = [
+        {"id": 1, "plan": "pro", "name": "Alice"},
+        {"id": 2, "plan": "starter", "name": "Bob"},
+        {"id": 3, "plan": "pro", "name": "Carol"},
+    ]
+    source = SourceConfig(id="src", name="customers", type="file", path="x.json")
+    source.table_name = "customers"
+    tool = ToolDefinition(
+        id="find_by_plan",
+        name="find_by_plan",
+        description="filter customers by plan",
+        category="READ",
+        source_ids=["src"],
+        sql="SELECT id, name FROM customers WHERE plan = :plan ORDER BY id",
+        parameters=[ParameterDefinition(name="plan", type="string", required=True)],
+    )
+    config = ConnectorConfig(name="t", slug="t", version="1.0.0", sources=[source], tools=[tool])
+    executor = ToolExecutor(config, fetch_source=_fake_fetch(rows))
+    result = await executor.execute("find_by_plan", {"plan": "pro"})
+    assert [r["id"] for r in result.rows] == [1, 3]
+    # The SELECT projection drops the 'plan' column.
+    assert "plan" not in result.rows[0]
+
+
+@pytest.mark.asyncio
+async def test_execute_read_uses_source_table_name_for_sqlite():
+    """The executor must ingest each source under its discovered table_name
+    so user SQL like `FROM customers` resolves regardless of source_id (which
+    may be a UUID when running from a Studio session).
+    """
+    rows = [{"id": 1, "amount": 100}]
+    source = SourceConfig(id="uuid-abc", name="orders", type="file", path="x.json")
+    source.table_name = "orders"
+    tool = ToolDefinition(
+        id="t",
+        name="t",
+        description="d",
+        category="READ",
+        source_ids=["uuid-abc"],
+        sql="SELECT SUM(amount) AS total FROM orders",
+    )
+    config = ConnectorConfig(name="t", slug="t", version="1.0.0", sources=[source], tools=[tool])
+    executor = ToolExecutor(config, fetch_source=_fake_fetch(rows))
+    result = await executor.execute("t", {})
+    assert result.rows == [{"total": 100}]
+
+
 # ── Passthrough mode ──────────────────────────────────────────────────────────
 
 

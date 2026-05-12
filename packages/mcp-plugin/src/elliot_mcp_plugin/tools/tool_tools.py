@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import structlog
 from mcp.server.fastmcp import FastMCP
 
@@ -128,8 +130,16 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return {"valid": False, "error": str(exc)}
 
     @mcp.tool()
-    def elliot_preview_tool(tool_id: str, params: dict) -> dict:  # type: ignore[type-arg]
-        """Execute a tool's SQL against current SQLite data and return rows."""
+    def elliot_preview_tool(
+        tool_id: str,
+        params: dict | None = None,  # type: ignore[type-arg]
+        arguments: dict | None = None,  # type: ignore[type-arg]
+        parameters: dict | None = None,  # type: ignore[type-arg]
+    ) -> dict:  # type: ignore[type-arg]
+        """Execute a tool's SQL against current SQLite data and return rows.
+
+        Pass call-time values via 'params' (preferred), 'arguments', or 'parameters'.
+        """
         try:
             tool = session.registry.get(tool_id)
             if tool is None:
@@ -137,10 +147,36 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             sql = session.tool_sql.get(tool_id)
             if not sql:
                 return {"error": f"No SQL defined for tool: {tool_id}"}
-            # Pre-fill all declared parameters with None so optional params don't cause bind errors
-            null_filled: dict[str, object] = {p.name: None for p in tool.parameters}
-            null_filled.update(params or {})
-            rows = session.engine.query(sql, null_filled)
+
+            supplied: dict[str, Any] = {}
+            for src in (params, arguments, parameters):
+                if src:
+                    supplied.update(src)
+
+            # Structured validation for missing required parameters so the agent
+            # gets an actionable VALIDATION_REQUIRED error instead of a sqlite
+            # 'datatype mismatch' downstream.
+            missing = [
+                p.name for p in tool.parameters if p.required and supplied.get(p.name) in (None, "")
+            ]
+            if missing:
+                raise ElliotError(
+                    "VALIDATION_REQUIRED",
+                    f"Missing required parameter(s) for tool '{tool_id}': {', '.join(missing)}",
+                    detail={"tool_id": tool_id, "missing": missing},
+                )
+
+            # Bind every declared parameter: caller-supplied value first, then
+            # the declared default, finally None for fully-optional placeholders.
+            bound: dict[str, object] = {}
+            for p in tool.parameters:
+                if p.name in supplied and supplied[p.name] not in (None, ""):
+                    bound[p.name] = supplied[p.name]
+                elif p.default is not None:
+                    bound[p.name] = p.default
+                else:
+                    bound[p.name] = None
+            rows = session.engine.query(sql, bound)
             return {"rows": rows, "row_count": len(rows)}
         except ElliotError as exc:
             return to_mcp_error_content(exc)

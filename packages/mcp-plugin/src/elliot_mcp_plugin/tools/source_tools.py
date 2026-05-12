@@ -18,11 +18,20 @@ from elliot_mcp_plugin.session import ElliotSession
 
 log = structlog.get_logger(__name__)
 
-# Maps the agent-friendly source_type to the SourceConfig Literal
+# Accepted source_type values, including friendly aliases for agents
+# (api/file/db) and the canonical names used in SourceConfig and the Studio
+# UI (rest/file/postgres/mysql). All map to a SourceConfig Literal.
 _TYPE_MAP: dict[str, str] = {
     "api": "rest",
+    "rest": "rest",
+    "http": "rest",
     "file": "file",
+    "csv": "file",
+    "json": "file",
     "db": "postgres",
+    "postgres": "postgres",
+    "postgresql": "postgres",
+    "mysql": "mysql",
 }
 
 
@@ -30,7 +39,7 @@ def _build_source_config(
     source_type: str, config: dict[str, Any], source_id: str, name: str
 ) -> SourceConfig:
     """Validate a raw config dict into a SourceConfig, mapping friendly types."""
-    mapped_type = _TYPE_MAP.get(source_type, source_type)
+    mapped_type = _TYPE_MAP[source_type.lower()]
     merged = {"id": source_id, "type": mapped_type, "name": name, **config}
     return SourceConfig.model_validate(merged)
 
@@ -44,30 +53,35 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
     ) -> dict:  # type: ignore[type-arg]
         """Fetch a data source (API / file / DB) and load it into in-memory SQLite.
 
-        source_type: 'api' | 'file' | 'db'
+        source_type: 'api'|'rest'|'http' for REST APIs, 'file'|'csv'|'json' for files,
+                     'db'|'postgres'|'postgresql'|'mysql' for databases.
         config: source-specific config dict (url, path, table, auth, etc.)
         name: logical name used as the SQLite table prefix
         """
         try:
-            if source_type not in ("api", "file", "db"):
+            key = source_type.lower()
+            if key not in _TYPE_MAP:
                 return {
-                    "error": f"Unknown source_type: {source_type!r}. Use 'api', 'file', or 'db'"
+                    "error": (
+                        f"Unknown source_type: {source_type!r}. "
+                        f"Valid values: {', '.join(sorted(_TYPE_MAP))}"
+                    )
                 }
 
             source_id = str(uuid.uuid4())
-            cfg = _build_source_config(source_type, config, source_id, name)
+            cfg = _build_source_config(key, config, source_id, name)
             secrets = session.workspace.load_secrets()
 
             rows: list[dict[str, Any]]
-            if source_type == "file":
+            if cfg.type == "file":
                 result = read_file(cfg)
                 rows = result.rows
 
-            elif source_type == "api":
+            elif cfg.type == "rest":
                 result = await fetch_endpoint(cfg, secrets)
                 rows = result.rows
 
-            else:  # db
+            else:  # postgres / mysql
                 result = query_database(cfg, secrets)
                 rows = result.rows
 
@@ -103,21 +117,32 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
     @mcp.tool()
     def elliot_list_sources() -> dict:  # type: ignore[type-arg]
-        """List all loaded sources with their table names and row counts."""
+        """List all loaded sources with their table names, row counts, and columns."""
         try:
-            return {
-                "sources": [
+            sources: list[dict[str, Any]] = []
+            for sid, src in session.sources.items():
+                columns: list[dict[str, str]] = []
+                if src.table_name:
+                    try:
+                        schema = session.engine.get_table_schema(src.table_name)
+                        columns = [{"name": c["name"], "type": c["type"]} for c in schema]
+                    except Exception:
+                        columns = []
+                sources.append(
                     {
+                        # Both keys for backwards compatibility: 'id' is the
+                        # canonical SourceConfig field name; 'source_id' is
+                        # the historical name used by other source tools.
+                        "id": sid,
                         "source_id": sid,
                         "name": src.name,
                         "type": src.type,
                         "table_name": src.table_name,
                         "row_count": src.row_count,
+                        "columns": columns,
                     }
-                    for sid, src in session.sources.items()
-                ],
-                "count": len(session.sources),
-            }
+                )
+            return {"sources": sources, "count": len(sources)}
         except Exception as exc:
             log.error("source.list.failed", error=str(exc))
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))

@@ -231,3 +231,60 @@ def test_preview_tool_aggregate(mcp: FastMCP, session: ElliotSession, tmp_path: 
 def test_preview_tool_not_found(mcp: FastMCP):
     result = _tool(mcp, "elliot_preview_tool")(tool_id="ghost", params={})
     assert "text" in result or "error" in result
+
+
+# ── Bug #2 regression: accept arguments/parameters aliases ───────────────────
+
+
+def test_preview_tool_accepts_arguments_alias(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    _load_table(session, tmp_path)
+    _tool(mcp, "elliot_create_tool")(
+        name="orders_by_amount",
+        description="Return orders with amount above threshold",
+        category="READ",
+        sql='SELECT * FROM "orders" WHERE amount > :threshold',
+        parameters=[
+            {"name": "threshold", "type": "integer", "required": True, "description": "min"}
+        ],
+    )
+    result = _tool(mcp, "elliot_preview_tool")(
+        tool_id="orders_by_amount", arguments={"threshold": 1}
+    )
+    assert "row_count" in result
+
+
+def test_preview_tool_accepts_parameters_alias(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    _load_table(session, tmp_path)
+    _tool(mcp, "elliot_create_tool")(
+        name="orders_all",
+        description="Return all orders",
+        category="READ",
+        sql='SELECT * FROM "orders"',
+        parameters=[],
+    )
+    result = _tool(mcp, "elliot_preview_tool")(tool_id="orders_all", parameters={})
+    assert result["row_count"] == 3
+
+
+# ── Bug #3 regression: structured VALIDATION_REQUIRED for missing required ───
+
+
+def test_preview_tool_missing_required_returns_structured_error(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    _load_table(session, tmp_path)
+    _tool(mcp, "elliot_create_tool")(
+        name="orders_by_status",
+        description="Return orders for the given status",
+        category="READ",
+        sql='SELECT * FROM "orders" WHERE status = :status',
+        parameters=[
+            {"name": "status", "type": "string", "required": True, "description": "status"}
+        ],
+    )
+    result = _tool(mcp, "elliot_preview_tool")(tool_id="orders_by_status", params={})
+    # to_mcp_error_content returns {"type": "text", "text": "[CODE] msg"}
+    assert "VALIDATION_REQUIRED" in result.get("text", "")
+    assert "status" in result.get("text", "")

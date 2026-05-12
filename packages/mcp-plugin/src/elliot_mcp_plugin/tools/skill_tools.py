@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import structlog
 from mcp.server.fastmcp import FastMCP
@@ -77,26 +78,48 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
-    async def elliot_preview_skill(skill_id: str, inputs: dict) -> dict:  # type: ignore[type-arg]
-        """Execute all skill steps against session SQLite data and return the final result."""
+    async def elliot_preview_skill(
+        skill_id: str,
+        inputs: dict | None = None,  # type: ignore[type-arg]
+        arguments: dict | None = None,  # type: ignore[type-arg]
+        params: dict | None = None,  # type: ignore[type-arg]
+    ) -> dict:  # type: ignore[type-arg]
+        """Execute all skill steps against session SQLite data and return the final result.
+
+        Pass skill input values via 'inputs' (preferred), 'arguments', or 'params'.
+        """
         try:
             skill = session.registry.get_skill(skill_id)
             if skill is None:
                 return {"error": f"Skill not found: {skill_id}"}
 
+            supplied: dict[str, Any] = {}
+            for src in (inputs, arguments, params):
+                if src:
+                    supplied.update(src)
+
             from elliot_core.tools.executor import ToolExecutor
             from elliot_core.types.connector import ConnectorConfig
+
+            # Inject SQL stored alongside each session tool into the ToolDefinition
+            # so the executor can run it instead of an empty filter_groups SELECT.
+            tools_with_sql = [
+                t.model_copy(update={"sql": session.tool_sql[t.id]})
+                if t.id in session.tool_sql
+                else t
+                for t in session.registry.get_all()
+            ]
 
             config = ConnectorConfig(
                 name="session",
                 slug="session",
                 version="0.1.0",
                 sources=list(session.sources.values()),
-                tools=session.registry.get_all(),
+                tools=tools_with_sql,
             )
             secrets = session.workspace.load_secrets()
             executor = ToolExecutor(config, secrets)
-            result = await execute_skill(skill, inputs or {}, session.registry, executor)
+            result = await execute_skill(skill, supplied, session.registry, executor)
             return {"rows": result.rows, "meta": result.meta}
         except ElliotError as exc:
             return to_mcp_error_content(exc)

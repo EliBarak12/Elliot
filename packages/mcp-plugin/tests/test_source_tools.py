@@ -115,6 +115,54 @@ def test_discover_source_unknown_type_returns_error(mcp: FastMCP):
     assert "ftp" in result["error"]
 
 
+# ── source_type alias acceptance (regression: Bug #1) ─────────────────────────
+
+
+def test_discover_source_accepts_rest_alias(mcp: FastMCP, session: ElliotSession):
+    """The Studio UI sends source_type='rest' (matching SourceConfig.type),
+    not the agent-friendly 'api'. Both must be accepted."""
+    from elliot_core.types.source import FetchResult
+
+    async def fake_fetch(cfg, secrets):
+        return FetchResult(rows=[{"id": 1, "n": "x"}], fetched_at="t")
+
+    import elliot_mcp_plugin.tools.source_tools as st
+
+    original = st.fetch_endpoint
+    st.fetch_endpoint = fake_fetch  # type: ignore[assignment]
+    try:
+        result = _tool(mcp, "elliot_discover_source")(
+            source_type="rest",
+            config={"url": "https://api.example.com/items"},
+            name="items",
+        )
+    finally:
+        st.fetch_endpoint = original  # type: ignore[assignment]
+    assert "error" not in result, result
+    assert result["row_count"] == 1
+
+
+def test_discover_source_accepts_postgres_alias(mcp: FastMCP):
+    """Studio sends source_type='postgres' (UI label). Must map to db path."""
+    import elliot_mcp_plugin.tools.source_tools as st
+    from elliot_core.types.source import FetchResult
+
+    original = st.query_database
+    st.query_database = lambda cfg, secrets: FetchResult(  # type: ignore[assignment]
+        rows=[{"id": 1}], fetched_at="t"
+    )
+    try:
+        result = _tool(mcp, "elliot_discover_source")(
+            source_type="postgres",
+            config={"url": "postgresql://u:p@h/d", "table": "t"},
+            name="t",
+        )
+    finally:
+        st.query_database = original  # type: ignore[assignment]
+    assert "error" not in result, result
+    assert result["table_name"] == "t"
+
+
 def test_discover_source_missing_file_returns_error(mcp: FastMCP, tmp_path: Path):
     result = _tool(mcp, "elliot_discover_source")(
         source_type="file",

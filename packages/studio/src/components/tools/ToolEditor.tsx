@@ -40,12 +40,14 @@ export function ToolEditor({ tool, onSaved }: Props) {
   const [category, setCategory] = useState<Category>((tool?.category as Category) ?? "READ");
   const [sourceIds, setSourceIds] = useState<string[]>(tool?.source_ids ?? []);
   const [parameters, setParameters] = useState<ParameterDefinition[]>(tool?.parameters ?? []);
+  const [sql, setSql] = useState(tool?.sql ?? "");
   const [filterGroups, setFilterGroups] = useState<FilterGroup[]>([]);
   const [returnFields, setReturnFields] = useState<ReturnField[]>([]);
   const [apiMapping, setApiMapping] = useState<ApiRequestMapping>(DEFAULT_API_MAPPING);
   const [saved, setSaved] = useState(false);
   const [status, setStatus] = useState<{ type: "ok" | "error"; message: string } | null>(null);
 
+  // Re-sync form when a different tool is selected (key off tool.id to avoid re-running on same tool)
   useEffect(() => {
     if (!tool) return;
     setId(tool.id);
@@ -54,9 +56,11 @@ export function ToolEditor({ tool, onSaved }: Props) {
     setCategory((tool.category as Category) ?? "READ");
     setSourceIds(tool.source_ids ?? []);
     setParameters(tool.parameters ?? []);
+    setSql(tool.sql ?? "");
     setSaved(false);
     setStatus(null);
-  }, [tool]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool?.id]);
 
   const idValid = ID_RE.test(id);
   const isRead = category === "READ" || category === "AGGREGATE";
@@ -68,6 +72,7 @@ export function ToolEditor({ tool, onSaved }: Props) {
     category,
     source_ids: sourceIds,
     parameters,
+    sql: sql || null,
     ...(isRead ? { filter_groups: filterGroups, return_fields: returnFields } : { api_mapping: apiMapping }),
   });
 
@@ -85,8 +90,30 @@ export function ToolEditor({ tool, onSaved }: Props) {
   const handleSave = async () => {
     setStatus(null);
     try {
-      const toolName = tool ? "elliot_update_tool" : "elliot_create_tool";
-      await callTool(toolName, { tool: buildPayload() });
+      if (tool) {
+        // Update: patch only the fields present in this form
+        const patch: Record<string, unknown> = {
+          name,
+          description,
+          category,
+          source_ids: sourceIds,
+          parameters,
+          ...(isRead
+            ? { filter_groups: filterGroups, return_fields: returnFields }
+            : { api_mapping: apiMapping }),
+        };
+        if (sql) patch.sql = sql;
+        await callTool("elliot_update_tool", { tool_id: tool.id, patch });
+      } else {
+        // Create: pass flat args that elliot_create_tool expects
+        await callTool("elliot_create_tool", {
+          name: id,
+          description,
+          category,
+          sql: sql || "",
+          parameters,
+        });
+      }
       setSaved(true);
       setStatus({ type: "ok", message: "Saved ✓" });
       onSaved();
@@ -182,6 +209,23 @@ export function ToolEditor({ tool, onSaved }: Props) {
           )}
         </div>
       </div>
+
+      {isRead && (
+        <div>
+          <label className="text-xs font-medium text-muted-foreground">
+            SQL{" "}
+            <span className="text-xs font-normal opacity-60">
+              (use :param_name for parameters)
+            </span>
+          </label>
+          <Textarea
+            value={sql}
+            onChange={(e) => setSql(e.target.value)}
+            placeholder="SELECT * FROM your_table WHERE (:filter IS NULL OR name = :filter) LIMIT 50"
+            className="mt-1 text-xs font-mono min-h-[80px]"
+          />
+        </div>
+      )}
 
       <div>
         <div className="flex items-center justify-between mb-2">

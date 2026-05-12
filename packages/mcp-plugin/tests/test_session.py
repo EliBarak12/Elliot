@@ -85,6 +85,23 @@ def test_save_and_load_tool_sql(session: ElliotSession, tmp_path: Path):
     assert restored.tool_sql["total_revenue"] == 'SELECT SUM(amount) AS total FROM "orders"'
 
 
+def test_save_and_load_skills(session: ElliotSession, tmp_path: Path):
+    from elliot_core.types.tool import SkillDefinition, SkillStep
+
+    skill = SkillDefinition(
+        id="my_skill",
+        name="My skill",
+        description="A skill",
+        steps=[SkillStep(alias="step1", tool_id="list_items", params={})],
+    )
+    session.registry.add_skill(skill)
+    session.save()
+
+    restored = ElliotSession(cwd=str(tmp_path))
+    restored.load()
+    assert restored.registry.get_skill("my_skill") is not None
+
+
 def test_load_session_without_tool_sql_key(session: ElliotSession, tmp_path: Path):
     # Older sessions saved before tool_sql was added should load without error
     session.save()

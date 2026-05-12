@@ -31,7 +31,10 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
     ) -> dict:  # type: ignore[type-arg]
         """Define a new SQL-backed business tool and register it in the session."""
         try:
-            mapped_category = _CATEGORY_MAP.get(category.lower(), "READ")
+            if category.lower() not in _CATEGORY_MAP:
+                valid = ", ".join(sorted(_CATEGORY_MAP))
+                return {"error": f"Unknown category '{category}'. Valid: {valid}"}
+            mapped_category = _CATEGORY_MAP[category.lower()]
             source_ids = list(session.sources.keys())
             tool = ToolDefinition.model_validate(
                 {
@@ -112,6 +115,19 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
+    def elliot_validate_tool(tool: dict) -> dict:  # type: ignore[type-arg]
+        """Validate a tool definition without saving it to the registry."""
+        try:
+            from elliot_core.tools.validator import validate_tool_definition
+
+            validate_tool_definition(tool)
+            return {"valid": True}
+        except ElliotError as exc:
+            return {"valid": False, "error": exc.message}
+        except Exception as exc:
+            return {"valid": False, "error": str(exc)}
+
+    @mcp.tool()
     def elliot_preview_tool(tool_id: str, params: dict) -> dict:  # type: ignore[type-arg]
         """Execute a tool's SQL against current SQLite data and return rows."""
         try:
@@ -121,7 +137,10 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             sql = session.tool_sql.get(tool_id)
             if not sql:
                 return {"error": f"No SQL defined for tool: {tool_id}"}
-            rows = session.engine.query(sql, params or {})
+            # Pre-fill all declared parameters with None so optional params don't cause bind errors
+            null_filled: dict[str, object] = {p.name: None for p in tool.parameters}
+            null_filled.update(params or {})
+            rows = session.engine.query(sql, null_filled)
             return {"rows": rows, "row_count": len(rows)}
         except ElliotError as exc:
             return to_mcp_error_content(exc)

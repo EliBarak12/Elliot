@@ -131,3 +131,24 @@ def test_no_tools_returns_empty_issues() -> None:
         tools=[],
     )
     assert lint_connector(config) == []
+
+
+def test_secret_in_url_is_error() -> None:
+    from elliot_core.types.source import AuthConfig, SourceConfig
+
+    source = SourceConfig(
+        id="leaky",
+        name="Leaky API",
+        type="rest",
+        url="https://api.example.com?key=supersecret",
+        auth=AuthConfig(type="api_key", secret_key="supersecret"),
+    )
+    config = ConnectorConfig(
+        name="Test",
+        slug="test",
+        version="1.0.0",
+        sources=[source],
+        tools=[],
+    )
+    issues = lint_connector(config)
+    assert any(i.code == "SECRET_IN_URL" for i in issues)

@@ -90,3 +90,74 @@ def test_return_field_aggregation_default():
     rf = ReturnField(field="products_api.price")
     assert rf.aggregation == "none"
     assert rf.alias is None
+
+
+# --- schema_gen coverage ---
+
+
+def test_schema_gen_date_param_format():
+    from elliot_core.connector.schema_gen import to_mcp_tool_schema
+
+    tool = ToolDefinition(
+        **{
+            **SIMPLE_TOOL,
+            "parameters": [
+                {"name": "since", "type": "date", "required": False, "description": "Start date"}
+            ],
+        }
+    )
+    schema = to_mcp_tool_schema(tool)
+    props = schema["inputSchema"]["properties"]
+    assert props["since"]["format"] == "date"
+
+
+def test_schema_gen_enum_param():
+    from elliot_core.connector.schema_gen import to_mcp_tool_schema
+
+    tool = ToolDefinition(
+        **{
+            **SIMPLE_TOOL,
+            "parameters": [
+                {
+                    "name": "status",
+                    "type": "string",
+                    "required": True,
+                    "description": "Status",
+                    "enum": ["active", "inactive"],
+                }
+            ],
+        }
+    )
+    schema = to_mcp_tool_schema(tool)
+    assert schema["inputSchema"]["properties"]["status"]["enum"] == ["active", "inactive"]
+
+
+def test_schema_gen_output_schema():
+    from elliot_core.connector.schema_gen import to_mcp_tool_schema
+
+    output = {"type": "object", "properties": {"id": {"type": "integer"}}}
+    tool = ToolDefinition(**{**SIMPLE_TOOL, "output_schema": output})
+    schema = to_mcp_tool_schema(tool)
+    assert schema["outputSchema"] == output
+
+
+# --- connector validator ---
+
+
+def test_read_tool_without_source_or_sql_raises():
+    with pytest.raises((PydanticValidationError, ValueError)):
+        ConnectorConfig(
+            name="X",
+            slug="x",
+            version="1.0.0",
+            sources=[SIMPLE_SOURCE],
+            tools=[
+                {
+                    "id": "bare",
+                    "name": "Bare",
+                    "description": "No source or sql",
+                    "category": "READ",
+                    "source_ids": [],
+                }
+            ],
+        )

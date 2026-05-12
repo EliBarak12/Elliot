@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
   CheckCircle2,
@@ -21,6 +21,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Separator } from "@/components/ui/separator";
 import { callTool } from "@/lib/mcp-client";
 import { useTools } from "@/hooks/useTools";
+import { useSkills } from "@/hooks/useSkills";
 import { cn } from "@/lib/utils";
 import type { ToolDefinition, SkillDefinition, ConnectorConfig } from "@/types/api";
 
@@ -86,11 +87,8 @@ export default function ConnectorPage() {
   const { data: toolsRaw } = useTools();
   const tools = Array.isArray(toolsRaw) ? (toolsRaw as ToolDefinition[]) : [];
 
-  const { data: skillsRaw } = useQuery({
-    queryKey: ["skills"],
-    queryFn: () => callTool("elliot_list_skills", {}),
-  });
-  const skills = (skillsRaw as { skills?: SkillDefinition[] } | undefined)?.skills ?? [];
+  const { data: skillsRaw } = useSkills();
+  const skills = Array.isArray(skillsRaw) ? (skillsRaw as SkillDefinition[]) : [];
 
   const [selectedToolIds, setSelectedToolIds] = useState<Set<string>>(new Set());
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(new Set());

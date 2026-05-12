@@ -35,7 +35,10 @@ def register_eval_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
             raw = json.loads(suite_path.read_text(encoding="utf-8"))
             valid_fields = {f.name for f in dataclasses.fields(EvalCase)}
-            cases = [EvalCase(**{k: v for k, v in c.items() if k in valid_fields}) for c in raw.get("cases", [])]
+            cases = [
+                EvalCase(**{k: v for k, v in c.items() if k in valid_fields})
+                for c in raw.get("cases", [])
+            ]
             suite = EvalSuite(id=raw["id"], name=raw.get("name", suite_id), cases=cases)
 
             if session.connector is None:

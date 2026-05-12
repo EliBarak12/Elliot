@@ -1,9 +1,19 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { Database, FileText, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { callTool } from "@/lib/mcp-client";
+import { cn } from "@/lib/utils";
 
 type SourceType = "rest" | "file" | "postgres";
 
@@ -11,6 +21,12 @@ interface Props {
   open: boolean;
   onClose: () => void;
 }
+
+const SOURCE_OPTIONS: { value: SourceType; label: string; icon: typeof Database; hint: string }[] = [
+  { value: "rest", label: "HTTP API", icon: Globe, hint: "REST or JSON endpoint" },
+  { value: "file", label: "File", icon: FileText, hint: "CSV or JSON file on disk" },
+  { value: "postgres", label: "Postgres", icon: Database, hint: "PostgreSQL connection string" },
+];
 
 export function AddSourceDialog({ open, onClose }: Props) {
   const queryClient = useQueryClient();
@@ -20,8 +36,6 @@ export function AddSourceDialog({ open, onClose }: Props) {
   const [path, setPath] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  if (!open) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,64 +63,103 @@ export function AddSourceDialog({ open, onClose }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-background rounded-lg border shadow-lg w-full max-w-md p-6">
-        <h2 className="text-lg font-semibold mb-4">Add Source</h2>
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add a source</DialogTitle>
+          <DialogDescription>
+            Discover the schema of an API, file, or database to power agent tools.
+          </DialogDescription>
+        </DialogHeader>
 
-        <div className="flex gap-2 mb-4">
-          {(["rest", "file", "postgres"] as SourceType[]).map((t) => (
-            <button key={t} onClick={() => setSourceType(t)} type="button">
-              <Badge variant={sourceType === t ? "default" : "outline"} className="cursor-pointer">
-                {t === "rest" ? "API" : t === "file" ? "File" : "DB"}
-              </Badge>
-            </button>
-          ))}
-        </div>
+        <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+              Source type
+            </Label>
+            <div className="grid grid-cols-3 gap-2">
+              {SOURCE_OPTIONS.map(({ value, label, icon: Icon, hint }) => {
+                const active = sourceType === value;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setSourceType(value)}
+                    className={cn(
+                      "flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-all duration-200 ease-apple",
+                      active
+                        ? "border-primary bg-primary/5 shadow-sm ring-1 ring-primary/20"
+                        : "border-input bg-card hover:bg-accent/50"
+                    )}
+                  >
+                    <Icon
+                      className={cn(
+                        "h-4 w-4",
+                        active ? "text-primary" : "text-muted-foreground"
+                      )}
+                    />
+                    <span className="text-sm font-medium">{label}</span>
+                    <span className="text-2xs text-muted-foreground">{hint}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
-        <form onSubmit={(e) => void handleSubmit(e)} className="space-y-3">
-          <Input
-            placeholder="Source name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-          />
-          {sourceType === "rest" && (
+          <div className="space-y-1.5">
+            <Label htmlFor="source-name">Name</Label>
             <Input
-              placeholder="https://api.example.com/data"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              id="source-name"
+              placeholder="e.g. Production DB"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
               required
             />
-          )}
-          {sourceType === "file" && (
-            <Input
-              placeholder="/path/to/file.csv"
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              required
-            />
-          )}
-          {sourceType === "postgres" && (
-            <Input
-              placeholder="postgresql://user:pass@host/db"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              required
-            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="source-target">
+              {sourceType === "file" ? "Path" : sourceType === "postgres" ? "Connection string" : "URL"}
+            </Label>
+            {sourceType === "file" ? (
+              <Input
+                id="source-target"
+                placeholder="/path/to/file.csv"
+                value={path}
+                onChange={(e) => setPath(e.target.value)}
+                required
+              />
+            ) : (
+              <Input
+                id="source-target"
+                placeholder={
+                  sourceType === "rest"
+                    ? "https://api.example.com/data"
+                    : "postgresql://user:pass@host/db"
+                }
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                required
+              />
+            )}
+          </div>
+
+          {error && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {error}
+            </div>
           )}
 
-          {error && <p className="text-sm text-destructive">{error}</p>}
-
-          <div className="flex gap-2 justify-end pt-2">
+          <DialogFooter className="pt-2">
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={loading}>
-              {loading ? "Adding…" : "Add Source"}
+            <Button type="submit" disabled={loading || !name.trim()}>
+              {loading ? "Discovering…" : "Add source"}
             </Button>
-          </div>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

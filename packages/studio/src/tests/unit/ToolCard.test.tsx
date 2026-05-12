@@ -26,10 +26,10 @@ describe("ToolCard", () => {
   });
 
   it.each([
-    ["READ", "bg-blue-100"],
-    ["WRITE", "bg-orange-100"],
-    ["ACTION", "bg-red-100"],
-    ["AGGREGATE", "bg-purple-100"],
+    ["READ", "bg-primary/10"],
+    ["WRITE", "bg-warning/10"],
+    ["ACTION", "bg-destructive/10"],
+    ["AGGREGATE", "bg-secondary"],
   ] as const)("shows correct badge style for %s category", (category, expectedClass) => {
     render(<ToolCard tool={makeTool({ category })} selected={false} onClick={vi.fn()} />);
     const badge = screen.getByText(category);

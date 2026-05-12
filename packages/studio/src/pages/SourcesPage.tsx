@@ -1,9 +1,30 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  ChevronDown,
+  ChevronRight,
+  Database,
+  FileText,
+  Globe,
+  MoreHorizontal,
+  Plus,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
+import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useSources } from "@/hooks/useSources";
 import { callTool } from "@/lib/mcp-client";
 import { AddSourceDialog } from "@/components/sources/AddSourceDialog";
@@ -21,6 +42,12 @@ interface SourceSummary {
 interface ColumnInfo {
   name: string;
   type: string;
+}
+
+function sourceIcon(type: string) {
+  if (type === "rest") return Globe;
+  if (type === "file") return FileText;
+  return Database;
 }
 
 export default function SourcesPage() {
@@ -53,79 +80,133 @@ export default function SourcesPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold">Sources</h2>
-        <Button onClick={() => setDialogOpen(true)}>Add Source</Button>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Sources"
+        description="Discover and manage the data sources your agents can query."
+        actions={
+          <Button onClick={() => setDialogOpen(true)} size="sm" className="gap-1.5">
+            <Plus className="h-3.5 w-3.5" />
+            Add source
+          </Button>
+        }
+      />
 
-      {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
-
-      {sources.length === 0 && !isLoading && (
-        <Card>
-          <CardContent className="py-8 text-center space-y-3">
-            <p className="text-sm text-muted-foreground">No sources loaded yet.</p>
-            <Button size="sm" onClick={() => setDialogOpen(true)}>
-              Add your first source
-            </Button>
-          </CardContent>
-        </Card>
+      {isLoading && (
+        <div className="space-y-3">
+          {[1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-20 w-full" />
+          ))}
+        </div>
       )}
 
-      {sources.map((source) => (
-        <Card key={source.id}>
-          <CardHeader className="pb-2">
-            <div className="flex items-center gap-2">
-              <CardTitle className="text-base">{source.name}</CardTitle>
-              <Badge variant="outline" className="text-xs">
-                {source.type}
-              </Badge>
-              {source.table_count !== undefined && (
-                <span className="text-xs text-muted-foreground">{source.table_count} tables</span>
-              )}
-              {source.row_count !== undefined && (
-                <span className="text-xs text-muted-foreground">{source.row_count} rows</span>
-              )}
-              <div className="ml-auto flex gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setExpandedId(expandedId === source.id ? null : source.id)}
-                >
-                  {expandedId === source.id ? "Collapse" : "Expand"}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void handleRefresh(source.id)}
-                >
-                  Refresh
-                </Button>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  onClick={() => void handleRemove(source.id)}
-                >
-                  Remove
-                </Button>
-              </div>
-            </div>
-          </CardHeader>
+      {!isLoading && sources.length === 0 && (
+        <EmptyState
+          icon={Database}
+          title="No sources yet"
+          description="Connect a database, file, or API to start building tools that agents can call."
+          action={
+            <Button onClick={() => setDialogOpen(true)} size="sm" className="gap-1.5">
+              <Plus className="h-3.5 w-3.5" />
+              Add your first source
+            </Button>
+          }
+        />
+      )}
 
-          {expandedId === source.id && source.columns && (
-            <CardContent>
-              <div className="flex flex-wrap gap-2">
-                {source.columns.map((col) => (
-                  <div key={col.name} className="flex items-center gap-1 text-xs">
-                    <span>{col.name}</span>
-                    <Badge variant="secondary">{col.type}</Badge>
+      <div className="space-y-3">
+        {sources.map((source) => {
+          const expanded = expandedId === source.id;
+          const Icon = sourceIcon(source.type);
+          return (
+            <Card key={source.id} className="overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setExpandedId(expanded ? null : source.id)}
+                className="flex w-full items-center gap-4 px-5 py-4 text-left hover:bg-muted/40 transition-colors"
+              >
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary shrink-0">
+                  <Icon className="h-4 w-4" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-semibold text-foreground truncate">
+                      {source.name}
+                    </span>
+                    <Badge variant="muted" className="uppercase">
+                      {source.type}
+                    </Badge>
                   </div>
-                ))}
-              </div>
-            </CardContent>
-          )}
-        </Card>
-      ))}
+                  <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+                    {source.table_count !== undefined && (
+                      <span className="tabular-nums">{source.table_count} tables</span>
+                    )}
+                    {source.row_count !== undefined && (
+                      <span className="tabular-nums">
+                        {source.row_count.toLocaleString()} rows
+                      </span>
+                    )}
+                    {source.columns && (
+                      <span className="tabular-nums">{source.columns.length} columns</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <MoreHorizontal className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                      <DropdownMenuItem onClick={() => void handleRefresh(source.id)}>
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        Refresh schema
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onClick={() => void handleRemove(source.id)}
+                        className="text-destructive focus:text-destructive [&_svg]:text-destructive"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Remove
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  {expanded ? (
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                  )}
+                </div>
+              </button>
+
+              {expanded && source.columns && (
+                <div className="border-t border-border/60 bg-muted/30 px-5 py-4 animate-fade-in-up">
+                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">
+                    Columns
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {source.columns.map((col) => (
+                      <div
+                        key={col.name}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2 py-1 text-2xs"
+                      >
+                        <span className="font-mono font-medium text-foreground">{col.name}</span>
+                        <span className="text-muted-foreground">{col.type}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </Card>
+          );
+        })}
+      </div>
 
       <AddSourceDialog open={dialogOpen} onClose={() => setDialogOpen(false)} />
     </div>

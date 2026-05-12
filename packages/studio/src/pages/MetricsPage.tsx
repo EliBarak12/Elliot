@@ -1,9 +1,15 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Activity, AlertCircle, BarChart3, Gauge, RefreshCw, Timer } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
+import { StatCard } from "@/components/ui/stat-card";
 import { useMetrics } from "@/hooks/useMetrics";
+import { cn } from "@/lib/utils";
 
 interface ToolMetric {
   tool_id: string;
@@ -32,22 +38,25 @@ interface TokenEfficiencyResponse {
   tools: TokenEfficiencyRow[];
 }
 
-function tokenRiskBadge(risk: TokenEfficiencyRow["risk"]) {
-  if (risk === "high") return <Badge variant="destructive" className="text-xs">high</Badge>;
-  if (risk === "medium") return <Badge variant="outline" className="text-xs text-yellow-700 border-yellow-400">medium</Badge>;
-  return <Badge variant="secondary" className="text-xs text-green-700">low</Badge>;
+function tokenRiskVariant(risk: TokenEfficiencyRow["risk"]) {
+  if (risk === "high") return "destructive";
+  if (risk === "medium") return "warning";
+  return "success";
 }
 
 function TokenBar({ avg, max }: { avg: number; max: number }) {
   const barMax = Math.max(max, 1);
   const avgPct = Math.min((avg / barMax) * 100, 100);
-  const color = avg > 1000 ? "bg-red-500" : avg > 300 ? "bg-yellow-500" : "bg-green-500";
+  const tone = avg > 1000 ? "bg-destructive" : avg > 300 ? "bg-warning" : "bg-success";
   return (
-    <div className="flex items-center gap-1.5">
-      <div className="flex-1 h-3 bg-muted rounded overflow-hidden">
-        <div className={`h-full rounded ${color}`} style={{ width: `${avgPct}%` }} />
+    <div className="flex items-center gap-2">
+      <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+        <div
+          className={cn("h-full rounded-full transition-all duration-500 ease-apple", tone)}
+          style={{ width: `${avgPct}%` }}
+        />
       </div>
-      <span className="text-xs w-14 text-right text-muted-foreground">
+      <span className="text-2xs tabular-nums text-muted-foreground w-16 text-right">
         {avg.toFixed(0)}/{max.toFixed(0)}
       </span>
     </div>
@@ -56,20 +65,24 @@ function TokenBar({ avg, max }: { avg: number; max: number }) {
 
 const DATE_RANGES = [7, 14, 30, 90] as const;
 
-function BarChart({ data }: { data: { label: string; value: number }[] }) {
+function CallBar({ data }: { data: { label: string; value: number }[] }) {
   const max = Math.max(...data.map((d) => d.value), 1);
   return (
-    <div className="space-y-1">
+    <div className="space-y-2">
       {data.slice(0, 10).map((item) => (
-        <div key={item.label} className="flex items-center gap-2">
-          <span className="text-xs w-36 truncate text-right">{item.label}</span>
-          <div className="flex-1 h-5 bg-muted rounded overflow-hidden">
+        <div key={item.label} className="flex items-center gap-3">
+          <span className="font-mono text-2xs truncate w-40 text-right text-muted-foreground">
+            {item.label}
+          </span>
+          <div className="flex-1 h-5 bg-muted/60 rounded-md overflow-hidden">
             <div
-              className="h-full bg-primary rounded"
+              className="h-full bg-gradient-to-r from-primary/80 to-primary rounded-md transition-all duration-500 ease-apple"
               style={{ width: `${(item.value / max) * 100}%` }}
             />
           </div>
-          <span className="text-xs w-8 text-right">{item.value}</span>
+          <span className="text-xs tabular-nums w-12 text-right font-medium">
+            {item.value.toLocaleString()}
+          </span>
         </div>
       ))}
     </div>
@@ -98,23 +111,6 @@ export default function MetricsPage() {
     void queryClient.invalidateQueries({ queryKey: ["metrics"] });
   };
 
-  if (isLoading) return <p className="text-sm text-muted-foreground">Loading metrics…</p>;
-
-  if (metrics.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-64 gap-4">
-        <p className="text-muted-foreground">No audit data yet.</p>
-        <p className="text-sm text-muted-foreground">
-          Run some tools from the{" "}
-          <a href="/playground" className="underline hover:text-foreground">
-            Playground
-          </a>{" "}
-          to see metrics here.
-        </p>
-      </div>
-    );
-  }
-
   const totalCalls = metrics.reduce((sum, m) => sum + m.call_count, 0);
   const avgErrorRate =
     metrics.reduce((sum, m) => sum + m.error_rate, 0) / (metrics.length || 1);
@@ -123,136 +119,197 @@ export default function MetricsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <div className="flex gap-1">
-          {DATE_RANGES.map((d) => (
-            <Button
-              key={d}
-              size="sm"
-              variant={days === d ? "default" : "outline"}
-              className="h-7 text-xs"
-              onClick={() => setDays(d)}
-            >
-              {d}d
-            </Button>
-          ))}
-        </div>
-        <Button size="sm" variant="ghost" className="h-7 text-xs ml-auto" onClick={handleRefresh}>
-          Refresh
-        </Button>
-      </div>
-
-      <div className="grid grid-cols-3 gap-4">
-        <Card>
-          <CardHeader className="pb-1">
-            <CardTitle className="text-xs text-muted-foreground">Total calls</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{totalCalls}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-1">
-            <CardTitle className="text-xs text-muted-foreground">Avg error rate</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{(avgErrorRate * 100).toFixed(1)}%</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-1">
-            <CardTitle className="text-xs text-muted-foreground">Avg latency</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{avgLatency.toFixed(0)}ms</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Top tools by call count</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <BarChart
-            data={metrics.map((m) => ({ label: m.tool_id, value: m.call_count }))}
-          />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Tool performance</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b">
-                <th className="text-left py-1 text-xs font-medium text-muted-foreground">Tool</th>
-                <th className="text-right py-1 text-xs font-medium text-muted-foreground">Calls</th>
-                <th className="text-right py-1 text-xs font-medium text-muted-foreground">
-                  Success rate
-                </th>
-                <th className="text-right py-1 text-xs font-medium text-muted-foreground">
-                  Avg latency
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {metrics.map((m) => (
-                <tr key={m.tool_id} className="border-b last:border-0">
-                  <td className="py-1 text-xs font-mono">{m.tool_id}</td>
-                  <td className="text-right py-1 text-xs">{m.call_count}</td>
-                  <td className="text-right py-1 text-xs">
-                    <Badge
-                      variant={m.error_rate > 0.1 ? "destructive" : "secondary"}
-                      className="text-xs"
-                    >
-                      {((1 - m.error_rate) * 100).toFixed(1)}%
-                    </Badge>
-                  </td>
-                  <td className="text-right py-1 text-xs">{m.avg_latency_ms.toFixed(0)}ms</td>
-                </tr>
+      <PageHeader
+        title="Metrics"
+        description="Tool performance, error rates, and token efficiency across your connector."
+        actions={
+          <div className="flex items-center gap-2">
+            <div className="inline-flex items-center gap-0.5 rounded-md bg-muted p-0.5">
+              {DATE_RANGES.map((d) => (
+                <button
+                  key={d}
+                  onClick={() => setDays(d)}
+                  className={cn(
+                    "px-2.5 h-7 text-xs font-medium rounded transition-all",
+                    days === d
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {d}d
+                </button>
               ))}
-            </tbody>
-          </table>
-        </CardContent>
-      </Card>
+            </div>
+            <Button size="sm" variant="outline" onClick={handleRefresh} className="gap-1.5">
+              <RefreshCw className="h-3.5 w-3.5" />
+              Refresh
+            </Button>
+          </div>
+        }
+      />
+
+      {isLoading && (
+        <div className="grid grid-cols-3 gap-4">
+          <Skeleton className="h-28" />
+          <Skeleton className="h-28" />
+          <Skeleton className="h-28" />
+        </div>
+      )}
+
+      {!isLoading && metrics.length === 0 && (
+        <EmptyState
+          icon={BarChart3}
+          title="No audit data yet"
+          description="Run some tools from the Playground to start populating metrics."
+        />
+      )}
+
+      {!isLoading && metrics.length > 0 && (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <StatCard
+              label="Total calls"
+              value={totalCalls.toLocaleString()}
+              icon={Activity}
+              tone="primary"
+              hint={`Past ${days} days`}
+            />
+            <StatCard
+              label="Error rate"
+              value={`${(avgErrorRate * 100).toFixed(1)}%`}
+              icon={AlertCircle}
+              tone={avgErrorRate > 0.05 ? "destructive" : "success"}
+              hint="Average across tools"
+            />
+            <StatCard
+              label="Avg latency"
+              value={`${avgLatency.toFixed(0)}ms`}
+              icon={Timer}
+              tone={avgLatency > 500 ? "warning" : "default"}
+              hint="Across all tools"
+            />
+          </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Top tools by call count</CardTitle>
+              <CardDescription>The most-invoked tools over the selected window.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <CallBar data={metrics.map((m) => ({ label: m.tool_id, value: m.call_count }))} />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Tool performance</CardTitle>
+              <CardDescription>Per-tool calls, success rate, and latency.</CardDescription>
+            </CardHeader>
+            <CardContent className="px-0 pb-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border/60">
+                      <th className="text-left py-2 px-5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
+                        Tool
+                      </th>
+                      <th className="text-right py-2 px-5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
+                        Calls
+                      </th>
+                      <th className="text-right py-2 px-5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
+                        Success
+                      </th>
+                      <th className="text-right py-2 px-5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
+                        Avg latency
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {metrics.map((m) => (
+                      <tr
+                        key={m.tool_id}
+                        className="border-b border-border/40 last:border-0 hover:bg-muted/30"
+                      >
+                        <td className="py-2.5 px-5 text-xs font-mono">{m.tool_id}</td>
+                        <td className="text-right py-2.5 px-5 text-xs tabular-nums">
+                          {m.call_count.toLocaleString()}
+                        </td>
+                        <td className="text-right py-2.5 px-5">
+                          <Badge
+                            variant={m.error_rate > 0.1 ? "destructive" : "success"}
+                            className="tabular-nums"
+                          >
+                            {((1 - m.error_rate) * 100).toFixed(1)}%
+                          </Badge>
+                        </td>
+                        <td className="text-right py-2.5 px-5 text-xs tabular-nums">
+                          {m.avg_latency_ms.toFixed(0)}ms
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
 
       {efficiencyTools.length > 0 && (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Token efficiency</CardTitle>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-3">
+              <div className="space-y-1">
+                <CardTitle className="flex items-center gap-2">
+                  <Gauge className="h-4 w-4 text-primary" />
+                  Token efficiency
+                </CardTitle>
+                <CardDescription>
+                  Tools that return large payloads are flagged for context-window optimization.
+                </CardDescription>
+              </div>
+            </div>
           </CardHeader>
-          <CardContent>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left py-1 text-xs font-medium text-muted-foreground">Tool</th>
-                  <th className="text-left py-1 text-xs font-medium text-muted-foreground w-40">
-                    Avg / Max tokens
-                  </th>
-                  <th className="text-right py-1 text-xs font-medium text-muted-foreground">Risk</th>
-                  <th className="text-left py-1 text-xs font-medium text-muted-foreground pl-3">
-                    Suggestion
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {efficiencyTools.map((row) => (
-                  <tr key={row.tool_id} className="border-b last:border-0">
-                    <td className="py-1.5 text-xs font-mono pr-3">{row.tool_id}</td>
-                    <td className="py-1.5 w-48">
-                      <TokenBar avg={row.avg_tokens} max={row.max_tokens} />
-                    </td>
-                    <td className="text-right py-1.5 pl-3">{tokenRiskBadge(row.risk)}</td>
-                    <td className="py-1.5 text-xs text-muted-foreground pl-3">
-                      {row.suggestion ?? "—"}
-                    </td>
+          <CardContent className="px-0 pb-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border/60">
+                    <th className="text-left py-2 px-5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
+                      Tool
+                    </th>
+                    <th className="text-left py-2 px-5 text-2xs font-medium uppercase tracking-wider text-muted-foreground w-56">
+                      Avg / max tokens
+                    </th>
+                    <th className="text-center py-2 px-5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
+                      Risk
+                    </th>
+                    <th className="text-left py-2 px-5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
+                      Suggestion
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {efficiencyTools.map((row) => (
+                    <tr
+                      key={row.tool_id}
+                      className="border-b border-border/40 last:border-0 hover:bg-muted/30"
+                    >
+                      <td className="py-3 px-5 text-xs font-mono">{row.tool_id}</td>
+                      <td className="py-3 px-5">
+                        <TokenBar avg={row.avg_tokens} max={row.max_tokens} />
+                      </td>
+                      <td className="text-center py-3 px-5">
+                        <Badge variant={tokenRiskVariant(row.risk)}>{row.risk}</Badge>
+                      </td>
+                      <td className="py-3 px-5 text-xs text-muted-foreground">
+                        {row.suggestion ?? "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </CardContent>
         </Card>
       )}

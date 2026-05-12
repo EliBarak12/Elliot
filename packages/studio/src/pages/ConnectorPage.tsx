@@ -1,11 +1,27 @@
 import { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Copy,
+  Download,
+  Info,
+  Package,
+  Play,
+  ShieldCheck,
+} from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Separator } from "@/components/ui/separator";
 import { callTool } from "@/lib/mcp-client";
 import { useTools } from "@/hooks/useTools";
+import { cn } from "@/lib/utils";
 import type { ToolDefinition, SkillDefinition, ConnectorConfig } from "@/types/api";
 
 interface LintIssue {
@@ -14,35 +30,6 @@ interface LintIssue {
   tool_id: string | null;
   message: string;
   suggestion: string;
-}
-
-function LintPanel({ issues }: { issues: LintIssue[] }) {
-  if (issues.length === 0) {
-    return (
-      <p className="text-xs text-green-700 px-1">No issues — connector looks good.</p>
-    );
-  }
-  return (
-    <div className="space-y-1">
-      {issues.map((issue, i) => (
-        <div key={i} className="flex items-start gap-2 text-xs py-1 border-b last:border-0">
-          <Badge
-            variant={issue.severity === "ERROR" ? "destructive" : "outline"}
-            className="text-xs shrink-0 mt-0.5"
-          >
-            {issue.severity}
-          </Badge>
-          {issue.tool_id && (
-            <span className="font-mono text-muted-foreground shrink-0">{issue.tool_id}</span>
-          )}
-          <div>
-            <p className="font-medium">{issue.message}</p>
-            <p className="text-muted-foreground">{issue.suggestion}</p>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
 }
 
 interface ConnectionConfig {
@@ -55,6 +42,43 @@ interface RuntimeInfo {
   url?: string;
   running?: boolean;
   connection_config?: ConnectionConfig;
+}
+
+const SEVERITY_VARIANT: Record<LintIssue["severity"], "destructive" | "warning" | "muted"> = {
+  ERROR: "destructive",
+  WARN: "warning",
+  INFO: "muted",
+};
+
+function LintPanel({ issues }: { issues: LintIssue[] }) {
+  if (issues.length === 0) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-success/10 text-success">
+        <CheckCircle2 className="h-4 w-4 shrink-0" />
+        <span className="text-sm">No issues — connector looks good.</span>
+      </div>
+    );
+  }
+  return (
+    <div className="divide-y divide-border/60">
+      {issues.map((issue, i) => (
+        <div key={i} className="flex items-start gap-3 py-2.5 first:pt-0 last:pb-0">
+          <Badge variant={SEVERITY_VARIANT[issue.severity]} className="shrink-0 mt-0.5">
+            {issue.severity}
+          </Badge>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="text-sm font-medium text-foreground">{issue.message}</p>
+              {issue.tool_id && (
+                <span className="font-mono text-2xs text-muted-foreground">{issue.tool_id}</span>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">{issue.suggestion}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default function ConnectorPage() {
@@ -94,24 +118,35 @@ export default function ConnectorPage() {
   }, []);
   const [lintIssues, setLintIssues] = useState<LintIssue[]>([]);
   const [lintLoading, setLintLoading] = useState(false);
+  const [linted, setLinted] = useState(false);
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<{ type: "ok" | "error"; message: string } | null>(null);
 
-  const handleNameChange = (v: string) => { setConnectorName(v); setDirty(true); };
-  const handleSlugChange = (v: string) => { setConnectorSlug(v); setDirty(true); };
+  const handleNameChange = (v: string) => {
+    setConnectorName(v);
+    setDirty(true);
+  };
+  const handleSlugChange = (v: string) => {
+    setConnectorSlug(v);
+    setDirty(true);
+  };
 
   const toggleTool = (id: string) =>
     setSelectedToolIds((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      setDirty(true);
       return next;
     });
 
   const toggleSkill = (id: string) =>
     setSelectedSkillIds((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      setDirty(true);
       return next;
     });
 
@@ -134,7 +169,10 @@ export default function ConnectorPage() {
       const info = infoRes as { connector?: ConnectorConfig };
       setBuiltConnector(info.connector ?? null);
       setDirty(false);
-      setStatus({ type: "ok", message: `Connector built ✓ (${br.tool_count ?? 0} tools)` });
+      setStatus({
+        type: "ok",
+        message: `Connector built · ${br.tool_count ?? 0} tools`,
+      });
       void queryClient.invalidateQueries({ queryKey: ["session"] });
     } catch (err) {
       setStatus({ type: "error", message: err instanceof Error ? err.message : String(err) });
@@ -152,6 +190,7 @@ export default function ConnectorPage() {
       } else {
         setLintIssues(data.issues ?? []);
       }
+      setLinted(true);
     } catch {
       setLintIssues([]);
     } finally {
@@ -162,7 +201,7 @@ export default function ConnectorPage() {
   const handleExport = async () => {
     try {
       await callTool("elliot_export_connector", { path: `${connectorSlug}.connector.json` });
-      setStatus({ type: "ok", message: "Exported ✓" });
+      setStatus({ type: "ok", message: "Exported" });
     } catch (err) {
       setStatus({ type: "error", message: err instanceof Error ? err.message : String(err) });
     }
@@ -193,178 +232,272 @@ export default function ConnectorPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const errorCount = lintIssues.filter((i) => i.severity === "ERROR").length;
+  const warnCount = lintIssues.filter((i) => i.severity === "WARN").length;
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold">
-          Connector
-          {dirty && (
-            <Badge variant="outline" className="ml-2 text-xs text-yellow-700 border-yellow-400">
-              Unsaved
-            </Badge>
-          )}
-        </h2>
-        <Button size="sm" variant="outline" onClick={() => void handleLint()} disabled={lintLoading}>
-          {lintLoading ? "Linting…" : "Lint"}
-        </Button>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="text-xs font-medium text-muted-foreground">Connector name</label>
-          <Input
-            value={connectorName}
-            onChange={(e) => handleNameChange(e.target.value)}
-            className="mt-1 h-8 text-sm"
-          />
-        </div>
-        <div>
-          <label className="text-xs font-medium text-muted-foreground">Slug</label>
-          <Input
-            value={connectorSlug}
-            onChange={(e) => handleSlugChange(e.target.value)}
-            className="mt-1 h-8 text-sm"
-          />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Tools</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-1">
-            {tools.map((tool) => (
-              <label key={tool.id} className="flex items-center gap-2 text-sm cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={selectedToolIds.has(tool.id)}
-                  onChange={() => toggleTool(tool.id)}
-                />
-                <span className="truncate">{tool.name}</span>
-                <Badge variant="outline" className="text-xs ml-auto">
-                  {tool.category}
-                </Badge>
-              </label>
-            ))}
-            {tools.length === 0 && (
-              <p className="text-xs text-muted-foreground">No tools available</p>
+      <PageHeader
+        title="Connector"
+        description="Bundle tools and skills into a connector, lint for quality, then start the runtime."
+        actions={
+          <div className="flex items-center gap-2">
+            {dirty && (
+              <Badge variant="warning" className="gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-warning animate-pulse" />
+                Unsaved
+              </Badge>
             )}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void handleLint()}
+              disabled={lintLoading}
+              className="gap-1.5"
+            >
+              <ShieldCheck className="h-3.5 w-3.5" />
+              {lintLoading ? "Linting…" : "Lint"}
+            </Button>
+            <Button size="sm" onClick={() => void handleBuild()} className="gap-1.5">
+              <Package className="h-3.5 w-3.5" />
+              Build connector
+            </Button>
+          </div>
+        }
+      />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Identity</CardTitle>
+          <CardDescription>Name and slug for the bundled connector.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="connector-name">Name</Label>
+            <Input
+              id="connector-name"
+              value={connectorName}
+              onChange={(e) => handleNameChange(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="connector-slug">Slug</Label>
+            <Input
+              id="connector-slug"
+              value={connectorSlug}
+              onChange={(e) => handleSlugChange(e.target.value)}
+              className="font-mono"
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle>Tools</CardTitle>
+              <Badge variant="muted">{selectedToolIds.size} / {tools.length}</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="px-2 pb-2">
+            <div className="max-h-80 overflow-y-auto scrollbar-thin">
+              {tools.length === 0 && (
+                <p className="text-xs text-muted-foreground px-3 py-4 text-center">
+                  No tools available
+                </p>
+              )}
+              {tools.map((tool) => {
+                const checked = selectedToolIds.has(tool.id);
+                return (
+                  <label
+                    key={tool.id}
+                    className={cn(
+                      "flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer transition-colors",
+                      "hover:bg-muted/40"
+                    )}
+                  >
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={() => toggleTool(tool.id)}
+                    />
+                    <span className="flex-1 text-sm truncate">{tool.name}</span>
+                    <Badge variant="muted" className="shrink-0">
+                      {tool.category}
+                    </Badge>
+                  </label>
+                );
+              })}
+            </div>
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Skills</CardTitle>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle>Skills</CardTitle>
+              <Badge variant="muted">{selectedSkillIds.size} / {skills.length}</Badge>
+            </div>
           </CardHeader>
-          <CardContent className="space-y-1">
-            {skills.map((skill) => (
-              <label key={skill.id} className="flex items-center gap-2 text-sm cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={selectedSkillIds.has(skill.id)}
-                  onChange={() => toggleSkill(skill.id)}
-                />
-                <span className="truncate">{skill.name}</span>
-              </label>
-            ))}
-            {skills.length === 0 && (
-              <p className="text-xs text-muted-foreground">No skills available</p>
-            )}
+          <CardContent className="px-2 pb-2">
+            <div className="max-h-80 overflow-y-auto scrollbar-thin">
+              {skills.length === 0 && (
+                <p className="text-xs text-muted-foreground px-3 py-4 text-center">
+                  No skills available
+                </p>
+              )}
+              {skills.map((skill) => {
+                const checked = selectedSkillIds.has(skill.id);
+                return (
+                  <label
+                    key={skill.id}
+                    className="flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer transition-colors hover:bg-muted/40"
+                  >
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={() => toggleSkill(skill.id)}
+                    />
+                    <span className="flex-1 text-sm truncate">{skill.name}</span>
+                    <Badge variant="muted" className="shrink-0">
+                      {skill.steps.length} steps
+                    </Badge>
+                  </label>
+                );
+              })}
+            </div>
           </CardContent>
         </Card>
-      </div>
-
-      <div className="flex gap-2">
-        <Button onClick={() => void handleBuild()}>Build Connector</Button>
-        {builtConnector && (
-          <>
-            <Button variant="outline" onClick={() => void handleExport()}>
-              Export
-            </Button>
-            <Button variant="outline" onClick={() => void handleStartRuntime()}>
-              Start Runtime
-            </Button>
-            <Button variant="outline" onClick={() => void handleGetConnectionConfig()}>
-              Connection Config
-            </Button>
-          </>
-        )}
       </div>
 
       {status && (
         <div
-          className={`text-xs px-3 py-2 rounded border ${
+          className={cn(
+            "flex items-center gap-2 rounded-md border px-3 py-2 text-sm",
             status.type === "ok"
-              ? "bg-green-50 border-green-200 text-green-800"
-              : "bg-destructive/10 border-destructive/20 text-destructive"
-          }`}
+              ? "border-success/30 bg-success/10 text-success"
+              : "border-destructive/30 bg-destructive/10 text-destructive"
+          )}
         >
-          {status.message}
+          {status.type === "ok" ? (
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+          ) : (
+            <AlertCircle className="h-4 w-4 shrink-0" />
+          )}
+          <span>{status.message}</span>
         </div>
       )}
 
       {builtConnector && (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Built connector</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-1 text-sm">
-            <p>
-              <span className="font-medium">Name:</span> {builtConnector.name}
-            </p>
-            <p>
-              <span className="font-medium">Version:</span> {builtConnector.version}
-            </p>
-            <p>
-              <span className="font-medium">Tools:</span> {builtConnector.tools?.length ?? 0}
-            </p>
-            <p>
-              <span className="font-medium">Skills:</span> {builtConnector.skills?.length ?? 0}
-            </p>
-          </CardContent>
-        </Card>
-      )}
-
-      {runtimeInfo?.connection_config && (
-        <Card>
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm">Connection config</CardTitle>
-              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => void handleCopy()}>
-                {copied ? "Copied!" : "Copy"}
-              </Button>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-success" />
+                  {builtConnector.name}
+                </CardTitle>
+                <CardDescription>
+                  v{builtConnector.version} · {builtConnector.tools?.length ?? 0} tools ·{" "}
+                  {builtConnector.skills?.length ?? 0} skills
+                </CardDescription>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void handleExport()}
+                  className="gap-1.5"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Export
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void handleStartRuntime()}
+                  className="gap-1.5"
+                >
+                  <Play className="h-3.5 w-3.5" />
+                  Start runtime
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void handleGetConnectionConfig()}
+                  className="gap-1.5"
+                >
+                  <Info className="h-3.5 w-3.5" />
+                  Connection config
+                </Button>
+              </div>
             </div>
           </CardHeader>
-          <CardContent>
-            <pre className="text-xs bg-muted rounded p-3 overflow-x-auto">
-              {JSON.stringify(runtimeInfo.connection_config, null, 2)}
-            </pre>
-          </CardContent>
+
+          {runtimeInfo?.url && (
+            <CardContent>
+              <Separator className="mb-4" />
+              <div className="flex items-center gap-2 text-sm">
+                <span
+                  className={cn(
+                    "h-2 w-2 rounded-full",
+                    runtimeInfo.running ? "bg-success animate-pulse" : "bg-muted-foreground/50"
+                  )}
+                />
+                <span className="text-muted-foreground">Runtime running at</span>
+                <span className="font-mono text-foreground">{runtimeInfo.url}</span>
+              </div>
+            </CardContent>
+          )}
+
+          {runtimeInfo?.connection_config && (
+            <CardContent>
+              <Separator className="mb-4" />
+              <div className="flex items-center justify-between mb-2">
+                <Label>Connection config</Label>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs gap-1.5"
+                  onClick={() => void handleCopy()}
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  {copied ? "Copied" : "Copy"}
+                </Button>
+              </div>
+              <pre className="text-xs bg-muted/60 border border-border rounded-lg p-3 overflow-x-auto font-mono">
+                {JSON.stringify(runtimeInfo.connection_config, null, 2)}
+              </pre>
+            </CardContent>
+          )}
         </Card>
       )}
 
-      {runtimeInfo?.url && (
-        <p className="text-sm text-green-600">
-          Runtime running at <span className="font-mono">{runtimeInfo.url}</span>
-        </p>
-      )}
-
-      {lintIssues.length > 0 && (
+      {linted && (
         <Card data-testid="lint-panel">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2">
-              Lint
-              <Badge variant={lintIssues.some(i => i.severity === "ERROR") ? "destructive" : "outline"} className="text-xs">
-                {lintIssues.filter(i => i.severity === "ERROR").length} errors,{" "}
-                {lintIssues.filter(i => i.severity === "WARN").length} warnings
-              </Badge>
-            </CardTitle>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2">
+                <CardTitle>Lint</CardTitle>
+                {errorCount > 0 && <Badge variant="destructive">{errorCount} errors</Badge>}
+                {warnCount > 0 && <Badge variant="warning">{warnCount} warnings</Badge>}
+                {errorCount === 0 && warnCount === 0 && (
+                  <Badge variant="success">All clear</Badge>
+                )}
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
             <LintPanel issues={lintIssues} />
           </CardContent>
         </Card>
+      )}
+
+      {!builtConnector && !dirty && tools.length === 0 && (
+        <EmptyState
+          icon={Package}
+          title="Nothing to bundle yet"
+          description="Add a source and define at least one tool, then come back to build your connector."
+        />
       )}
     </div>
   );

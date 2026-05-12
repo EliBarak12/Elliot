@@ -1,10 +1,23 @@
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  ArrowUpRight,
+  CheckCircle2,
+  Circle,
+  Database,
+  FlaskConical,
+  Package,
+  Wrench,
+  Zap,
+} from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatCard } from "@/components/ui/stat-card";
 import { useSessionState } from "@/hooks/useSessionState";
 import { callTool } from "@/lib/mcp-client";
+import { cn } from "@/lib/utils";
 
 interface SessionState {
   source_count: number;
@@ -19,19 +32,6 @@ interface AuditEntry {
   result_row_count: number;
   duration_ms: number;
   error?: string;
-}
-
-function StatCard({ label, value }: { label: string; value: number | string }) {
-  return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <p className="text-2xl font-bold">{value}</p>
-      </CardContent>
-    </Card>
-  );
 }
 
 export default function Dashboard() {
@@ -50,83 +50,251 @@ export default function Dashboard() {
   const skillCount = session?.skill_count ?? 0;
   const connectorBuilt = session?.connector_built ?? false;
 
+  const completedSteps = [sourceCount > 0, toolCount > 0, connectorBuilt].filter(Boolean).length;
+  const totalSteps = 3;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
+      <PageHeader
+        title="Dashboard"
+        description="A live view of your sources, tools, and connector. Build, validate, and deploy agent-ready APIs."
+        actions={
+          <Link to="/connector">
+            <Button size="sm" className="gap-1.5">
+              <Package className="h-3.5 w-3.5" />
+              Build connector
+            </Button>
+          </Link>
+        }
+      />
+
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <StatCard label="Sources" value={sourceCount} />
-        <StatCard label="Tools" value={toolCount} />
-        <StatCard label="Skills" value={skillCount} />
+        <StatCard label="Sources" value={sourceCount} icon={Database} tone="primary" />
+        <StatCard label="Tools" value={toolCount} icon={Wrench} />
+        <StatCard label="Skills" value={skillCount} icon={Zap} />
         <StatCard
           label="Connector"
-          value={connectorBuilt ? "Built" : "Not built"}
+          value={connectorBuilt ? "Live" : "Idle"}
+          icon={Package}
+          tone={connectorBuilt ? "success" : "default"}
+          hint={connectorBuilt ? "Ready to serve" : "Not built yet"}
         />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <CardTitle>Getting started</CardTitle>
+                <CardDescription>
+                  Step {completedSteps} of {totalSteps} complete
+                </CardDescription>
+              </div>
+              <Badge variant={completedSteps === totalSteps ? "success" : "muted"}>
+                {Math.round((completedSteps / totalSteps) * 100)}%
+              </Badge>
+            </div>
+            <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-primary transition-all duration-500 ease-apple"
+                style={{ width: `${(completedSteps / totalSteps) * 100}%` }}
+              />
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-1">
+            <ChecklistItem
+              done={sourceCount > 0}
+              label="Add a data source"
+              description="Connect Postgres, MySQL, or any HTTP API."
+              href="/sources"
+              icon={Database}
+            />
+            <ChecklistItem
+              done={toolCount > 0}
+              label="Create a tool"
+              description="Define a verb-first, typed contract for your agents."
+              href="/tools"
+              icon={Wrench}
+            />
+            <ChecklistItem
+              done={connectorBuilt}
+              label="Build connector"
+              description="Bundle tools and skills, then start the runtime."
+              href="/connector"
+              icon={Package}
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Quick actions</CardTitle>
+            <CardDescription>Jump back into common flows.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <QuickAction
+              icon={Database}
+              label="Add source"
+              href="/sources"
+              description="Postgres, MySQL, HTTP"
+            />
+            <QuickAction
+              icon={Wrench}
+              label="Create tool"
+              href="/tools"
+              description="Design an agent contract"
+            />
+            <QuickAction
+              icon={FlaskConical}
+              label="Open playground"
+              href="/playground"
+              description="Run a tool, see results"
+            />
+          </CardContent>
+        </Card>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Getting started</CardTitle>
+          <div className="flex items-center justify-between gap-3">
+            <div className="space-y-1">
+              <CardTitle>Recent activity</CardTitle>
+              <CardDescription>
+                The last {Math.min(auditEntries.length, 10)} tool invocations
+              </CardDescription>
+            </div>
+            {auditEntries.length > 0 && (
+              <Link to="/console">
+                <Button variant="ghost" size="sm" className="gap-1">
+                  View all
+                  <ArrowUpRight className="h-3.5 w-3.5" />
+                </Button>
+              </Link>
+            )}
+          </div>
         </CardHeader>
-        <CardContent className="space-y-2">
-          <ChecklistItem done={sourceCount > 0} label="Add a source" href="/sources" />
-          <ChecklistItem done={toolCount > 0} label="Create a tool" href="/tools" />
-          <ChecklistItem done={connectorBuilt} label="Build connector" href="/connector" />
-        </CardContent>
-      </Card>
-
-      <div className="flex gap-3">
-        <Link to="/sources">
-          <Button variant="outline" size="sm">
-            Add Source
-          </Button>
-        </Link>
-        <Link to="/tools">
-          <Button variant="outline" size="sm">
-            Create Tool
-          </Button>
-        </Link>
-        <Link to="/connector">
-          <Button variant="outline" size="sm">
-            Build Connector
-          </Button>
-        </Link>
-      </div>
-
-      {auditEntries.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Recent activity</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-1 text-sm">
+        <CardContent className="px-0 pb-0">
+          {auditEntries.length === 0 ? (
+            <div className="px-5 pb-5 pt-2 text-center">
+              <p className="text-sm text-muted-foreground">
+                No activity yet. Try a tool in the{" "}
+                <Link to="/playground" className="text-foreground font-medium hover:underline">
+                  Playground
+                </Link>
+                .
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-border/60">
               {auditEntries.map((entry, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <span className="font-mono text-xs text-muted-foreground">
-                    {new Date(entry.ts * 1000).toLocaleTimeString()}
+                <div
+                  key={i}
+                  className="flex items-center gap-3 px-5 py-2.5 hover:bg-muted/40 transition-colors"
+                >
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5 rounded-full shrink-0",
+                      entry.error ? "bg-destructive" : "bg-success"
+                    )}
+                  />
+                  <span className="font-mono text-2xs text-muted-foreground tabular-nums w-20 shrink-0">
+                    {new Date(entry.ts * 1000).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}
                   </span>
-                  <span>{entry.tool_id}</span>
-                  <span className="text-muted-foreground">{entry.result_row_count} rows</span>
-                  {entry.error && <Badge variant="destructive">error</Badge>}
+                  <span className="text-sm font-medium text-foreground truncate flex-1 min-w-0">
+                    {entry.tool_id}
+                  </span>
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {entry.result_row_count} rows
+                  </span>
+                  <span className="text-xs text-muted-foreground tabular-nums w-14 text-right">
+                    {entry.duration_ms.toFixed(0)}ms
+                  </span>
+                  {entry.error && (
+                    <Badge variant="destructive" className="shrink-0">
+                      error
+                    </Badge>
+                  )}
                 </div>
               ))}
             </div>
-          </CardContent>
-        </Card>
-      )}
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
 
-function ChecklistItem({ done, label, href }: { done: boolean; label: string; href: string }) {
+function ChecklistItem({
+  done,
+  label,
+  description,
+  href,
+  icon: Icon,
+}: {
+  done: boolean;
+  label: string;
+  description: string;
+  href: string;
+  icon: typeof Database;
+}) {
   return (
-    <div className="flex items-center gap-2 text-sm">
-      <span className={done ? "text-green-500" : "text-muted-foreground"}>{done ? "✓" : "○"}</span>
-      {done ? (
-        <span className="line-through text-muted-foreground">{label}</span>
-      ) : (
-        <Link to={href} className="hover:underline">
-          {label}
-        </Link>
+    <Link
+      to={href}
+      className={cn(
+        "group flex items-center gap-3 rounded-lg px-3 py-2.5 -mx-2 transition-colors",
+        "hover:bg-muted/60"
       )}
-    </div>
+    >
+      {done ? (
+        <CheckCircle2 className="h-5 w-5 text-success shrink-0" />
+      ) : (
+        <Circle className="h-5 w-5 text-muted-foreground/40 shrink-0" />
+      )}
+      <div className="flex-1 min-w-0">
+        <p
+          className={cn(
+            "text-sm font-medium",
+            done ? "text-muted-foreground line-through" : "text-foreground"
+          )}
+        >
+          {label}
+        </p>
+        <p className="text-xs text-muted-foreground">{description}</p>
+      </div>
+      <Icon className="h-4 w-4 text-muted-foreground/60 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+    </Link>
+  );
+}
+
+function QuickAction({
+  icon: Icon,
+  label,
+  description,
+  href,
+}: {
+  icon: typeof Database;
+  label: string;
+  description: string;
+  href: string;
+}) {
+  return (
+    <Link
+      to={href}
+      className="group flex items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 -mx-2 transition-all hover:bg-muted/60 hover:border-border"
+    >
+      <div className="flex h-8 w-8 items-center justify-center rounded-md bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary transition-colors">
+        <Icon className="h-4 w-4" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-foreground">{label}</p>
+        <p className="text-xs text-muted-foreground">{description}</p>
+      </div>
+      <ArrowUpRight className="h-3.5 w-3.5 text-muted-foreground/60 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+    </Link>
   );
 }

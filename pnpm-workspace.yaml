@@ -2,3 +2,6 @@ packages:
   - 'packages/studio'
 allowBuilds:
   esbuild: false
+# Reject packages published less than 3 days ago — defends against
+# supply-chain attacks where a compromised package is yanked within hours.
+minimumReleaseAge: 4320

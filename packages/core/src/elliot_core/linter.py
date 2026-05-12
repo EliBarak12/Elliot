@@ -30,6 +30,17 @@ _VERBS = {
     "filter",
     "retrieve",
     "show",
+    "aggregate",
+    "export",
+    "generate",
+    "compute",
+    "load",
+    "submit",
+    "remove",
+    "insert",
+    "stream",
+    "resolve",
+    "validate",
 }
 
 

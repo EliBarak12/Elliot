@@ -9,6 +9,9 @@ from elliot_core.types.sqlite import ColumnMeta, FlattenedTable, FlattenResult, 
 
 MAX_DEPTH = 5
 MAX_ARRAY_ROWS = 1000
+_MAX_INLINE_KEYS = (
+    10  # dicts with more keys are serialized as JSON TEXT to prevent column explosion
+)
 
 
 def flatten(data: list[Any], table_name: str) -> FlattenResult:
@@ -100,6 +103,18 @@ def _process_field(
                     type="depth_exceeded",
                     path=field_path,
                     message=f"Depth limit {MAX_DEPTH} exceeded at {field_path}, serialized as TEXT",
+                )
+            )
+            row[col] = json.dumps(value)
+        elif len(value) > _MAX_INLINE_KEYS:
+            warnings.append(
+                FlattenWarning(
+                    type="wide_object_serialized",
+                    path=field_path,
+                    message=(
+                        f"Object at {field_path} has {len(value)} keys "
+                        f"(>{_MAX_INLINE_KEYS}), serialized as JSON TEXT to prevent column explosion"
+                    ),
                 )
             )
             row[col] = json.dumps(value)

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -66,7 +66,7 @@ export default function ConnectorPage() {
     queryKey: ["skills"],
     queryFn: () => callTool("elliot_list_skills", {}),
   });
-  const skills = Array.isArray(skillsRaw) ? (skillsRaw as SkillDefinition[]) : [];
+  const skills = (skillsRaw as { skills?: SkillDefinition[] } | undefined)?.skills ?? [];
 
   const [selectedToolIds, setSelectedToolIds] = useState<Set<string>>(new Set());
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(new Set());
@@ -74,6 +74,24 @@ export default function ConnectorPage() {
   const [connectorSlug, setConnectorSlug] = useState("my-connector");
   const [dirty, setDirty] = useState(false);
   const [builtConnector, setBuiltConnector] = useState<ConnectorConfig | null>(null);
+
+  // Load existing connector state from the session on mount
+  useEffect(() => {
+    void (async () => {
+      try {
+        const info = await callTool("studio_get_connector_info", {});
+        const data = info as { connector?: ConnectorConfig };
+        if (data.connector) {
+          setConnectorName(data.connector.name);
+          setConnectorSlug(data.connector.slug);
+          setBuiltConnector(data.connector);
+        }
+      } catch {
+        // Plugin not yet connected — silently ignore
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [lintIssues, setLintIssues] = useState<LintIssue[]>([]);
   const [lintLoading, setLintLoading] = useState(false);
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
@@ -100,16 +118,23 @@ export default function ConnectorPage() {
   const handleBuild = async () => {
     setStatus(null);
     try {
-      const res = await callTool("elliot_build_connector", {
+      const buildRes = await callTool("elliot_build_connector", {
         name: connectorName,
         slug: connectorSlug,
-        version: "1.0.0",
         tool_ids: Array.from(selectedToolIds),
         skill_ids: Array.from(selectedSkillIds),
       });
-      setBuiltConnector(res as ConnectorConfig);
+      const br = buildRes as { status?: string; error?: string; tool_count?: number };
+      if (br.error) {
+        setStatus({ type: "error", message: br.error });
+        return;
+      }
+      // Fetch the full connector config now that it's been built in the session
+      const infoRes = await callTool("studio_get_connector_info", {});
+      const info = infoRes as { connector?: ConnectorConfig };
+      setBuiltConnector(info.connector ?? null);
       setDirty(false);
-      setStatus({ type: "ok", message: "Connector built ✓" });
+      setStatus({ type: "ok", message: `Connector built ✓ (${br.tool_count ?? 0} tools)` });
       void queryClient.invalidateQueries({ queryKey: ["session"] });
     } catch (err) {
       setStatus({ type: "error", message: err instanceof Error ? err.message : String(err) });
@@ -119,9 +144,14 @@ export default function ConnectorPage() {
   const handleLint = async () => {
     setLintLoading(true);
     try {
-      const res = await callTool("studio_get_connector_info", {});
-      const data = res as { lint_issues?: LintIssue[] };
-      setLintIssues(data.lint_issues ?? []);
+      const res = await callTool("elliot_lint_connector", {});
+      const data = res as { issues?: LintIssue[]; error?: string };
+      if (data.error) {
+        setStatus({ type: "error", message: data.error });
+        setLintIssues([]);
+      } else {
+        setLintIssues(data.issues ?? []);
+      }
     } catch {
       setLintIssues([]);
     } finally {

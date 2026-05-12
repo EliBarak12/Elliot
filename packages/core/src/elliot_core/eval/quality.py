@@ -8,12 +8,12 @@ from elliot_core.types.tool import ToolDefinition
 
 _VERB_RE = re.compile(
     r"^(Returns|Lists|Gets|Finds|Creates|Updates|Deletes|Calculates|"
-    r"Searches|Fetches|Checks|Counts|Filters|Retrieves)\b",
+    r"Searches|Fetches|Checks|Counts|Filters|Retrieves|"
+    r"Aggregates|Exports|Generates|Computes|Loads|Sends|Submits|"
+    r"Removes|Shows|Runs|Executes|Inserts|Streams|Resolves|Validates)\b",
     re.IGNORECASE,
 )
-_JARGON = frozenset(
-    {"sql", "endpoint", "query", "table", "column", "database", "api", "select", "from", "where"}
-)
+_JARGON = frozenset({"sql", "endpoint", "table", "column", "database", "api", "select", "from"})
 _GENERIC_IDS = frozenset({"query", "get_data", "fetch", "run", "execute", "call"})
 _SNAKE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 

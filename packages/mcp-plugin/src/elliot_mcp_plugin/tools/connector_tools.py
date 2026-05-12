@@ -20,13 +20,16 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
     def elliot_build_connector(
         name: str,
         slug: str,
-        version: str = "1.0.0",
+        version: str | None = None,
         description: str = "",
         tool_ids: list[str] | None = None,
         skill_ids: list[str] | None = None,
     ) -> dict:  # type: ignore[type-arg]
         """Assemble a ConnectorConfig from selected (or all) tools and skills."""
         try:
+            effective_version = (
+                version or (session.connector.version if session.connector else None) or "1.0.0"
+            )
             selected_tools = (
                 [t for t in session.registry.get_all() if t.id in tool_ids]
                 if tool_ids is not None
@@ -59,7 +62,7 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             ]
 
             config = session.builder.set_meta(
-                name=name, slug=slug, version=version, description=description
+                name=name, slug=slug, version=effective_version, description=description
             ).build(sources=sources_named, tools=tools_remapped, skills=selected_skills)
 
             session.connector = config
@@ -91,7 +94,28 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(serialize_connector(session.connector))
             log.info("connector.exported", path=str(dest))
-            return {"status": "exported", "path": str(dest)}
+
+            # Staleness check: warn if tools or SQL changed since last build
+            stale_warnings: list[str] = []
+            built_ids = {t.id for t in session.connector.tools}
+            current_ids = {t.id for t in session.registry.get_all()}
+            added = current_ids - built_ids
+            removed = built_ids - current_ids
+            if added:
+                stale_warnings.append(f"New tools not in connector: {', '.join(sorted(added))}")
+            if removed:
+                stale_warnings.append(f"Tools removed since build: {', '.join(sorted(removed))}")
+            for t in session.connector.tools:
+                current_sql = session.tool_sql.get(t.id)
+                if current_sql and current_sql != t.sql:
+                    stale_warnings.append(
+                        f"Tool '{t.id}' SQL changed since last build — rebuild recommended"
+                    )
+
+            result: dict[str, object] = {"status": "exported", "path": str(dest)}
+            if stale_warnings:
+                result["warnings"] = stale_warnings
+            return result
         except Exception as exc:
             log.error("connector.export.failed", error=str(exc))
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
@@ -101,8 +125,29 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
         """Persist the current session state to .elliot/session.json."""
         try:
             session.save()
-            return {"status": "ok"}
+            session_path = str(session.workspace._dir / "session.json")
+            return {"status": "ok", "path": session_path}
         except Exception as exc:
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+
+    @mcp.tool()
+    def elliot_lint_connector() -> dict:  # type: ignore[type-arg]
+        """Run the static linter on the current built connector and return all issues."""
+        try:
+            import dataclasses
+
+            from elliot_core.linter import lint_connector
+
+            if session.connector is None:
+                return {"error": "No connector built yet — call elliot_build_connector first"}
+            issues = lint_connector(session.connector)
+            return {
+                "issues": [dataclasses.asdict(i) for i in issues],
+                "error_count": sum(1 for i in issues if i.severity == "ERROR"),
+                "warning_count": sum(1 for i in issues if i.severity == "WARN"),
+            }
+        except Exception as exc:
+            log.error("connector.lint.failed", error=str(exc))
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()

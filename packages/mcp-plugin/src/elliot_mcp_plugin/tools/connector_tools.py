@@ -116,7 +116,7 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
                     "uv",
                     "run",
                     "uvicorn",
-                    "elliot_connector_runtime.main:app",
+                    "elliot_connector_runtime.server:app",
                     f"--port={port}",
                     "--app-dir=packages/connector-runtime/src",
                 ]

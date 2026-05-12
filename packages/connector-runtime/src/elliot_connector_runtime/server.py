@@ -126,9 +126,12 @@ def create_app(
 
     mcp = create_runtime_server(config, executor)
 
+    _mcp_app = mcp.streamable_http_app()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Any:
-        yield
+        async with mcp.session_manager.run():
+            yield
 
     limiter = _build_limiter()
     app = FastAPI(lifespan=lifespan)
@@ -140,7 +143,7 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.mount("/mcp", mcp.streamable_http_app())
+    app.mount("/mcp", _mcp_app)
 
     openai_router = APIRouter(prefix="/v1")
     register_openai_routes(openai_router, config, executor, audit)

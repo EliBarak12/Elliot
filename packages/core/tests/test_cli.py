@@ -268,3 +268,85 @@ def test_cmd_status_all_up_exits_0(monkeypatch: pytest.MonkeyPatch) -> None:
             del sys.modules["elliot_connector_runtime.observation_store"]
         else:
             sys.modules["elliot_connector_runtime.observation_store"] = original
+
+
+# ---------------------------------------------------------------------------
+# connect subcommand — Codex registration
+# ---------------------------------------------------------------------------
+
+
+def test_write_codex_toml_creates_file(tmp_path: Path) -> None:
+    from elliot_core.cli import _write_codex_toml
+
+    config = tmp_path / ".codex" / "config.toml"
+    changed = _write_codex_toml(config, "http://localhost:3000/mcp")
+
+    assert changed is True
+    content = config.read_text(encoding="utf-8")
+    assert "[mcp_servers.elliot]" in content
+    assert 'url = "http://localhost:3000/mcp"' in content
+
+
+def test_write_codex_toml_idempotent(tmp_path: Path) -> None:
+    from elliot_core.cli import _write_codex_toml
+
+    config = tmp_path / ".codex" / "config.toml"
+    _write_codex_toml(config, "http://localhost:3000/mcp")
+    changed = _write_codex_toml(config, "http://localhost:3000/mcp")
+
+    assert changed is False
+    assert config.read_text(encoding="utf-8").count("[mcp_servers.elliot]") == 1
+
+
+def test_write_codex_toml_updates_stale_url(tmp_path: Path) -> None:
+    from elliot_core.cli import _write_codex_toml
+
+    config = tmp_path / ".codex" / "config.toml"
+    _write_codex_toml(config, "http://localhost:9999/mcp")
+    changed = _write_codex_toml(config, "http://localhost:3000/mcp")
+
+    assert changed is True
+    content = config.read_text(encoding="utf-8")
+    assert 'url = "http://localhost:3000/mcp"' in content
+    assert "9999" not in content
+    assert content.count("[mcp_servers.elliot]") == 1
+
+
+def test_write_codex_toml_preserves_other_sections(tmp_path: Path) -> None:
+    from elliot_core.cli import _write_codex_toml
+
+    config = tmp_path / ".codex" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        '[mcp_servers.other]\nurl = "http://other/mcp"\n',
+        encoding="utf-8",
+    )
+
+    _write_codex_toml(config, "http://localhost:3000/mcp")
+
+    content = config.read_text(encoding="utf-8")
+    assert "[mcp_servers.other]" in content
+    assert 'url = "http://other/mcp"' in content
+    assert "[mcp_servers.elliot]" in content
+
+
+def test_cmd_connect_registers_codex_when_dir_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_connect
+
+    home = tmp_path / "home"
+    (home / ".codex").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.delenv("ELLIOT_PLUGIN_URL", raising=False)
+
+    _cmd_connect(argparse.Namespace())
+
+    codex_config = tmp_path / ".codex" / "config.toml"
+    assert codex_config.exists()
+    content = codex_config.read_text(encoding="utf-8")
+    assert "[mcp_servers.elliot]" in content
+    assert 'url = "http://localhost:3000/mcp"' in content

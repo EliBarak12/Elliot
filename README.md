@@ -67,7 +67,8 @@ elliot status
 elliot init --template rest-api-key my-api.connector.json
 
 # Or let an agent build it for you:
-# 1. Connect Claude Code to http://localhost:3000/mcp  (.mcp.json already wired)
+# 1. Wire up your agent (Claude Code, Cursor, VS Code/Copilot, Windsurf, Codex):
+#      elliot connect
 # 2. Ask: "I have an API at https://api.myapp.com — help me build a connector"
 
 # Lint + eval

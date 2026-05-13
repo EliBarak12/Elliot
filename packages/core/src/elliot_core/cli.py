@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -186,6 +187,26 @@ def _write_json_merge(path: Path, key: str, entry_key: str, entry_value: object)
     return True
 
 
+_CODEX_SECTION_RE = re.compile(r"(?ms)^\[mcp_servers\.elliot\]\n.*?(?=^\[|\Z)")
+
+
+def _write_codex_toml(path: Path, url: str) -> bool:
+    """Write [mcp_servers.elliot] section into a Codex config.toml. Returns True if changed."""
+    desired = f'[mcp_servers.elliot]\nurl = "{url}"\n'
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    if desired in existing:
+        return False
+    if _CODEX_SECTION_RE.search(existing):
+        new_content = _CODEX_SECTION_RE.sub(desired, existing, count=1)
+    else:
+        sep = "\n" if existing and not existing.endswith("\n") else ""
+        gap = "\n" if existing else ""
+        new_content = existing + sep + gap + desired
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(new_content, encoding="utf-8")
+    return True
+
+
 def _cmd_connect(args: argparse.Namespace) -> None:
     """Register Elliot MCP server with every AI coding agent found on this machine."""
     cwd = Path.cwd()
@@ -228,6 +249,12 @@ def _cmd_connect(args: argparse.Namespace) -> None:
             ("Windsurf", windsurf_config, "updated" if changed else "already configured")
         )
 
+    # ── Codex ──────────────────────────────────────────────────────────────
+    if shutil.which("codex") or (home / ".codex").exists() or (cwd / ".codex").exists():
+        codex_config = cwd / ".codex" / "config.toml"
+        changed = _write_codex_toml(codex_config, mcp_url)
+        results.append(("Codex", codex_config, "updated" if changed else "already configured"))
+
     print("\nElliot MCP Connect")
     print("─" * 60)
     print(f"  MCP server: {mcp_url}\n")
@@ -239,7 +266,7 @@ def _cmd_connect(args: argparse.Namespace) -> None:
 
     if not results:
         print("  No supported agents detected.")
-        print("  Supported: Claude Code, VS Code/Copilot, Cursor, Windsurf")
+        print("  Supported: Claude Code, VS Code/Copilot, Cursor, Windsurf, Codex")
 
     print()
     print("  Next steps:")
@@ -268,7 +295,7 @@ def main() -> None:
     sub.add_parser("status", help="Show running status of all Elliot services")
     sub.add_parser(
         "connect",
-        help="Register Elliot MCP server with Claude Code, Cursor, VS Code, and Windsurf",
+        help="Register Elliot MCP server with Claude Code, Cursor, VS Code, Windsurf, and Codex",
     )
 
     args = parser.parse_args()

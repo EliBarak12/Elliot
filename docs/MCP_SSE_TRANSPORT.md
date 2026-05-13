@@ -2,7 +2,7 @@
 
 Both `@elliot/mcp-plugin` and `@elliot/connector-runtime` use `StreamableHTTPServerTransport` (MCP over HTTP+SSE). Neither uses `StdioServerTransport`.
 
-This supersedes any stdio references in DEVELOPMENT_GUIDE.md or ARCHITECTURE.md.
+This supersedes any stdio references in DEVELOPMENT_GUIDE.md or ARCHITECTURE_LEGACY.md.
 
 ---
 

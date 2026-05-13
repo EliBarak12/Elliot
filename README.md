@@ -57,8 +57,8 @@ make setup
 # Copy env vars
 cp .env.example .env
 
-# Start all services
-honcho start          # or: make dev
+# Start all services (auto-registers Elliot with every detected agent first)
+make dev              # or: honcho start (skips auto-register)
 
 # Check everything is running
 elliot status
@@ -67,7 +67,9 @@ elliot status
 elliot init --template rest-api-key my-api.connector.json
 
 # Or let an agent build it for you:
-# 1. Connect Claude Code to http://localhost:3000/mcp  (.mcp.json already wired)
+# 1. `make dev` already wires up every detected agent
+#    (Claude Code, Cursor, VS Code/Copilot, Windsurf, Codex).
+#    To re-run the wiring on its own: `elliot connect`.
 # 2. Ask: "I have an API at https://api.myapp.com — help me build a connector"
 
 # Lint + eval

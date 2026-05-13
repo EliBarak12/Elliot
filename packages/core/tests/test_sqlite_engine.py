@@ -74,3 +74,64 @@ def test_ingest_empty_rows_creates_placeholder_table(engine: SQLiteEngine):
     engine.ingest("empty_tbl", [])
     tables = engine.get_table_names()
     assert "empty_tbl" in tables
+
+
+def test_ingest_handles_list_values_without_raising(engine: SQLiteEngine):
+    """Regression: real-world JSON rows contain lists/dicts; ingest used to
+    fail with 'type list is not supported' from sqlite parameter binding."""
+    engine.ingest(
+        "facts",
+        [
+            {"id": 1, "tags": ["a", "b"], "meta": {"k": "v"}},
+            {"id": 2, "tags": [1, 2, 3], "meta": None},
+        ],
+    )
+    rows = engine.query('SELECT * FROM "facts" ORDER BY id')
+    assert len(rows) == 2
+    # Lists/dicts get JSON-stringified so they round-trip as text.
+    assert '"a"' in rows[0]["tags"] and '"b"' in rows[0]["tags"]
+    assert rows[1]["meta"] is None
+
+
+def test_ingest_rolls_back_partial_table_on_failure(engine: SQLiteEngine):
+    """Regression: discovery failures used to leave partial tables visible
+    via subsequent get_schema calls."""
+    engine.ingest("good_table", [{"x": 1}])
+    assert "good_table" in engine.get_table_names()
+
+    # A column name with an embedded quote produces invalid CREATE TABLE
+    # SQL — the rollback path must drop the half-built table.
+    bad_rows = [{'name"; DROP': "evil"}]
+    with pytest.raises(Exception):  # noqa: B017
+        engine.ingest("bad_table", bad_rows)
+    assert "bad_table" not in engine.get_table_names()
+    assert "good_table" in engine.get_table_names()
+
+
+def test_load_result_rolls_back_when_child_table_fails(
+    engine: SQLiteEngine, monkeypatch: pytest.MonkeyPatch
+):
+    """If a related child table fails to load, the primary table must NOT
+    remain visible — load_result is atomic."""
+    result = flatten(
+        [{"id": 1, "tags": [{"name": "python"}, {"name": "api"}]}],
+        "projects",
+    )
+
+    real_load_table = engine.load_table
+    call_count = {"n": 0}
+
+    def flaky_load_table(table, *, commit: bool = True) -> None:  # type: ignore[no-untyped-def]
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated child-table failure")
+        real_load_table(table, commit=commit)
+
+    monkeypatch.setattr(engine, "load_table", flaky_load_table)
+
+    with pytest.raises(RuntimeError, match="simulated child-table failure"):
+        engine.load_result(result)
+
+    tables = engine.get_table_names()
+    assert "projects" not in tables
+    assert not any("tags" in t for t in tables)

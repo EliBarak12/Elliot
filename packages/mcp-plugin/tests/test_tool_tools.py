@@ -288,3 +288,44 @@ def test_preview_tool_missing_required_returns_structured_error(
     # to_mcp_error_content returns {"type": "text", "text": "[CODE] msg"}
     assert "VALIDATION_REQUIRED" in result.get("text", "")
     assert "status" in result.get("text", "")
+
+
+# ── elliot_validate_tool accepts the same shape as elliot_create_tool ────────
+
+
+def test_validate_tool_accepts_create_tool_shape(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    """Regression: elliot_validate_tool used to reject inputs that
+    elliot_create_tool would happily accept (missing `id`, lowercase
+    `category`)."""
+    _load_table(session, tmp_path)
+    result = _tool(mcp, "elliot_validate_tool")(
+        tool={
+            "name": "orders_by_status",
+            "description": "Return orders for the given status filter",
+            "category": "read",
+            "source_ids": list(session.sources.keys()),
+            "parameters": [
+                {"name": "status", "type": "string", "required": False, "description": "status"}
+            ],
+        }
+    )
+    assert result == {"valid": True}
+
+
+def test_validate_tool_still_rejects_genuinely_invalid_input(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    _load_table(session, tmp_path)
+    result = _tool(mcp, "elliot_validate_tool")(
+        tool={
+            "name": "x",  # too generic and description too short
+            "description": "short",
+            "category": "read",
+            "source_ids": list(session.sources.keys()),
+            "parameters": [],
+        }
+    )
+    assert result["valid"] is False
+    assert "error" in result

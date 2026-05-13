@@ -22,6 +22,25 @@ _CATEGORY_MAP: dict[str, str] = {
 }
 
 
+def _normalize_tool_input(tool: dict[str, Any]) -> dict[str, Any]:
+    """Accept the same loose shape that elliot_create_tool accepts.
+
+    `elliot_create_tool` derives `id` from `name` and lower-cases the category,
+    but `elliot_validate_tool` historically required the strict ToolDefinition
+    shape (snake-case id, uppercase category). Apply the same normalizations
+    here so an agent can hand the same payload to either tool.
+    """
+    out = dict(tool)
+    if not out.get("id") and out.get("name"):
+        out["id"] = str(out["name"])
+    category = out.get("category")
+    if isinstance(category, str):
+        mapped = _CATEGORY_MAP.get(category.lower())
+        if mapped is not None:
+            out["category"] = mapped
+    return out
+
+
 def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
     @mcp.tool()
     def elliot_create_tool(
@@ -118,11 +137,15 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
     @mcp.tool()
     def elliot_validate_tool(tool: dict) -> dict:  # type: ignore[type-arg]
-        """Validate a tool definition without saving it to the registry."""
+        """Validate a tool definition without saving it to the registry.
+
+        Accepts the same loose input as elliot_create_tool: missing `id` is
+        derived from `name`, and lowercase categories are normalized.
+        """
         try:
             from elliot_core.tools.validator import validate_tool_definition
 
-            validate_tool_definition(tool)
+            validate_tool_definition(_normalize_tool_input(tool))
             return {"valid": True}
         except ElliotError as exc:
             return {"valid": False, "error": exc.message}

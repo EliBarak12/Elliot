@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -22,6 +23,7 @@ class ElliotSession:
         self.sources: dict[str, SourceConfig] = {}
         self.product_context: ProductContext | None = None
         self.runtime_process: subprocess.Popen[Any] | None = None
+        self.runtime_log_path: Path | None = None
         self.tool_sql: dict[str, str] = {}
         self.connector: ConnectorConfig | None = None
 

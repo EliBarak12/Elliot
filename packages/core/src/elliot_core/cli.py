@@ -187,17 +187,19 @@ def _write_json_merge(path: Path, key: str, entry_key: str, entry_value: object)
     return True
 
 
-_CODEX_SECTION_RE = re.compile(r"(?ms)^\[mcp_servers\.elliot\]\n.*?(?=^\[|\Z)")
+def _codex_section_re(section: str) -> re.Pattern[str]:
+    return re.compile(rf"(?ms)^\[mcp_servers\.{re.escape(section)}\]\n.*?(?=^\[|\Z)")
 
 
-def _write_codex_toml(path: Path, url: str) -> bool:
-    """Write [mcp_servers.elliot] section into a Codex config.toml. Returns True if changed."""
-    desired = f'[mcp_servers.elliot]\nurl = "{url}"\n'
+def _write_codex_toml(path: Path, url: str, section: str = "elliot") -> bool:
+    """Write [mcp_servers.<section>] into a Codex config.toml. Returns True if changed."""
+    desired = f'[mcp_servers.{section}]\nurl = "{url}"\n'
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     if desired in existing:
         return False
-    if _CODEX_SECTION_RE.search(existing):
-        new_content = _CODEX_SECTION_RE.sub(desired, existing, count=1)
+    section_re = _codex_section_re(section)
+    if section_re.search(existing):
+        new_content = section_re.sub(desired, existing, count=1)
     else:
         sep = "\n" if existing and not existing.endswith("\n") else ""
         gap = "\n" if existing else ""
@@ -207,70 +209,162 @@ def _write_codex_toml(path: Path, url: str) -> bool:
     return True
 
 
-def _cmd_connect(args: argparse.Namespace) -> None:
-    """Register Elliot MCP server with every AI coding agent found on this machine."""
-    cwd = Path.cwd()
-    home = Path.home()
-    plugin_url = os.environ.get("ELLIOT_PLUGIN_URL", "http://localhost:3000")
-    mcp_url = f"{plugin_url}/mcp"
+def _probe_mcp_initialize(url: str, timeout: float = 2.0) -> tuple[bool, str | None]:
+    """POST a JSON-RPC `initialize` and confirm a JSON-RPC reply.
 
-    results: list[tuple[str, Path, str]] = []  # (agent, path, status)
+    Returns (ok, reason). Used to verify a URL is actually MCP-speakable
+    before we write it into an agent's config.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
 
-    # ── Claude Code ────────────────────────────────────────────────────────
-    # .mcp.json in project root; also write if claude binary exists globally
+    body = _json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "elliot-connect-probe", "version": "0.1.0"},
+            },
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read(8192).decode("utf-8", errors="replace")
+            if "jsonrpc" in raw or resp.status in (200, 202):
+                return True, None
+            return False, f"non-MCP response: HTTP {resp.status}"
+    except urllib.error.HTTPError as exc:
+        # FastMCP returns 400 on a probe-without-sessionid; that still proves
+        # the endpoint is MCP-speaking, just rejecting the probe payload.
+        if exc.code in (400, 405):
+            return True, None
+        return False, f"HTTP {exc.code}"
+    except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
+        return False, str(exc)
+
+
+def _register_for_all_agents(
+    label: str,
+    mcp_url: str,
+    cwd: Path,
+    home: Path,
+) -> list[tuple[str, Path, str]]:
+    """Write `mcp_url` (under the given label/section name) to every detected agent."""
+    results: list[tuple[str, Path, str]] = []
+    section_key = f"elliot-{label}" if label != "plugin" else "elliot"
+
     claude_config = cwd / ".mcp.json"
-    entry = {"type": "http", "url": mcp_url}
-    changed = _write_json_merge(claude_config, "mcpServers", "elliot", entry)
+    changed = _write_json_merge(
+        claude_config, "mcpServers", section_key, {"type": "http", "url": mcp_url}
+    )
     results.append(("Claude Code", claude_config, "updated" if changed else "already configured"))
 
-    # ── VS Code / GitHub Copilot ───────────────────────────────────────────
     if shutil.which("code") or (cwd / ".vscode").exists():
         vscode_config = cwd / ".vscode" / "mcp.json"
-        vs_entry = {"type": "http", "url": mcp_url}
-        changed = _write_json_merge(vscode_config, "servers", "elliot", vs_entry)
+        changed = _write_json_merge(
+            vscode_config, "servers", section_key, {"type": "http", "url": mcp_url}
+        )
         results.append(
             ("VS Code / Copilot", vscode_config, "updated" if changed else "already configured")
         )
 
-    # ── Cursor ─────────────────────────────────────────────────────────────
     if shutil.which("cursor") or (home / ".cursor").exists() or (cwd / ".cursor").exists():
         cursor_config = cwd / ".cursor" / "mcp.json"
-        cursor_entry = {"type": "http", "url": mcp_url}
-        changed = _write_json_merge(cursor_config, "mcpServers", "elliot", cursor_entry)
+        changed = _write_json_merge(
+            cursor_config, "mcpServers", section_key, {"type": "http", "url": mcp_url}
+        )
         results.append(("Cursor", cursor_config, "updated" if changed else "already configured"))
 
-    # ── Windsurf ───────────────────────────────────────────────────────────
     windsurf_dir = home / ".codeium" / "windsurf"
     if windsurf_dir.exists():
         windsurf_config = windsurf_dir / "mcp_config.json"
-        ws_entry = {"serverUrl": mcp_url}
-        changed = _write_json_merge(windsurf_config, "mcpServers", "elliot", ws_entry)
+        changed = _write_json_merge(
+            windsurf_config, "mcpServers", section_key, {"serverUrl": mcp_url}
+        )
         results.append(
             ("Windsurf", windsurf_config, "updated" if changed else "already configured")
         )
 
-    # ── Codex ──────────────────────────────────────────────────────────────
     if shutil.which("codex") or (home / ".codex").exists() or (cwd / ".codex").exists():
         codex_config = cwd / ".codex" / "config.toml"
-        changed = _write_codex_toml(codex_config, mcp_url)
+        changed = _write_codex_toml(codex_config, mcp_url, section=section_key)
         results.append(("Codex", codex_config, "updated" if changed else "already configured"))
+
+    return results
+
+
+def _cmd_connect(args: argparse.Namespace) -> None:
+    """Register Elliot MCP server with every AI coding agent found on this machine.
+
+    By default registers the *plugin* (build connectors, port 3000). Pass
+    `--runtime` to also/instead register the *runtime* (serve a built
+    connector to client agents, port 3001 by default). When the runtime is
+    being registered, the URL is probed with a real MCP `initialize` first
+    so we never write a config that points at a dead endpoint.
+    """
+    cwd = Path.cwd()
+    home = Path.home()
+    plugin_url = os.environ.get("ELLIOT_PLUGIN_URL", "http://localhost:3000")
+    runtime_url = os.environ.get("ELLIOT_RUNTIME_URL", "http://localhost:3001")
+
+    # Trailing slash matters: strict MCP clients (Codex/rmcp) drop POST bodies
+    # on 307 redirects. The runtime serves at /mcp/ without redirect.
+    plugin_mcp = f"{plugin_url.rstrip('/')}/mcp/"
+    runtime_mcp = f"{runtime_url.rstrip('/')}/mcp/"
+
+    targets: list[tuple[str, str]] = []
+    if getattr(args, "runtime_only", False):
+        targets.append(("runtime", runtime_mcp))
+    else:
+        targets.append(("plugin", plugin_mcp))
+        if getattr(args, "runtime", False):
+            targets.append(("runtime", runtime_mcp))
 
     print("\nElliot MCP Connect")
     print("─" * 60)
-    print(f"  MCP server: {mcp_url}\n")
 
-    for agent, path, status in results:
-        icon = "✓" if "configured" in status else "+"
-        print(f"  {icon} {agent:<22} {status}")
-        print(f"    └ {path}")
+    any_registered = False
+    for label, mcp_url in targets:
+        print(f"\n  {label.title()} MCP: {mcp_url}")
+        if label == "runtime":
+            ok, reason = _probe_mcp_initialize(mcp_url)
+            if not ok:
+                print(f"  ✗ Skipped — runtime not reachable: {reason}")
+                print("    Tip: build + export a connector, then call elliot_start_runtime.")
+                continue
+            print("  ✓ Verified MCP initialize handshake")
 
-    if not results:
-        print("  No supported agents detected.")
-        print("  Supported: Claude Code, VS Code/Copilot, Cursor, Windsurf, Codex")
+        results = _register_for_all_agents(label, mcp_url, cwd, home)
+        if not results:
+            print("  No supported agents detected on this machine.")
+            print("  Supported: Claude Code, VS Code/Copilot, Cursor, Windsurf, Codex")
+            continue
+        any_registered = True
+        for agent, path, status in results:
+            icon = "✓" if "configured" in status else "+"
+            print(f"  {icon} {agent:<22} {status}")
+            print(f"    └ {path}")
+
+    if not any_registered:
+        print()
+        return
 
     print()
     print("  Next steps:")
-    print("  1. Start Elliot:          honcho start")
+    print("  1. Start Elliot:          make dev")
     print("  2. Reload your agent      (restart or run /reconnect-mcp)")
     print("  3. Ask your agent:        'I have an API at https://... — help me build a connector'")
     print()
@@ -293,9 +387,24 @@ def main() -> None:
     init_cmd.add_argument("output", nargs="?", help="Output filename")
 
     sub.add_parser("status", help="Show running status of all Elliot services")
-    sub.add_parser(
+    connect_cmd = sub.add_parser(
         "connect",
         help="Register Elliot MCP server with Claude Code, Cursor, VS Code, Windsurf, and Codex",
+    )
+    connect_cmd.add_argument(
+        "--runtime",
+        action="store_true",
+        help=(
+            "Also register the runtime URL (the connector served to client "
+            "agents on port 3001). Probed with a real MCP initialize before "
+            "writing — skipped if the runtime is not reachable."
+        ),
+    )
+    connect_cmd.add_argument(
+        "--runtime-only",
+        action="store_true",
+        dest="runtime_only",
+        help="Register only the runtime URL (skip the plugin URL).",
     )
 
     args = parser.parse_args()

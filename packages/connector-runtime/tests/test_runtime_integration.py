@@ -164,6 +164,53 @@ def test_mcp_endpoint_mounted_at_mcp_slash(app) -> None:
     )
 
 
+def test_mcp_post_does_not_307_redirect(app) -> None:
+    """Regression: strict MCP clients (Codex/rmcp) drop the POST body when
+    FastAPI emits a 307 from /mcp to /mcp/. With redirect_slashes=False the
+    endpoint must respond directly at /mcp/ without redirecting.
+
+    We run TestClient under `with ... as` so the FastMCP lifespan initializes
+    the streamable_http session manager (otherwise the inner app raises
+    'Task group is not initialized').
+    """
+    body = {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "regression-probe", "version": "0.0.1"},
+        },
+    }
+    with TestClient(app) as client:
+        resp = client.post(
+            "/mcp/",
+            json=body,
+            headers={"Accept": "application/json, text/event-stream"},
+            follow_redirects=False,
+        )
+        # Whatever MCP returns (success, 400 about session, etc.), what we
+        # MUST NOT see is a 307 — that's the bug we're guarding against.
+        assert resp.status_code != 307, (
+            f"FastAPI emitted a redirect from /mcp/ — strict MCP clients "
+            f"would drop the body. status={resp.status_code} headers={dict(resp.headers)}"
+        )
+
+        # The slash-less form must also not 307 (so users who hand-write
+        # the URL without trailing slash still don't lose their POST body).
+        resp_no_slash = client.post(
+            "/mcp",
+            json=body,
+            headers={"Accept": "application/json, text/event-stream"},
+            follow_redirects=False,
+        )
+        assert resp_no_slash.status_code != 307, (
+            f"FastAPI still redirects /mcp → /mcp/. "
+            f"status={resp_no_slash.status_code}"
+        )
+
+
 # ── Bug #5 regression: skills with inputs no longer crash startup ────────────
 
 

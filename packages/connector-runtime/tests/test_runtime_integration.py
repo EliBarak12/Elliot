@@ -206,8 +206,7 @@ def test_mcp_post_does_not_307_redirect(app) -> None:
             follow_redirects=False,
         )
         assert resp_no_slash.status_code != 307, (
-            f"FastAPI still redirects /mcp → /mcp/. "
-            f"status={resp_no_slash.status_code}"
+            f"FastAPI still redirects /mcp → /mcp/. status={resp_no_slash.status_code}"
         )
 
 

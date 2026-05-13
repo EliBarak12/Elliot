@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
+import { AgentOnboarding } from "@/components/dashboard/AgentOnboarding";
 import { useSessionState } from "@/hooks/useSessionState";
 import { callTool } from "@/lib/mcp-client";
 import { cn } from "@/lib/utils";
@@ -52,21 +53,19 @@ export default function Dashboard() {
 
   const completedSteps = [sourceCount > 0, toolCount > 0, connectorBuilt].filter(Boolean).length;
   const totalSteps = 3;
+  // Onboarding stays prominent until the agent has actually produced something.
+  // Once a connector is built (or audit entries exist), shrink it to a one-line
+  // reconnect hint so the dashboard becomes pure observability.
+  const agentHasProduced = connectorBuilt || auditEntries.length > 0;
 
   return (
     <div className="space-y-8">
       <PageHeader
         title="Dashboard"
-        description="A live view of your sources, tools, and connector. Build, validate, and deploy agent-ready APIs."
-        actions={
-          <Link to="/connector">
-            <Button size="sm" className="gap-1.5">
-              <Package className="h-3.5 w-3.5" />
-              Build connector
-            </Button>
-          </Link>
-        }
+        description="Elliot is agent-first. Your agent builds — this page shows what it built and how it's behaving in production."
       />
+
+      <AgentOnboarding compact={agentHasProduced} />
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard label="Sources" value={sourceCount} icon={Database} tone="primary" />
@@ -86,9 +85,11 @@ export default function Dashboard() {
           <CardHeader>
             <div className="flex items-start justify-between gap-3">
               <div className="space-y-1">
-                <CardTitle>Getting started</CardTitle>
+                <CardTitle>What your agent has built</CardTitle>
                 <CardDescription>
-                  Step {completedSteps} of {totalSteps} complete
+                  {completedSteps === totalSteps
+                    ? "All set. Keep an eye on Recent activity below."
+                    : `Step ${completedSteps} of ${totalSteps} — your agent will fill these in as it works.`}
                 </CardDescription>
               </div>
               <Badge variant={completedSteps === totalSteps ? "success" : "muted"}>
@@ -103,25 +104,22 @@ export default function Dashboard() {
             </div>
           </CardHeader>
           <CardContent className="space-y-1">
-            <ChecklistItem
+            <AgentStep
               done={sourceCount > 0}
-              label="Add a data source"
-              description="Connect Postgres, MySQL, or any HTTP API."
-              href="/sources"
+              label="Data source connected"
+              description="Ask your agent: 'discover the schema at https://api.example.com'."
               icon={Database}
             />
-            <ChecklistItem
+            <AgentStep
               done={toolCount > 0}
-              label="Create a tool"
-              description="Define a verb-first, typed contract for your agents."
-              href="/tools"
+              label="Tool drafted"
+              description="The agent calls elliot_create_tool to define a verb-first contract."
               icon={Wrench}
             />
-            <ChecklistItem
+            <AgentStep
               done={connectorBuilt}
-              label="Build connector"
-              description="Bundle tools and skills, then start the runtime."
-              href="/connector"
+              label="Connector built"
+              description="The agent bundles everything and starts the runtime."
               icon={Package}
             />
           </CardContent>
@@ -129,27 +127,29 @@ export default function Dashboard() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Quick actions</CardTitle>
-            <CardDescription>Jump back into common flows.</CardDescription>
+            <CardTitle>Manual escape hatches</CardTitle>
+            <CardDescription>
+              You shouldn't need these — but they're here if you want to inspect or override.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
             <QuickAction
               icon={Database}
-              label="Add source"
+              label="View sources"
               href="/sources"
-              description="Postgres, MySQL, HTTP"
+              description="See what your agent discovered"
             />
             <QuickAction
               icon={Wrench}
-              label="Create tool"
+              label="View tools"
               href="/tools"
-              description="Design an agent contract"
+              description="Inspect the contracts your agent drafted"
             />
             <QuickAction
               icon={FlaskConical}
               label="Open playground"
               href="/playground"
-              description="Run a tool, see results"
+              description="Run a tool yourself, see results"
             />
           </CardContent>
         </Card>
@@ -229,27 +229,19 @@ export default function Dashboard() {
   );
 }
 
-function ChecklistItem({
+function AgentStep({
   done,
   label,
   description,
-  href,
   icon: Icon,
 }: {
   done: boolean;
   label: string;
   description: string;
-  href: string;
   icon: typeof Database;
 }) {
   return (
-    <Link
-      to={href}
-      className={cn(
-        "group flex items-center gap-3 rounded-lg px-3 py-2.5 -mx-2 transition-colors",
-        "hover:bg-muted/60"
-      )}
-    >
+    <div className="flex items-center gap-3 rounded-lg px-3 py-2.5 -mx-2">
       {done ? (
         <CheckCircle2 className="h-5 w-5 text-success shrink-0" />
       ) : (
@@ -266,8 +258,8 @@ function ChecklistItem({
         </p>
         <p className="text-xs text-muted-foreground">{description}</p>
       </div>
-      <Icon className="h-4 w-4 text-muted-foreground/60 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-    </Link>
+      <Icon className="h-4 w-4 text-muted-foreground/60 shrink-0" />
+    </div>
   );
 }
 

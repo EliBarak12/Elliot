@@ -1,6 +1,7 @@
 .PHONY: dev setup test test-cov lint format typecheck build-studio ci
 
 dev:
+	uv run elliot connect
 	honcho start
 
 setup:

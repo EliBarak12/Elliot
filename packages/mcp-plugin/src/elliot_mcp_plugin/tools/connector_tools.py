@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import structlog
@@ -13,6 +17,48 @@ from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_mcp_plugin.session import ElliotSession
 
 log = structlog.get_logger(__name__)
+
+_RUNTIME_LOG_RELATIVE = Path(".elliot/runtime.log")
+_RUNTIME_HEALTH_TIMEOUT_S = 15.0
+_RUNTIME_HEALTH_INTERVAL_S = 0.2
+_LOG_TAIL_BYTES = 4096
+
+
+def _tail_log(log_path: Path, n_bytes: int = _LOG_TAIL_BYTES) -> str:
+    if not log_path.exists():
+        return ""
+    try:
+        with log_path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - n_bytes))
+            return fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _wait_for_runtime(
+    process: subprocess.Popen[bytes],
+    health_url: str,
+    deadline: float,
+) -> tuple[bool, str | None]:
+    """Poll /health until the process answers, dies, or we time out.
+
+    Returns (ok, reason). `ok=True` means we got an HTTP response from /health.
+    `ok=False` carries a short reason: process crashed, timeout, or HTTP error.
+    """
+    while time.monotonic() < deadline:
+        rc = process.poll()
+        if rc is not None:
+            return False, f"runtime process exited with code {rc}"
+        try:
+            with urllib.request.urlopen(health_url, timeout=1.0) as resp:
+                if resp.status == 200:
+                    return True, None
+        except (urllib.error.URLError, ConnectionError, TimeoutError):
+            pass
+        time.sleep(_RUNTIME_HEALTH_INTERVAL_S)
+    return False, f"timeout after {_RUNTIME_HEALTH_TIMEOUT_S}s waiting for /health"
 
 
 def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
@@ -151,23 +197,106 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
-    def elliot_start_runtime(port: int = 3001) -> dict:  # type: ignore[type-arg]
-        """Start the connector runtime as a subprocess on the given port."""
+    def elliot_start_runtime(
+        port: int = 3001,
+        connector_path: str | None = None,
+    ) -> dict:  # type: ignore[type-arg]
+        """Start the connector runtime as a subprocess and wait until /health is alive.
+
+        Captures the subprocess stdout+stderr to .elliot/runtime.log. Only returns
+        success once the runtime answers /health (or returns a failure with a tail
+        of the log if the process crashes or times out).
+
+        `connector_path` defaults to the most recently exported connector, then to
+        the ELLIOT_CONNECTOR env var, then `.elliot/connector.json`. Passing it
+        explicitly is how an agent says "serve THIS connector to clients".
+        """
         try:
             if session.runtime_process and session.runtime_process.poll() is None:
-                return {"status": "already_running", "pid": session.runtime_process.pid}
-            session.runtime_process = subprocess.Popen(
-                [
-                    "uv",
-                    "run",
-                    "uvicorn",
-                    "elliot_connector_runtime.server:app",
-                    f"--port={port}",
-                    "--app-dir=packages/connector-runtime/src",
-                ]
+                return {
+                    "status": "already_running",
+                    "pid": session.runtime_process.pid,
+                    "url": f"http://localhost:{port}/mcp/",
+                }
+
+            workspace_dir = Path(session.workspace._dir)
+            log_path = workspace_dir / "runtime.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+
+            chosen_connector = (
+                connector_path
+                or os.environ.get("ELLIOT_CONNECTOR")
+                or str(workspace_dir / "connector.json")
             )
-            log.info("runtime.started", port=port, pid=session.runtime_process.pid)
-            return {"url": f"http://localhost:{port}/mcp", "pid": session.runtime_process.pid}
+            if not Path(chosen_connector).exists():
+                return to_mcp_error_content(
+                    ElliotError(
+                        "RUNTIME_NO_CONNECTOR",
+                        (
+                            f"Connector file not found at '{chosen_connector}'. "
+                            "Run elliot_build_connector + elliot_export_connector first, "
+                            "or pass connector_path to elliot_start_runtime."
+                        ),
+                        detail={"connector_path": chosen_connector},
+                    )
+                )
+
+            env = os.environ.copy()
+            env["ELLIOT_CONNECTOR"] = chosen_connector
+
+            log_fh = log_path.open("wb")
+            try:
+                proc = subprocess.Popen(
+                    [
+                        "uv",
+                        "run",
+                        "uvicorn",
+                        "elliot_connector_runtime.server:app",
+                        f"--port={port}",
+                        "--app-dir=packages/connector-runtime/src",
+                    ],
+                    stdout=log_fh,
+                    stderr=subprocess.STDOUT,
+                    env=env,
+                )
+            finally:
+                # The subprocess inherits the fd; we can safely close our handle.
+                log_fh.close()
+
+            session.runtime_process = proc
+            session.runtime_log_path = log_path
+
+            deadline = time.monotonic() + _RUNTIME_HEALTH_TIMEOUT_S
+            ok, reason = _wait_for_runtime(proc, f"http://localhost:{port}/health", deadline)
+            if not ok:
+                try:
+                    if proc.poll() is None:
+                        proc.terminate()
+                        proc.wait(timeout=3)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+                session.runtime_process = None
+                log.error("runtime.start.failed", port=port, reason=reason)
+                return to_mcp_error_content(
+                    ElliotError(
+                        "RUNTIME_START_FAILED",
+                        f"Runtime did not become healthy: {reason}",
+                        detail={
+                            "log_tail": _tail_log(log_path),
+                            "log_path": str(log_path),
+                            "exit_code": proc.poll(),
+                        },
+                    )
+                )
+
+            log.info("runtime.started", port=port, pid=proc.pid, connector=chosen_connector)
+            return {
+                "status": "running",
+                "url": f"http://localhost:{port}/mcp/",
+                "pid": proc.pid,
+                "connector_path": chosen_connector,
+                "log_path": str(log_path),
+            }
         except Exception as exc:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
@@ -178,6 +307,10 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             if session.runtime_process is None:
                 return {"status": "not_running"}
             session.runtime_process.terminate()
+            try:
+                session.runtime_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                session.runtime_process.kill()
             session.runtime_process = None
             log.info("runtime.stopped")
             return {"status": "stopped"}
@@ -185,6 +318,31 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
-    def elliot_get_connection_config() -> dict:  # type: ignore[type-arg]
-        """Return the MCP config snippet to add to an agent's config."""
-        return {"type": "http", "url": "http://localhost:3001/mcp"}
+    def elliot_runtime_logs(n_bytes: int = _LOG_TAIL_BYTES) -> dict:  # type: ignore[type-arg]
+        """Return the tail of the connector-runtime log captured by elliot_start_runtime."""
+        log_path = session.runtime_log_path or (Path(session.workspace._dir) / "runtime.log")
+        try:
+            if not log_path.exists():
+                return {
+                    "log_path": str(log_path),
+                    "exists": False,
+                    "tail": "",
+                    "note": "No runtime log yet — start the runtime first.",
+                }
+            return {
+                "log_path": str(log_path),
+                "exists": True,
+                "tail": _tail_log(log_path, n_bytes),
+            }
+        except Exception as exc:
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+
+    @mcp.tool()
+    def elliot_get_connection_config(port: int = 3001) -> dict:  # type: ignore[type-arg]
+        """Return the MCP config snippet to add to an agent's config.
+
+        The URL includes a trailing slash because FastMCP's streamable_http
+        endpoint is mounted on a path-prefix; some MCP clients (Codex/rmcp)
+        do not follow the 307 redirect FastAPI emits for the slash-less form.
+        """
+        return {"type": "http", "url": f"http://localhost:{port}/mcp/"}

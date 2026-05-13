@@ -343,10 +343,77 @@ def test_cmd_connect_registers_codex_when_dir_exists(
     monkeypatch.setattr(Path, "home", lambda: home)
     monkeypatch.delenv("ELLIOT_PLUGIN_URL", raising=False)
 
-    _cmd_connect(argparse.Namespace())
+    _cmd_connect(argparse.Namespace(runtime=False, runtime_only=False))
 
     codex_config = tmp_path / ".codex" / "config.toml"
     assert codex_config.exists()
     content = codex_config.read_text(encoding="utf-8")
     assert "[mcp_servers.elliot]" in content
-    assert 'url = "http://localhost:3000/mcp"' in content
+    # Trailing slash is required for strict MCP clients (Codex/rmcp) that
+    # drop POST bodies on a 307 redirect.
+    assert 'url = "http://localhost:3000/mcp/"' in content
+
+
+def test_cmd_connect_runtime_skips_when_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--runtime probe must skip writing config when /mcp/ is not alive."""
+    import argparse
+
+    from elliot_core.cli import _cmd_connect
+
+    home = tmp_path / "home"
+    (home / ".codex").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.delenv("ELLIOT_PLUGIN_URL", raising=False)
+    monkeypatch.delenv("ELLIOT_RUNTIME_URL", raising=False)
+    # Point runtime probe at an unused port so the probe is guaranteed to fail.
+    monkeypatch.setenv("ELLIOT_RUNTIME_URL", "http://127.0.0.1:1")
+
+    _cmd_connect(argparse.Namespace(runtime=True, runtime_only=False))
+
+    codex_config = tmp_path / ".codex" / "config.toml"
+    content = codex_config.read_text(encoding="utf-8")
+    # Plugin section gets written; runtime section is skipped because probe failed.
+    assert "[mcp_servers.elliot]" in content
+    assert "[mcp_servers.elliot-runtime]" not in content
+
+
+def test_probe_mcp_initialize_treats_400_as_alive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FastMCP rejects an anonymous probe with HTTP 400 — that's still a live endpoint."""
+    import urllib.error
+
+    from elliot_core.cli import _probe_mcp_initialize
+
+    class _FakeHTTPError(urllib.error.HTTPError):
+        def __init__(self) -> None:
+            super().__init__("http://x", 400, "Bad Request", {}, None)  # type: ignore[arg-type]
+
+    def _fake_urlopen(req: object, timeout: float = 0) -> None:
+        raise _FakeHTTPError()
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+
+    ok, reason = _probe_mcp_initialize("http://localhost:9999/mcp/")
+    assert ok is True
+    assert reason is None
+
+
+def test_probe_mcp_initialize_returns_false_on_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import urllib.error
+
+    from elliot_core.cli import _probe_mcp_initialize
+
+    def _fake_urlopen(req: object, timeout: float = 0) -> None:
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+
+    ok, reason = _probe_mcp_initialize("http://localhost:1/mcp/")
+    assert ok is False
+    assert reason is not None and "connection refused" in reason

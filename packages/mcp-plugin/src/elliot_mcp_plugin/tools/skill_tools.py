@@ -15,6 +15,53 @@ from elliot_mcp_plugin.session import ElliotSession
 
 log = structlog.get_logger(__name__)
 
+_STEP_PARAMS_ALIASES = ("params", "arguments", "args", "parameters", "inputs")
+
+
+def _normalize_skill_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Accept the loose shapes agents naturally produce for skill steps.
+
+    A SkillStep requires {alias, tool_id, params}. Common alternative keys
+    seen from agents: `arguments`, `args`, `parameters`, `inputs` (instead of
+    `params`); `tool` (instead of `tool_id`). Normalize before validation so
+    the error surfaced to the agent is about *real* problems, not key naming.
+    """
+    if not isinstance(steps, list):
+        raise ElliotError(
+            "INVALID_SKILL",
+            "Skill 'steps' must be a list of step dicts, each with {alias, tool_id, params}.",
+        )
+    normalized: list[dict[str, Any]] = []
+    for index, raw in enumerate(steps):
+        if not isinstance(raw, dict):
+            raise ElliotError(
+                "INVALID_SKILL",
+                f"Step at index {index} must be an object with {{alias, tool_id, params}}.",
+            )
+        step = dict(raw)
+        if "tool_id" not in step and "tool" in step:
+            step["tool_id"] = step.pop("tool")
+        if "params" not in step:
+            for alt in _STEP_PARAMS_ALIASES[1:]:
+                if alt in step:
+                    step["params"] = step.pop(alt)
+                    break
+        step.setdefault("params", {})
+
+        missing = [k for k in ("alias", "tool_id") if not step.get(k)]
+        if missing:
+            raise ElliotError(
+                "INVALID_SKILL",
+                (
+                    f"Step at index {index} is missing required field(s): "
+                    f"{', '.join(missing)}. Each step needs "
+                    "{alias: str, tool_id: str, params: dict}."
+                ),
+                detail={"index": index, "missing": missing, "received": list(raw)},
+            )
+        normalized.append(step)
+    return normalized
+
 
 def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
     @mcp.tool()
@@ -24,15 +71,21 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
         steps: list[dict],  # type: ignore[type-arg]
         input_parameters: list[dict],  # type: ignore[type-arg]
     ) -> dict:  # type: ignore[type-arg]
-        """Define a multi-step skill that chains tool calls together."""
+        """Define a multi-step skill that chains tool calls together.
+
+        Each step requires {alias: str, tool_id: str, params: dict}. The keys
+        `arguments`, `args`, `parameters`, and `inputs` are accepted as
+        aliases for `params`; `tool` is accepted as an alias for `tool_id`.
+        """
         try:
             skill_id = str(uuid.uuid4()).replace("-", "_")
+            normalized_steps = _normalize_skill_steps(steps)
             skill = validate_skill_definition(
                 {
                     "id": skill_id,
                     "name": name,
                     "description": description,
-                    "steps": steps,
+                    "steps": normalized_steps,
                     "input_parameters": input_parameters,
                 }
             )

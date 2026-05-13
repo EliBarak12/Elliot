@@ -57,3 +57,14 @@ def test_empty_file_warning(tmp_path: Path):
     result = read_file(_cfg(str(empty), "csv"))
     assert result.rows == []
     assert any("empty" in w.lower() for w in result.warnings)
+
+
+def test_csv_large_field_does_not_raise(tmp_path: Path):
+    """Regression: business CSVs routinely embed JSON-shaped fields > 128KB.
+    The old default raised `FILE_PARSE_ERROR: field larger than field limit`."""
+    csv_path = tmp_path / "wide.csv"
+    big_blob = "x" * 200_000
+    csv_path.write_text(f"id,payload\n1,{big_blob}\n", encoding="utf-8")
+    result = read_file(_cfg(str(csv_path), "csv"))
+    assert len(result.rows) == 1
+    assert len(result.rows[0]["payload"]) == 200_000

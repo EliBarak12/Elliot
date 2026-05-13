@@ -455,7 +455,12 @@ def create_app(
             yield
 
     limiter = _build_limiter()
-    app = FastAPI(lifespan=lifespan)
+    # redirect_slashes=False so that a POST to /mcp does not 307-redirect to
+    # /mcp/. Strict MCP clients (Codex / rmcp) discard the POST body on the
+    # redirect and the JSON-RPC `initialize` handshake fails. Auto-config in
+    # `elliot connect` and `elliot_get_connection_config` writes the URL with
+    # a trailing slash so clients reach FastMCP directly.
+    app = FastAPI(lifespan=lifespan, redirect_slashes=False)
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
     app.add_middleware(

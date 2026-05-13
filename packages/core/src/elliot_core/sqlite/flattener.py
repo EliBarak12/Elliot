@@ -43,6 +43,8 @@ def _scalar(value: Any) -> Any:
         return 1 if value else 0
     if isinstance(value, int) and not isinstance(value, bool) and abs(value) > 2**53:
         return str(value)
+    if isinstance(value, (list, dict)):
+        return json.dumps(value)
     return value
 
 

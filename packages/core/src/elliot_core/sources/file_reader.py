@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,23 @@ from elliot_core.errors import ElliotError
 from elliot_core.types.source import FetchResult, SourceConfig
 
 _SIZE_WARN_BYTES = 100 * 1024 * 1024  # 100 MB
+
+
+# Real business CSVs routinely embed JSON-shaped fields that blow past
+# Python's 131072-byte default. Raise to the platform's int max so a single
+# oversized cell doesn't surface as `FILE_PARSE_ERROR: field larger than
+# field limit`. Wrapped because some platforms cap below sys.maxsize.
+def _raise_csv_field_limit() -> None:
+    limit = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(limit)
+            return
+        except OverflowError:
+            limit //= 2
+
+
+_raise_csv_field_limit()
 
 
 def read_file(config: SourceConfig) -> FetchResult:

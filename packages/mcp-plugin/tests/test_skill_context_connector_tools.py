@@ -220,8 +220,122 @@ def test_get_connection_config(mcp: FastMCP):
     result = _tool(mcp, "elliot_get_connection_config")()
     assert result["type"] == "http"
     assert "localhost:3001" in result["url"]
+    # Trailing slash matters: strict MCP clients drop POST bodies on 307s.
+    assert result["url"].endswith("/mcp/")
 
 
 def test_stop_runtime_when_not_running(mcp: FastMCP):
     result = _tool(mcp, "elliot_stop_runtime")()
     assert result["status"] == "not_running"
+
+
+# ── elliot_start_runtime: truthful health-check + log capture ────────────────
+
+
+def test_start_runtime_refuses_when_no_connector(mcp: FastMCP, tmp_path: Path):
+    """Regression: start_runtime used to return success even when the
+    runtime couldn't load a connector. Now it must fail loudly with a
+    RUNTIME_NO_CONNECTOR code if no connector path exists."""
+    import os
+
+    cwd = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        result = _tool(mcp, "elliot_start_runtime")()
+    finally:
+        os.chdir(cwd)
+    assert "text" in result
+    assert "RUNTIME_NO_CONNECTOR" in result["text"]
+
+
+def test_start_runtime_reports_failure_when_process_dies(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression: a runtime subprocess that exits immediately used to
+    return `status: running`. It must now return RUNTIME_START_FAILED with
+    a tail of the captured log."""
+    import subprocess
+
+    connector_path = tmp_path / "connector.json"
+    connector_path.write_text("{}", encoding="utf-8")
+
+    class _FakeProc:
+        def __init__(self) -> None:
+            self.pid = 4242
+            self._polled = 0
+
+        def poll(self) -> int | None:
+            # Report alive on first poll (so the entry guard passes), then
+            # report exit code 1 to simulate an immediate crash.
+            self._polled += 1
+            return None if self._polled <= 1 else 1
+
+        def terminate(self) -> None:
+            pass
+
+        def wait(self, timeout: float = 0) -> int:
+            return 1
+
+    def _fake_popen(*args: object, **kwargs: object) -> _FakeProc:
+        import contextlib
+
+        # Write a fake stderr line to the runtime log path the tool opens.
+        stdout = kwargs.get("stdout")
+        if hasattr(stdout, "write"):
+            with contextlib.suppress(Exception):
+                stdout.write(b"ImportError: boom from fake runtime\n")
+        return _FakeProc()
+
+    monkeypatch.setattr(subprocess, "Popen", _fake_popen)
+
+    result = _tool(mcp, "elliot_start_runtime")(port=3099, connector_path=str(connector_path))
+    assert "text" in result
+    assert "RUNTIME_START_FAILED" in result["text"]
+    # The log path should now exist and elliot_runtime_logs should return it.
+    logs = _tool(mcp, "elliot_runtime_logs")()
+    assert logs["exists"] is True
+    assert "boom from fake runtime" in logs["tail"]
+
+
+def test_runtime_logs_when_never_started(mcp: FastMCP):
+    result = _tool(mcp, "elliot_runtime_logs")()
+    assert result["exists"] is False
+    assert "tail" in result
+
+
+# ── elliot_create_skill accepts the loose shapes agents produce ──────────────
+
+
+def test_create_skill_accepts_arguments_alias_for_params(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    """Regression: agents naturally write `arguments` instead of `params`.
+    The tool used to surface a raw pydantic ValidationError; it must now
+    transparently accept the alias."""
+    _load_and_create_tool(mcp, session, tmp_path)
+    result = _tool(mcp, "elliot_create_skill")(
+        name="alias_skill",
+        description="Uses arguments alias instead of params",
+        steps=[{"alias": "count", "tool_id": "count_items", "arguments": {"x": 1}}],
+        input_parameters=[],
+    )
+    assert result.get("status") == "created"
+    skill = session.registry.get_skill(result["skill_id"])
+    assert skill is not None
+    assert skill.steps[0].params == {"x": 1}
+
+
+def test_create_skill_missing_alias_gives_clear_error(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    _load_and_create_tool(mcp, session, tmp_path)
+    result = _tool(mcp, "elliot_create_skill")(
+        name="bad_skill",
+        description="Skill with a step missing alias",
+        steps=[{"tool_id": "count_items", "params": {}}],
+        input_parameters=[],
+    )
+    # The error must mention the missing field explicitly.
+    payload = result.get("text") or result.get("error") or ""
+    assert "alias" in payload
+    assert "INVALID_SKILL" in payload

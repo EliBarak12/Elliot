@@ -70,3 +70,42 @@ def test_multiple_rows():
     data = [{"x": i} for i in range(5)]
     result = flatten(data, "t")
     assert len(result.primary_table.rows) == 5
+
+
+def test_array_with_nested_lists_does_not_leave_lists_in_rows():
+    """Regression: nested arrays used to land in rows as raw Python lists,
+    which then blew up sqlite parameter binding with 'type list is not
+    supported'. They must be JSON-encoded instead."""
+    import json
+
+    result = flatten(
+        [{"matrix": [[1, 2], [3, 4]]}],
+        "t",
+    )
+    # Whether the value lands on the primary row or in a child table, no row
+    # value anywhere in the result may be a raw list or dict.
+    all_rows = list(result.primary_table.rows) + [r for t in result.related_tables for r in t.rows]
+    for row in all_rows:
+        for value in row.values():
+            assert not isinstance(value, (list, dict)), (
+                f"row value {value!r} is unbindable for sqlite"
+            )
+
+    # And the JSON-encoded form must round-trip back to the original.
+    primary_or_child = [row for row in all_rows if row.get("value")]
+    assert primary_or_child, "expected nested array contents to survive"
+    decoded = [json.loads(r["value"]) for r in primary_or_child if isinstance(r["value"], str)]
+    assert [1, 2] in decoded and [3, 4] in decoded
+
+
+def test_array_of_mixed_dicts_and_primitives_serializes_primitives_safely():
+    result = flatten(
+        [{"items": [{"k": "v"}, "primitive", 42]}],
+        "t",
+    )
+    child = next(t for t in result.related_tables if "items" in t.name)
+    for row in child.rows:
+        for value in row.values():
+            assert not isinstance(value, (list, dict)), (
+                f"unbindable list/dict leaked into child row: {value!r}"
+            )

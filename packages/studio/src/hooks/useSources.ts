@@ -18,5 +18,9 @@ export function useSources() {
       if (Array.isArray(raw)) return raw;
       return Array.isArray(raw?.sources) ? raw.sources : [];
     },
+    // Live-refresh so sources the agent discovers via MCP appear in the UI
+    // without a page reload.
+    refetchInterval: 4000,
+    refetchOnWindowFocus: true,
   });
 }

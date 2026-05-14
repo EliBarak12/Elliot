@@ -2,6 +2,9 @@ import { useRouterState } from "@tanstack/react-router";
 import { ChevronRight, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useSessionState } from "@/hooks/useSessionState";
+import { useAgentActivity } from "@/hooks/useAgentActivity";
+import { ActivityProgressBar } from "./ActivityProgressBar";
+import { cn } from "@/lib/utils";
 
 const ROUTE_META: Record<string, { title: string; section?: string }> = {
   "/": { title: "Dashboard", section: "Overview" },
@@ -28,8 +31,13 @@ export function Header() {
   const session = sessionRaw as SessionState | undefined;
   const connectorBuilt = session?.connector_built ?? false;
 
+  // Watch the session for agent-driven changes (new source / tool / skill /
+  // connector built). Fires toasts and lights up the progress bar below.
+  // Mounted in the Header (rendered exactly once) so it doesn't double-fire.
+  const { isActive } = useAgentActivity();
+
   return (
-    <header className="flex items-center justify-between h-14 px-6 border-b border-border/70 bg-background/80 backdrop-blur-md sticky top-0 z-10 shrink-0">
+    <header className="relative flex items-center justify-between h-14 px-6 border-b border-border/70 bg-background/80 backdrop-blur-md sticky top-0 z-10 shrink-0">
       <div className="flex items-center gap-2 min-w-0">
         {meta.section && (
           <>
@@ -43,6 +51,33 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-3">
+        <Badge
+          variant={isActive ? "success" : "muted"}
+          className={cn("gap-1.5 transition-colors", isActive && "shadow-[0_0_0_3px_rgba(34,211,238,0.15)]")}
+          title={
+            isActive
+              ? "The agent just changed something — refreshing"
+              : "Live — refreshes every few seconds"
+          }
+        >
+          <span
+            className={cn(
+              "relative flex h-1.5 w-1.5",
+              isActive ? "" : ""
+            )}
+          >
+            {isActive && (
+              <span className="absolute inline-flex h-full w-full rounded-full bg-success opacity-75 animate-ping" />
+            )}
+            <span
+              className={cn(
+                "relative inline-flex h-1.5 w-1.5 rounded-full",
+                isActive ? "bg-success" : "bg-muted-foreground/60"
+              )}
+            />
+          </span>
+          {isActive ? "Agent active" : "Live"}
+        </Badge>
         <button
           type="button"
           className="hidden md:flex items-center gap-2 h-8 px-2.5 rounded-md border border-input bg-card text-muted-foreground text-xs shadow-xs hover:bg-accent/50 transition-colors"
@@ -61,6 +96,8 @@ export function Header() {
           {connectorBuilt ? "Connector live" : "Connector not built"}
         </Badge>
       </div>
+
+      <ActivityProgressBar isActive={isActive} />
     </header>
   );
 }

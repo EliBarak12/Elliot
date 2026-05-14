@@ -5,29 +5,41 @@ on:
     branches: [main, "epic/**", "claude/**"]
   pull_request:
 
+# Audit finding H10: lock the default GITHUB_TOKEN to the minimum scope. CI
+# only reads the repo; no jobs need write access. Override per-job if a
+# specific job ever needs more (e.g. to comment on a PR).
+permissions:
+  contents: read
+
+# Audit finding H10: cancel superseded runs of the same workflow on the same
+# ref so a quick succession of pushes doesn't pile up runner-minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Note on third-party action pinning:
+# We pin to immutable SemVer tags (vX.Y.Z) issued by well-known publishers.
+# For strict supply-chain compliance, replace each `@vX.Y.Z` with the
+# full commit SHA — keep the version comment alongside so Dependabot can
+# still propose upgrades.
+
 jobs:
   python:
     name: Python (lint + typecheck + test)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@v4.2.2
+      - uses: astral-sh/setup-uv@v4.2.0
         with:
           version: "latest"
           python-version: "3.13"
-
       - run: uv sync
-
       - name: Lint
         run: uv run ruff check .
-
       - name: Format check
         run: uv run ruff format --check .
-
       - name: Type check
         run: uv run mypy packages/core/src packages/mcp-plugin/src packages/connector-runtime/src
-
       - name: Test with coverage
         run: uv run pytest --tb=short --cov --cov-fail-under=85
 
@@ -35,24 +47,55 @@ jobs:
     name: Studio (typecheck + test + build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v4.2.2
+      - uses: pnpm/action-setup@v4.0.0
         with:
           version: 9
-
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4.1.0
         with:
           node-version: "22"
           cache: "pnpm"
-
       - run: pnpm install --frozen-lockfile
-
       - name: Type check
         run: pnpm --filter @elliot/studio run typecheck
-
       - name: Unit tests
         run: pnpm --filter @elliot/studio run test --run
-
       - name: Build
         run: pnpm --filter @elliot/studio run build
+
+  # Audit finding H10: add a supply-chain CVE gate. Surfaces known
+  # vulnerabilities in Python deps (pip-audit, PyPA OSV database) and JS
+  # deps (pnpm's audit registry). Marked `continue-on-error: false` for
+  # Python — break the build on a known CVE. The pnpm audit step is
+  # advisory because false-positives in transitive deps are common; flip
+  # it to required once the dep tree is curated.
+  audit-python:
+    name: Audit (Python deps)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: astral-sh/setup-uv@v4.2.0
+        with:
+          version: "latest"
+          python-version: "3.13"
+      - run: uv export --no-emit-project --frozen --format requirements-txt > requirements-audit.txt
+      - uses: pypa/gh-action-pip-audit@v1.1.0
+        with:
+          inputs: requirements-audit.txt
+
+  audit-js:
+    name: Audit (JS deps)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: pnpm/action-setup@v4.0.0
+        with:
+          version: 9
+      - uses: actions/setup-node@v4.1.0
+        with:
+          node-version: "22"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      - name: pnpm audit (high+)
+        run: pnpm audit --prod --audit-level=high

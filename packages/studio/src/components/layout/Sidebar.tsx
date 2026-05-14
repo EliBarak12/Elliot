@@ -14,6 +14,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSessionState } from "@/hooks/useSessionState";
+import logoUrl from "@/assets/logo.svg";
 
 type NavItem = { to: string; label: string; icon: LucideIcon };
 
@@ -61,9 +62,12 @@ export function Sidebar() {
   return (
     <aside className="flex flex-col w-60 shrink-0 border-r border-border/70 bg-background h-screen">
       <div className="flex items-center gap-2.5 h-14 px-5 border-b border-border/70">
-        <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shrink-0 shadow-sm">
-          <span className="text-primary-foreground text-xs font-bold leading-none">E</span>
-        </div>
+        <img
+          src={logoUrl}
+          alt=""
+          aria-hidden="true"
+          className="h-7 w-7 shrink-0"
+        />
         <div className="flex flex-col leading-tight">
           <span className="font-semibold text-[15px] tracking-tight text-foreground">Elliot</span>
           <span className="text-2xs text-muted-foreground">Studio</span>

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ChevronDown, ChevronRight, MonitorDot, RefreshCw } from "lucide-react";
+import { httpJson } from "@/lib/http";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -139,11 +140,7 @@ function SessionRow({ session }: { session: AgentSession }) {
 export default function AgentConsole() {
   const { data, isLoading, refetch, dataUpdatedAt } = useQuery<AgentSession[]>({
     queryKey: ["sessions"],
-    queryFn: async () => {
-      const r = await fetch("http://localhost:3001/v1/sessions?n=20");
-      if (!r.ok) throw new Error("Failed to fetch sessions");
-      return r.json() as Promise<AgentSession[]>;
-    },
+    queryFn: () => httpJson<AgentSession[]>("/v1/sessions?n=20"),
     refetchInterval: 5_000,
   });
 

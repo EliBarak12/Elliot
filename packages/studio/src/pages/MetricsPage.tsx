@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatCard } from "@/components/ui/stat-card";
 import { useMetrics } from "@/hooks/useMetrics";
+import { httpJson } from "@/lib/http";
 import { cn } from "@/lib/utils";
 
 interface ToolMetric {
@@ -98,11 +99,7 @@ export default function MetricsPage() {
 
   const { data: efficiencyRaw } = useQuery<TokenEfficiencyResponse>({
     queryKey: ["token-efficiency"],
-    queryFn: async () => {
-      const r = await fetch("http://localhost:3001/v1/metrics/token-efficiency");
-      if (!r.ok) throw new Error("Failed to fetch token efficiency");
-      return r.json() as Promise<TokenEfficiencyResponse>;
-    },
+    queryFn: () => httpJson<TokenEfficiencyResponse>("/v1/metrics/token-efficiency"),
     refetchInterval: 30_000,
   });
   const efficiencyTools = efficiencyRaw?.tools ?? [];

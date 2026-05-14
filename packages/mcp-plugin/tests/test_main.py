@@ -41,3 +41,17 @@ def test_mcp_route_mounted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     routes = [r.path for r in main_mod.app.routes]
     assert any("/mcp" in p for p in routes)
+
+
+def test_api_key_middleware_registered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Auth middleware must be wired into the plugin so /mcp is not open."""
+    from elliot_core.auth_middleware import ApiKeyMiddleware
+
+    monkeypatch.setenv("ELLIOT_WORKSPACE", str(tmp_path))
+    for mod in list(sys.modules):
+        if "elliot_mcp_plugin.main" in mod:
+            del sys.modules[mod]
+    import elliot_mcp_plugin.main as main_mod
+
+    middleware_types = [m.cls for m in main_mod.app.user_middleware]
+    assert ApiKeyMiddleware in middleware_types

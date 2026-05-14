@@ -154,7 +154,14 @@ def save_draft(draft_id: str, filename: str, connectors_dir: str) -> dict[str, A
     if not filename.endswith(".connector.json"):
         filename = filename.rstrip(".json") + ".connector.json"
     out = Path(connectors_dir) / filename
-    out.write_text(json.dumps(draft, indent=2), encoding="utf-8")
+    # Atomic write so a crash mid-write can't leave a truncated
+    # .connector.json on disk (audit Low 33).
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(out.name + ".tmp")
+    tmp.write_text(json.dumps(draft, indent=2), encoding="utf-8")
+    import os as _os
+
+    _os.replace(tmp, out)
     del _drafts[draft_id]
     tool_count = len(draft.get("tools", []))
     log.info("builder.save_draft", path=str(out), tools=tool_count)

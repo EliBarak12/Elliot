@@ -138,7 +138,11 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 return {"error": "No connector built yet — call elliot_build_connector first"}
             dest = Path(path)
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(serialize_connector(session.connector))
+            # Atomic write — never leave a half-written connector file on disk
+            # if the write is interrupted (audit Low 33).
+            tmp = dest.with_name(dest.name + ".tmp")
+            tmp.write_text(serialize_connector(session.connector))
+            os.replace(tmp, dest)
             log.info("connector.exported", path=str(dest))
 
             # Staleness check: warn if tools or SQL changed since last build

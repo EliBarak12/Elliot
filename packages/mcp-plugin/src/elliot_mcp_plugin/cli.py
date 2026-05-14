@@ -3,10 +3,14 @@ from __future__ import annotations
 import asyncio
 import sys
 
+import structlog
+
 from elliot_core.logging_config import configure_logging
 
 from .connector_loader import load_connector, load_secrets
 from .server import run_stdio
+
+log = structlog.get_logger(__name__)
 
 
 def main() -> None:
@@ -25,7 +29,10 @@ def main() -> None:
     except KeyboardInterrupt:
         sys.exit(0)
     except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        # CLAUDE.md: never `print()`; everything goes through structlog so
+        # downstream log processors can capture both message and structured
+        # context (exc_info adds the stack trace for diagnostic visibility).
+        log.error("cli.fatal", error=str(exc), exc_info=True)
         sys.exit(1)
 
 

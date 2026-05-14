@@ -90,13 +90,22 @@ def read_file(config: SourceConfig) -> FetchResult:
             except PathEscape as exc:
                 last_err = exc
         if resolved is None:
+            # Surface the actual allowed roots in the message itself. The MCP
+            # transport drops `detail`, so without this the agent only sees
+            # "outside the allowed roots" and has to probe with elliot_upload_file
+            # just to discover where files belong.
+            roots_str = ", ".join(str(r) for r in roots)
+            attempted = last_err.candidate if last_err else raw_path
             raise ElliotError(
                 "FILE_NOT_ALLOWED",
-                "File path is outside the allowed roots. "
-                "Upload the file via elliot_upload_file (recommended), or set "
-                "ELLIOT_FILE_ROOT / ELLIOT_FILE_READER_ALLOW_ABSOLUTE=1 for trusted paths.",
+                f"File path {attempted!r} is outside the allowed roots. "
+                f"Allowed roots: {roots_str}. "
+                "Prefer elliot_upload_file (stages the file under the managed "
+                "sources directory automatically); or copy the file under one "
+                "of the allowed roots; or set ELLIOT_FILE_ROOT / "
+                "ELLIOT_FILE_READER_ALLOW_ABSOLUTE=1 for trusted absolute paths.",
                 detail={
-                    "path": last_err.candidate if last_err else raw_path,
+                    "path": attempted,
                     "allowed_roots": [str(r) for r in roots],
                 },
             ) from last_err

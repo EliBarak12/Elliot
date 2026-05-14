@@ -16,7 +16,11 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 from elliot_core.auth_middleware import ApiKeyMiddleware
 
@@ -33,6 +37,58 @@ log = structlog.get_logger(__name__)
 
 _cache = ConnectorCache(ttl_seconds=30)
 _start_time = time.time()
+
+# Audit finding H7: no upper bound on request body size, so an agent could
+# POST an arbitrarily large MCP `initialize` body and exhaust memory.
+# 4 MB is generous for any legitimate MCP/JSON-RPC payload and small enough
+# that a misbehaving client can't OOM the worker. Configurable via env.
+_DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
+
+
+def _max_body_bytes() -> int:
+    raw = os.environ.get("ELLIOT_MAX_REQUEST_BODY_BYTES", "")
+    try:
+        v = int(raw) if raw else _DEFAULT_MAX_BODY_BYTES
+        return max(1024, v)
+    except ValueError:
+        return _DEFAULT_MAX_BODY_BYTES
+
+
+class BodySizeLimitMiddleware(BaseHTTPMiddleware):
+    """Reject requests whose Content-Length exceeds the configured cap.
+
+    For unchunked requests the Content-Length header is authoritative; we
+    short-circuit before the request body is read so we don't materialize
+    the bytes into memory. Chunked uploads (no Content-Length) currently
+    pass through — see follow-up if streaming uploads become a thing.
+    """
+
+    def __init__(self, app: Any, max_bytes: int) -> None:
+        super().__init__(app)
+        self._max = max_bytes
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Any,
+    ) -> Response:
+        cl = request.headers.get("content-length")
+        if cl is not None:
+            try:
+                if int(cl) > self._max:
+                    return JSONResponse(
+                        {
+                            "error": {
+                                "code": "BODY_TOO_LARGE",
+                                "message": f"Request body exceeds {self._max} bytes",
+                            }
+                        },
+                        status_code=413,
+                    )
+            except ValueError:
+                # Malformed Content-Length — let the next layer decide.
+                pass
+        return await call_next(request)
 
 
 def _build_limiter() -> Limiter:
@@ -458,6 +514,10 @@ def create_app(
     async def lifespan(app: FastAPI) -> Any:
         async with mcp.session_manager.run():
             yield
+        # Audit H7: cancel any in-flight background tasks so we don't leave
+        # them in `running` state after the loop closes.
+        with contextlib.suppress(Exception):
+            await get_task_store().cancel_all()
 
     limiter = _build_limiter()
     # redirect_slashes=False so that a POST to /mcp does not 307-redirect to
@@ -479,9 +539,21 @@ def create_app(
             ),
         )
     # Order matters: Starlette inserts each add_middleware at index 0, so the
-    # LAST call wraps the others. ApiKey added first + CORS added second means
-    # CORS is the outermost wrapper and answers preflight before auth runs.
+    # LAST call wraps the others. Final stack (outermost first):
+    #   CORS  →  BodySizeLimit  →  SlowAPI  →  ApiKey  →  app
+    # CORS first so preflight (OPTIONS) is answered before anything else;
+    # body-size cap rejects oversized requests before they reach rate-limit
+    # accounting; SlowAPI rate-limits both authed and unauthed traffic so
+    # the auth check itself can't be brute-forced; ApiKey is innermost so
+    # it runs on the surviving requests only.
     app.add_middleware(ApiKeyMiddleware)
+    # Audit finding H5: the rate limiter was instantiated but never enforced
+    # because SlowAPIMiddleware was missing. Wire it now so the
+    # ELLIOT_RATE_LIMIT env var actually takes effect on every route.
+    app.add_middleware(SlowAPIMiddleware)
+    # Body-size cap (audit H7). Outer real middleware so a huge request is
+    # rejected before any downstream layer materialises it.
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=_max_body_bytes())
     studio_origin = os.environ.get("ELLIOT_STUDIO_ORIGIN", "http://localhost:5173")
     app.add_middleware(
         CORSMiddleware,

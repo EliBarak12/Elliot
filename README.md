@@ -1,4 +1,8 @@
-# Elliot — AI AX (Agent Experience) Platform
+<p align="center">
+  <img src="docs/assets/elliot-logo.svg" alt="Elliot" width="120" height="120" />
+</p>
+
+<h1 align="center">Elliot — AI AX (Agent Experience) Platform</h1>
 
 > **AX** is to agents what UX is to users and DX is to developers. Elliot is the interface layer that makes your product feel native to AI agents — design, validate, deploy, and observe agent-ready tools built around your existing APIs, databases, and files.
 

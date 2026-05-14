@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="Elliot">
+  <defs>
+    <!-- Deep navy → bright cyan diagonal gradient, matching the brand image. -->
+    <linearGradient id="elliot-fill" x1="10" y1="55" x2="55" y2="10" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1e3a5f" />
+      <stop offset="55%" stop-color="#0ea5e9" />
+      <stop offset="100%" stop-color="#22d3ee" />
+    </linearGradient>
+    <!-- Soft cyan glow used for the inner facet edges. -->
+    <linearGradient id="elliot-facet" x1="10" y1="55" x2="55" y2="10" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#67e8f9" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="#a5f3fc" stop-opacity="0.85" />
+    </linearGradient>
+  </defs>
+
+  <!-- Outer arrow silhouette. -->
+  <path d="M52 12 L52 40 L43 32 L12 52 L32 21 L24 12 Z"
+        fill="url(#elliot-fill)"
+        stroke="#0c4a6e" stroke-width="0.8" stroke-linejoin="round" />
+
+  <!-- Crystalline facets — internal lines suggest a low-poly cut diamond. -->
+  <g stroke="url(#elliot-facet)" stroke-width="0.6" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M52 12 L32 21" />
+    <path d="M52 12 L43 32" />
+    <path d="M24 12 L32 21" />
+    <path d="M32 21 L12 52" />
+    <path d="M43 32 L12 52" />
+    <path d="M32 21 L43 32" />
+    <path d="M24 12 L43 32" />
+  </g>
+
+  <!-- Brightest highlight along the diagonal — the "spark" through the crystal. -->
+  <path d="M38 18 L20 42"
+        stroke="#ecfeff" stroke-width="0.6" stroke-opacity="0.7" stroke-linecap="round" />
+</svg>

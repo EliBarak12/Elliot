@@ -2,6 +2,7 @@ import { useRouterState } from "@tanstack/react-router";
 import { ChevronRight, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useSessionState } from "@/hooks/useSessionState";
+import logoUrl from "@/assets/logo.svg";
 
 const ROUTE_META: Record<string, { title: string; section?: string }> = {
   "/": { title: "Dashboard", section: "Overview" },
@@ -30,7 +31,12 @@ export function Header() {
 
   return (
     <header className="flex items-center justify-between h-14 px-6 border-b border-border/70 bg-background/80 backdrop-blur-md sticky top-0 z-10 shrink-0">
-      <div className="flex items-center gap-2 min-w-0">
+      <div className="flex items-center gap-3 min-w-0">
+        <img
+          src={logoUrl}
+          alt="Elliot"
+          className="h-6 w-6 shrink-0"
+        />
         {meta.section && (
           <>
             <span className="text-sm text-muted-foreground truncate">{meta.section}</span>

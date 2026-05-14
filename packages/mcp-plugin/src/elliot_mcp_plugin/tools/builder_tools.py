@@ -148,12 +148,23 @@ def save_draft(draft_id: str, filename: str, connectors_dir: str) -> dict[str, A
     `filename` should end in .connector.json, e.g. "my-api.connector.json".
     Saved to connectors_dir. Returns the full path so the user knows where to find it.
     """
+    from elliot_core.paths import PathEscape, safe_join
+
     draft = _drafts.get(draft_id)
     if not draft:
         return {"error": f"No draft with id {draft_id!r}"}
     if not filename.endswith(".connector.json"):
         filename = filename.rstrip(".json") + ".connector.json"
-    out = Path(connectors_dir) / filename
+    # Audit finding C4: previously `Path(connectors_dir) / filename` accepted
+    # `..` / absolute paths, allowing an agent to overwrite ~/.ssh/authorized_keys,
+    # .env, scripts in $PATH, etc. safe_join asserts the resolved file lives
+    # under connectors_dir; PathEscape is raised otherwise.
+    try:
+        connectors_root = Path(connectors_dir).resolve()
+        connectors_root.mkdir(parents=True, exist_ok=True)
+        out = safe_join(connectors_root, filename)
+    except PathEscape as exc:
+        return {"error": f"refusing to save outside connectors_dir: {exc.message}"}
     # Atomic write so a crash mid-write can't leave a truncated
     # .connector.json on disk (audit Low 33).
     out.parent.mkdir(parents=True, exist_ok=True)

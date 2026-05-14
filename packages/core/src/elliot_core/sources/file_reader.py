@@ -2,15 +2,38 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from elliot_core.errors import ElliotError
+from elliot_core.paths import PathEscape, ensure_under
 from elliot_core.types.source import FetchResult, SourceConfig
 
 _SIZE_WARN_BYTES = 100 * 1024 * 1024  # 100 MB
+
+
+def _file_root() -> Path:
+    """Return the directory tree that file: sources are restricted to.
+
+    Defaults to the current working directory (the project root in normal
+    runs). Operators can override with ELLIOT_FILE_ROOT for deployments
+    where connector data files live elsewhere. Setting
+    ELLIOT_FILE_READER_ALLOW_ABSOLUTE=1 disables the containment check
+    entirely — for trusted environments only.
+    """
+    return Path(os.environ.get("ELLIOT_FILE_ROOT", os.getcwd())).resolve()
+
+
+def _file_root_unrestricted() -> bool:
+    return os.environ.get("ELLIOT_FILE_READER_ALLOW_ABSOLUTE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 # Real business CSVs routinely embed JSON-shaped fields that blow past
@@ -31,7 +54,27 @@ _raise_csv_field_limit()
 
 
 def read_file(config: SourceConfig) -> FetchResult:
-    path = Path(config.path or "")
+    raw_path = config.path or ""
+    if not raw_path:
+        raise ElliotError("FILE_NOT_FOUND", "File path is empty")
+
+    # Audit finding H3: previously `Path(config.path)` was opened verbatim,
+    # so a writeable connector could read arbitrary host files. Resolve and
+    # assert containment under ELLIOT_FILE_ROOT (defaults to cwd). Operators
+    # who need absolute access can set ELLIOT_FILE_READER_ALLOW_ABSOLUTE=1.
+    if _file_root_unrestricted():
+        path = Path(raw_path).resolve()
+    else:
+        try:
+            path = ensure_under(_file_root(), raw_path)
+        except PathEscape as exc:
+            raise ElliotError(
+                "FILE_NOT_ALLOWED",
+                "File path is outside the allowed root. "
+                "Set ELLIOT_FILE_ROOT or ELLIOT_FILE_READER_ALLOW_ABSOLUTE=1 for trusted paths.",
+                detail={"path": exc.candidate},
+            ) from exc
+
     if not path.exists():
         raise ElliotError("FILE_NOT_FOUND", f"File not found: {config.path}")
 

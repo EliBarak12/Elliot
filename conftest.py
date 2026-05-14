@@ -24,9 +24,7 @@ _EXAMPLE_PUBLIC_IP = "93.184.216.34"  # example.com canonical address
 
 def _patched_getaddrinfo(host: str, *args: Any, **kwargs: Any) -> list[Any]:
     """Resolve example.com-family hostnames to a public IP without DNS."""
-    if isinstance(host, str) and (
-        host == "example.com" or host.endswith(".example.com")
-    ):
+    if isinstance(host, str) and (host == "example.com" or host.endswith(".example.com")):
         port = args[0] if args else 0
         return [
             (

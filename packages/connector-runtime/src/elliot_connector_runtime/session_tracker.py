@@ -142,12 +142,16 @@ class SessionTracker:
             session = self._active.get(session_id)
             if session is None:
                 return
+            # Redact secret-bearing argument fields before persisting to
+            # the session log — same policy as AuditLog.record.
+            from elliot_core.redaction import redact_audit_arguments
+
             session.events.append(
                 SessionEvent(
                     ts=time.time(),
                     type="tool_call",
                     tool_id=tool_id,
-                    arguments=arguments,
+                    arguments=redact_audit_arguments(arguments),
                     result_rows=result_rows,
                     result_token_estimate=_estimate_tokens(result_data),
                     duration_ms=duration_ms,

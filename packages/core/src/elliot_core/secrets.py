@@ -6,11 +6,27 @@ import os
 import re
 from typing import Any
 
+from elliot_core.errors import ElliotError
+
 _PLACEHOLDER = re.compile(r"\{\{\s*env:([A-Z0-9_]+)\s*\}\}")
 
 
-class SecretResolutionError(Exception):
-    """Raised when a required env var placeholder cannot be resolved."""
+class SecretResolutionError(ElliotError):
+    """Raised when a required env var placeholder cannot be resolved.
+
+    CLAUDE.md mandates every Elliot exception inherit from ElliotError so
+    the error contract is uniform. Code: ``SECRET_NOT_SET``.
+    """
+
+    def __init__(self, var_name: str) -> None:
+        # Deliberately do NOT include the env value or any other secret-
+        # adjacent data — only the variable name and a fix-it hint.
+        super().__init__(
+            "SECRET_NOT_SET",
+            f"Required secret '{{{{ env:{var_name} }}}}' is not set in environment",
+            detail={"var_name": var_name},
+        )
+        self.var_name = var_name
 
 
 def resolve_secrets(obj: Any) -> Any:
@@ -24,9 +40,7 @@ def resolve_secrets(obj: Any) -> Any:
             name = match.group(1)
             val = os.environ.get(name)
             if val is None:
-                raise SecretResolutionError(
-                    f"Required secret '{{{{ env:{name} }}}}' is not set in environment"
-                )
+                raise SecretResolutionError(name)
             return val
 
         return _PLACEHOLDER.sub(_replace, obj)

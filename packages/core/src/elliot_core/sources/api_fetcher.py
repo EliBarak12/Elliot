@@ -10,6 +10,7 @@ import httpx
 
 from elliot_core.errors import SourceFetchError
 from elliot_core.http import SSRFError, safe_client, validate_url
+from elliot_core.redaction import redact_url
 from elliot_core.types.source import FetchResult, SourceConfig
 
 _RETRY_STATUSES = {429, 500, 503}
@@ -114,7 +115,7 @@ async def fetch_endpoint(config: SourceConfig, secrets: dict[str, str]) -> Fetch
                 except httpx.TransportError as exc:
                     if attempt == _MAX_RETRIES - 1:
                         raise SourceFetchError(
-                            f"Network error fetching {config.url}: {type(exc).__name__}"
+                            f"Network error fetching {redact_url(config.url)}: {type(exc).__name__}"
                         ) from exc
                     await asyncio.sleep(2**attempt)
                     continue
@@ -128,7 +129,7 @@ async def fetch_endpoint(config: SourceConfig, secrets: dict[str, str]) -> Fetch
             if resp is None or resp.is_error:
                 status = resp.status_code if resp else 0
                 raise SourceFetchError(
-                    f"HTTP {status} from {config.url} after {_MAX_RETRIES} attempts"
+                    f"HTTP {status} from {redact_url(config.url)} after {_MAX_RETRIES} attempts"
                 )
 
             data = resp.json()

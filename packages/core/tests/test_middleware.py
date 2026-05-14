@@ -93,6 +93,31 @@ def test_auth_middleware_rejects_wrong_key(monkeypatch: pytest.MonkeyPatch):
     assert resp.status_code == 401
 
 
+def test_auth_middleware_accepts_bearer_token(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ELLIOT_API_KEY", "secret")
+    client = TestClient(_app_with_auth())
+    resp = client.get("/items", headers={"Authorization": "Bearer secret"})
+    assert resp.status_code == 200
+
+
+def test_auth_middleware_rejects_wrong_bearer(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ELLIOT_API_KEY", "secret")
+    client = TestClient(_app_with_auth())
+    resp = client.get("/items", headers={"Authorization": "Bearer wrong"})
+    assert resp.status_code == 401
+
+
+def test_auth_middleware_bypasses_options(monkeypatch: pytest.MonkeyPatch):
+    """OPTIONS preflight must skip auth so CORS can answer browser preflights."""
+    monkeypatch.setenv("ELLIOT_API_KEY", "secret")
+    client = TestClient(_app_with_auth())
+    # No X-Elliot-Key header — should still be allowed because OPTIONS bypasses auth.
+    resp = client.options("/items")
+    # FastAPI without OPTIONS handler returns 405; the key check should NOT
+    # produce 401. Either 200/204 (with handler) or 405 is acceptable.
+    assert resp.status_code != 401
+
+
 # ── error_middleware ──────────────────────────────────────────────────────────
 
 

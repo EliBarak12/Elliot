@@ -9,6 +9,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any
 
+import structlog
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from mcp.server.fastmcp import FastMCP
@@ -16,6 +17,8 @@ from mcp.types import ToolAnnotations
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+
+from elliot_core.auth_middleware import ApiKeyMiddleware
 
 from .audit import AuditLog
 from .cache import ConnectorCache
@@ -25,6 +28,8 @@ from .observation_store import ObservationStore
 from .protocols.openai import register_openai_routes
 from .session_tracker import SessionTracker
 from .task_store import TaskStore, get_task_store
+
+log = structlog.get_logger(__name__)
 
 _cache = ConnectorCache(ttl_seconds=30)
 _start_time = time.time()
@@ -463,11 +468,32 @@ def create_app(
     app = FastAPI(lifespan=lifespan, redirect_slashes=False)
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+    if not os.environ.get("ELLIOT_API_KEY"):
+        log.warning(
+            "auth.disabled",
+            service="connector-runtime",
+            message=(
+                "ELLIOT_API_KEY is not set: the runtime is accepting unauthenticated "
+                "requests. This is acceptable for localhost-only development; set "
+                "ELLIOT_API_KEY before exposing the service on a non-loopback bind."
+            ),
+        )
+    # Order matters: Starlette inserts each add_middleware at index 0, so the
+    # LAST call wraps the others. ApiKey added first + CORS added second means
+    # CORS is the outermost wrapper and answers preflight before auth runs.
+    app.add_middleware(ApiKeyMiddleware)
+    studio_origin = os.environ.get("ELLIOT_STUDIO_ORIGIN", "http://localhost:5173")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173"],
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=[studio_origin],
+        allow_methods=["GET", "POST", "OPTIONS", "DELETE"],
+        allow_headers=[
+            "Content-Type",
+            "X-Elliot-Key",
+            "Authorization",
+            "x-client-name",
+            "Mcp-Session-Id",
+        ],
     )
     app.mount("/mcp", _mcp_app)
 

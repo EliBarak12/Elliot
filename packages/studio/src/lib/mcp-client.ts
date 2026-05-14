@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { toast } from "sonner";
+import { PLUGIN_URL, authHeadersForMcp } from "./http";
 
 const SESSION_KEY = "elliot_mcp_session_id";
 
@@ -13,10 +14,12 @@ async function _doConnect(): Promise<Client> {
   const storedId = sessionStorage.getItem(SESSION_KEY) ?? undefined;
 
   const transport = new StreamableHTTPClientTransport(
-    new URL("http://localhost:3000/mcp/"),
+    new URL(`${PLUGIN_URL}/mcp/`),
     {
       sessionId: storedId,
-      requestInit: { headers: { "x-client-name": "elliot-studio" } },
+      requestInit: {
+        headers: { "x-client-name": "elliot-studio", ...authHeadersForMcp() },
+      },
     }
   );
 

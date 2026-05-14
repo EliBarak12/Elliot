@@ -69,6 +69,27 @@ def test_health(client: TestClient) -> None:
     assert resp.json()["status"] == "ok"
 
 
+def test_api_key_middleware_registered(app) -> None:
+    """Auth must be wired into the runtime so /v1/* routes are not open."""
+    from elliot_core.auth_middleware import ApiKeyMiddleware
+
+    middleware_types = [m.cls for m in app.user_middleware]
+    assert ApiKeyMiddleware in middleware_types
+
+
+def test_runtime_requires_api_key_when_set(
+    connector_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ELLIOT_API_KEY", "secret")
+    app = create_app(connector_path=str(connector_file), secrets={})
+    client = TestClient(app)
+    # /health is in the bypass set; /v1/audit is not.
+    assert client.get("/health").status_code == 200
+    assert client.get("/v1/audit").status_code == 401
+    assert client.get("/v1/audit", headers={"X-Elliot-Key": "secret"}).status_code == 200
+    assert client.get("/v1/audit", headers={"Authorization": "Bearer secret"}).status_code == 200
+
+
 def test_audit_record_and_tail(tmp_path: Path) -> None:
     log = AuditLog(tmp_path / "audit.ndjson")
     log.record("tool_x", {"a": 1}, result_row_count=5, duration_ms=12.3)

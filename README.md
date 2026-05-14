@@ -23,6 +23,9 @@ Elliot makes these problems visible and fixable.
 ```
 1. Connect your data sources
    └ REST APIs, PostgreSQL, MySQL, CSV / JSON files — all in one connector
+   └ Local files on the user's machine: agents call elliot_upload_file
+     (stages to .elliot/sources/) then elliot_discover_source — no
+     ELLIOT_FILE_ROOT configuration needed.
 
 2. Build tools (no SQL required)
    └ Define: name, description, parameters, filter conditions, return fields

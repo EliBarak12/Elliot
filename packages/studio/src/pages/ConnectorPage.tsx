@@ -9,6 +9,7 @@ import {
   Package,
   Play,
   ShieldCheck,
+  X,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -369,6 +370,7 @@ export default function ConnectorPage() {
 
       {status && (
         <div
+          role={status.type === "error" ? "alert" : "status"}
           className={cn(
             "flex items-center gap-2 rounded-md border px-3 py-2 text-sm",
             status.type === "ok"
@@ -381,7 +383,15 @@ export default function ConnectorPage() {
           ) : (
             <AlertCircle className="h-4 w-4 shrink-0" />
           )}
-          <span>{status.message}</span>
+          <span className="flex-1">{status.message}</span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => setStatus(null)}
+            className="shrink-0 rounded p-0.5 opacity-70 hover:opacity-100 hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
       )}
 

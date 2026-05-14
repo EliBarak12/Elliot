@@ -6,6 +6,9 @@ interface SkillListEnvelope {
   count?: number;
 }
 
+// Poll so skills the agent creates over MCP show up in the Studio live.
+const LIVE_REFETCH_MS = 3_000;
+
 export function useSkills() {
   return useQuery({
     queryKey: ["skills"],
@@ -18,5 +21,7 @@ export function useSkills() {
       if (Array.isArray(raw)) return raw;
       return Array.isArray(raw?.skills) ? raw.skills : [];
     },
+    refetchInterval: LIVE_REFETCH_MS,
+    refetchOnWindowFocus: true,
   });
 }

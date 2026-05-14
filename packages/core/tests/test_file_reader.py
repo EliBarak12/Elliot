@@ -68,3 +68,29 @@ def test_csv_large_field_does_not_raise(tmp_path: Path):
     result = read_file(_cfg(str(csv_path), "csv"))
     assert len(result.rows) == 1
     assert len(result.rows[0]["payload"]) == 200_000
+
+
+def test_file_not_allowed_message_names_allowed_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression: the message used to say only "outside the allowed roots",
+    leaving agents to probe with elliot_upload_file to discover where files
+    belong. The actual roots must appear in the visible message."""
+    monkeypatch.delenv("ELLIOT_FILE_READER_ALLOW_ABSOLUTE", raising=False)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("ELLIOT_FILE_ROOT", str(workspace))
+
+    outside = tmp_path / "outside.json"
+    outside.write_text("[]")
+
+    with pytest.raises(ElliotError) as exc_info:
+        read_file(_cfg(str(outside), "json"))
+
+    err = exc_info.value
+    assert err.code == "FILE_NOT_ALLOWED"
+    assert str(workspace) in err.message
+    assert "elliot_upload_file" in err.message
+    assert err.detail is not None
+    assert str(workspace) in err.detail["allowed_roots"]

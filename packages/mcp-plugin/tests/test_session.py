@@ -115,3 +115,69 @@ def test_load_session_without_tool_sql_key(session: ElliotSession, tmp_path: Pat
     restored = ElliotSession(cwd=str(tmp_path))
     restored.load()
     assert restored.tool_sql == {}
+
+
+def test_refresh_from_disk_picks_up_external_writes(tmp_path: Path):
+    """Regression: when the agent's MCP client spawns a separate plugin
+    process that writes to the shared workspace, the Studio's plugin
+    process must be able to see the new tools/sources without a restart.
+    refresh_from_disk() reloads session.json when its mtime advances."""
+    import os
+    import time
+
+    # Plugin "A" — what the Studio is connected to.
+    studio_session = ElliotSession(cwd=str(tmp_path))
+    studio_session.load()
+    assert studio_session.registry.get_all() == []
+
+    # Plugin "B" — pretend the agent's client spawned its own plugin and
+    # created a tool. It writes to the same workspace.
+    agent_session = ElliotSession(cwd=str(tmp_path))
+    agent_session.load()
+    tool = ToolDefinition(
+        id="agent_tool",
+        name="Agent Tool",
+        description="Created by the agent",
+        category="READ",
+        source_ids=[],
+    )
+    agent_session.registry.add(tool)
+    agent_session.save()
+
+    # Bump mtime past Studio's tracked mtime — filesystems can have 1s
+    # resolution, so an explicit os.utime is more reliable than time.sleep.
+    session_path = tmp_path / ".elliot" / "session.json"
+    future = time.time() + 1
+    os.utime(session_path, (future, future))
+
+    # Studio's plugin polls and refreshes — should now see the agent's tool.
+    reloaded = studio_session.refresh_from_disk()
+    assert reloaded is True
+    names = [t.id for t in studio_session.registry.get_all()]
+    assert "agent_tool" in names
+
+
+def test_refresh_from_disk_is_noop_when_unchanged(session: ElliotSession):
+    """Calling refresh repeatedly without any external write must not
+    re-read or mutate state — it's invoked on every list endpoint and
+    needs to be effectively free in the steady state."""
+    session.save()
+    assert session.refresh_from_disk() is False
+    assert session.refresh_from_disk() is False
+
+
+def test_save_then_refresh_does_not_re_read(session: ElliotSession):
+    """Our own save() must update the tracked mtime so the very next
+    list call doesn't pointlessly clear-and-reload what we just wrote."""
+    tool = ToolDefinition(
+        id="local_tool",
+        name="Local Tool",
+        description="x",
+        category="READ",
+        source_ids=[],
+    )
+    session.registry.add(tool)
+    session.save()
+    # Should be a no-op — we just wrote it.
+    assert session.refresh_from_disk() is False
+    assert [t.id for t in session.registry.get_all()] == ["local_tool"]

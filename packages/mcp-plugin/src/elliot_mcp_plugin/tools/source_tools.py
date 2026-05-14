@@ -257,6 +257,10 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
     def elliot_list_sources() -> dict:  # type: ignore[type-arg]
         """List all loaded sources with their table names, row counts, and columns."""
         try:
+            # Pick up sources the agent discovered since our last list — even
+            # if the agent runs in a separate plugin process sharing the
+            # same workspace.
+            session.refresh_from_disk()
             sources: list[dict[str, Any]] = []
             for sid, src in session.sources.items():
                 columns: list[dict[str, str]] = []

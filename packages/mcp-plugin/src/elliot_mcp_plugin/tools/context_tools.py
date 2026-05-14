@@ -48,6 +48,11 @@ def register_context_tools(mcp: FastMCP, session: ElliotSession) -> None:
     def elliot_get_session_state() -> dict:  # type: ignore[type-arg]
         """Return a summary of the current session: sources, tools, skills, connector status."""
         try:
+            # The Studio polls this every few seconds to drive the live
+            # activity toasts and the Header counts; pick up anything the
+            # agent has written since our last check (including from a
+            # separate plugin process sharing the same workspace).
+            session.refresh_from_disk()
             return {
                 "source_count": len(session.sources),
                 "tool_count": len(session.registry.get_all()),

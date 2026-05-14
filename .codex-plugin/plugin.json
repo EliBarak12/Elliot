@@ -1,0 +1,26 @@
+{
+  "name": "elliot",
+  "version": "1.0.0",
+  "description": "Turn any API or database into agent-ready MCP tools. Design, validate, deploy, and observe connector tool sets with Codex.",
+  "author": {
+    "name": "Elliot",
+    "url": "https://github.com/EliBarak12/elliot"
+  },
+  "homepage": "https://github.com/EliBarak12/elliot",
+  "repository": "https://github.com/EliBarak12/elliot",
+  "license": "MIT",
+  "keywords": ["mcp", "connectors", "agent-tools", "api", "database"],
+  "skills": [
+    "skills/getting-started",
+    "skills/discover-source",
+    "skills/build-connector",
+    "skills/lint-connector",
+    "skills/run-eval",
+    "skills/deploy"
+  ],
+  "mcpServers": {
+    "elliot": {
+      "url": "http://localhost:3000/mcp/"
+    }
+  }
+}

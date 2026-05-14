@@ -72,7 +72,9 @@ def create_server(config: ConnectorConfig, secrets: dict[str, str]) -> Server:
 
 
 def create_elliot_server(session: Any) -> FastMCP:
-    """Create a FastMCP server with all Elliot tool groups registered."""
+    """Create a FastMCP server with all Elliot tool groups, prompts, and resources registered."""
+    from elliot_mcp_plugin.prompts import register_prompts
+    from elliot_mcp_plugin.resources import register_resources
     from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
     from elliot_mcp_plugin.tools.context_tools import register_context_tools
     from elliot_mcp_plugin.tools.eval_tools import register_eval_tools
@@ -83,11 +85,24 @@ def create_elliot_server(session: Any) -> FastMCP:
     from elliot_mcp_plugin.tools.tool_tools import register_tool_tools
 
     instructions = (
-        "Elliot helps you build agent-ready MCP connectors from any API or database. "
-        "Start with elliot_set_context to name your connector, then elliot_discover_source "
-        "to describe your data source. Use elliot_create_tool to define agent-callable tools "
-        "with verb-first descriptions. Run elliot_lint_connector before saving. "
-        "Use elliot_run_eval to validate tool quality against expected outputs."
+        "Elliot turns any API or database into agent-ready MCP tools. You are the "
+        "agent that designs, lints, evaluates, and deploys those tools — Elliot is "
+        "the workbench.\n"
+        "\n"
+        "FIRST MOVE on any new session: call `prompts/get name=getting_started`. "
+        "It teaches the five principles and the canonical workflow.\n"
+        "\n"
+        "Available prompts (call `prompts/list` any time):\n"
+        "  - getting_started — read first; explains everything\n"
+        "  - discover_source — register a REST API or DB as a queryable source\n"
+        "  - build_connector — draft tools with verb-first descriptions\n"
+        "  - lint_connector  — run elliot_lint_connector and fix every issue\n"
+        "  - run_eval        — validate tool quality against expected outputs\n"
+        "  - deploy          — lint → validate → eval → save → start runtime\n"
+        "\n"
+        "Available resources (call `resources/list`): connector templates "
+        "(rest-api-key, postgres-readonly, paginated-rest, openapi-petstore), "
+        "principles, error-code reference, install docs."
     )
     mcp = FastMCP(
         "elliot", instructions=instructions, streamable_http_path="/", stateless_http=True
@@ -100,6 +115,8 @@ def create_elliot_server(session: Any) -> FastMCP:
     register_connector_tools(mcp, session)
     register_studio_tools(mcp, session)
     register_eval_tools(mcp, session)
+    register_prompts(mcp)
+    register_resources(mcp)
     return mcp
 
 

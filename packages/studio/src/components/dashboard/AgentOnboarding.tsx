@@ -1,24 +1,59 @@
 import * as React from "react";
 import { Check, Copy, Sparkles, Terminal } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
-const CONNECT_COMMAND = "make dev";
 const EXAMPLE_PROMPT =
   "I have an API at https://api.example.com — help me build a connector for it.";
 
-const SUPPORTED_AGENTS = [
-  { name: "Claude Code", note: ".mcp.json" },
-  { name: "Cursor", note: ".cursor/mcp.json" },
-  { name: "VS Code / Copilot", note: ".vscode/mcp.json" },
-  { name: "Windsurf", note: "~/.codeium/windsurf" },
-  { name: "Codex", note: ".codex/config.toml" },
+type InstallOption = {
+  id: string;
+  agent: string;
+  blurb: string;
+  commands: string[];
+};
+
+const INSTALL_OPTIONS: InstallOption[] = [
+  {
+    id: "claude-code",
+    agent: "Claude Code",
+    blurb: "One marketplace install. Skills, MCP server, and resources all ship together.",
+    commands: [
+      "/plugin marketplace add EliBarak12/elliot",
+      "/plugin install elliot@elliot",
+    ],
+  },
+  {
+    id: "codex",
+    agent: "Codex",
+    blurb: "Codex plugins (since Mar 2026) install from any Git URL.",
+    commands: [
+      "codex plugin marketplace add EliBarak12/elliot",
+      "/plugin install elliot",
+    ],
+  },
+  {
+    id: "any-agent",
+    agent: "Cursor, VS Code, Windsurf",
+    blurb: "Detects every coding agent on your machine and writes the MCP config for each.",
+    commands: ["npx @elliot/connect"],
+  },
+  {
+    id: "local-dev",
+    agent: "Local dev (this repo)",
+    blurb: "Boots the plugin, runtime, and studio together; auto-registers every agent.",
+    commands: ["make dev"],
+  },
 ];
 
 interface AgentOnboardingProps {
-  /** When `true`, render the compact one-line variant. Used after the agent
-   *  has already touched Elliot (a connector is built or audit entries
-   *  exist), so the onboarding stays out of the way without disappearing. */
+  /** When `true`, render the compact one-line variant. */
   compact?: boolean;
 }
 
@@ -26,6 +61,10 @@ export function AgentOnboarding({ compact = false }: AgentOnboardingProps) {
   if (compact) {
     return <CompactReconnectHint />;
   }
+
+  const [selectedId, setSelectedId] = React.useState<string>(INSTALL_OPTIONS[0].id);
+  const selected =
+    INSTALL_OPTIONS.find((o) => o.id === selectedId) ?? INSTALL_OPTIONS[0];
 
   return (
     <Card className="border-primary/30 bg-gradient-to-br from-primary/5 via-card to-card">
@@ -37,9 +76,9 @@ export function AgentOnboarding({ compact = false }: AgentOnboardingProps) {
           <div className="space-y-1">
             <CardTitle>Let your agent do the work</CardTitle>
             <CardDescription>
-              Elliot is built for agents, not clicks. Wire your agent up once, then describe what
-              you want — it will discover sources, draft tools, and build the connector. This
-              dashboard is here to <em>watch</em>, not to drive.
+              Elliot is built for agents, not clicks. Install once for the agent you use, then
+              describe what you want — it will discover sources, draft tools, lint, and deploy.
+              This dashboard is here to <em>watch</em>, not to drive.
             </CardDescription>
           </div>
         </div>
@@ -47,20 +86,31 @@ export function AgentOnboarding({ compact = false }: AgentOnboardingProps) {
       <CardContent className="space-y-5">
         <OnboardingStep
           number={1}
-          title="Start Elliot and auto-register your agent"
-          description="`make dev` runs `elliot connect` first, which detects every coding agent on this machine and writes the right MCP config for each."
+          title="Install Elliot for your agent"
+          description="One command installs the MCP server AND the six skills (`getting-started`, `discover-source`, `build-connector`, `lint-connector`, `run-eval`, `deploy`) into your agent."
         >
-          <CopyableCommand command={CONNECT_COMMAND} />
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            {SUPPORTED_AGENTS.map((agent) => (
-              <span
-                key={agent.name}
-                title={agent.note}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card px-2.5 py-0.5 text-2xs font-medium text-muted-foreground"
+          <div className="flex flex-wrap gap-1.5">
+            {INSTALL_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setSelectedId(opt.id)}
+                aria-pressed={selectedId === opt.id}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-2xs font-medium transition-colors",
+                  selectedId === opt.id
+                    ? "border-primary/60 bg-primary/10 text-foreground"
+                    : "border-border/60 bg-card text-muted-foreground hover:text-foreground"
+                )}
               >
-                <span className="h-1 w-1 rounded-full bg-success/70" />
-                {agent.name}
-              </span>
+                {opt.agent}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">{selected.blurb}</p>
+          <div className="space-y-1.5">
+            {selected.commands.map((cmd) => (
+              <CopyableCommand key={cmd} command={cmd} />
             ))}
           </div>
         </OnboardingStep>
@@ -68,7 +118,7 @@ export function AgentOnboarding({ compact = false }: AgentOnboardingProps) {
         <OnboardingStep
           number={2}
           title="Tell your agent what to build"
-          description="Open the agent you just wired up and ask it. It will call Elliot's MCP tools to discover the API, draft tools, and run evals."
+          description="Open the agent you just wired up and ask it. On first connect it will call `prompts/get name=getting_started` and then walk through `discover-source` → `build-connector` → `lint-connector` → `run-eval` → `deploy`."
         >
           <CopyablePrompt prompt={EXAMPLE_PROMPT} />
         </OnboardingStep>
@@ -92,8 +142,8 @@ function CompactReconnectHint() {
           <Sparkles className="h-3.5 w-3.5 text-primary" />
           <span className="font-medium">Your agent runs the show.</span>
         </span>
-        <span>Re-wire any time:</span>
-        <CopyableCommand command={CONNECT_COMMAND} compact />
+        <span>Re-install any time:</span>
+        <CopyableCommand command="/plugin install elliot@elliot" compact />
       </CardContent>
     </Card>
   );
@@ -133,8 +183,6 @@ function OnboardingStep({
   );
 }
 
-/** Tiny markdown-ish helper so `code` segments render in <code> without
- *  pulling a markdown lib for one paragraph. */
 function renderInlineCode(text: string): React.ReactNode {
   const parts = text.split(/(`[^`]+`)/g);
   return parts.map((part, i) =>
@@ -155,7 +203,10 @@ function CopyableCommand({ command, compact = false }: { command: string; compac
       )}
     >
       <Terminal
-        className={cn("shrink-0 text-muted-foreground", compact ? "h-3 w-3" : "h-3.5 w-3.5")}
+        className={cn(
+          "shrink-0 text-muted-foreground",
+          compact ? "h-3 w-3" : "h-3.5 w-3.5"
+        )}
       />
       <code className="flex-1 truncate text-foreground">$ {command}</code>
       <CopyButton value={command} label={`Copy command: ${command}`} />
@@ -167,7 +218,7 @@ function CopyablePrompt({ prompt }: { prompt: string }) {
   return (
     <div className="rounded-md border border-border/70 bg-muted/40 p-3">
       <div className="flex items-start justify-between gap-3">
-        <p className="text-sm italic text-foreground">"{prompt}"</p>
+        <p className="text-sm italic text-foreground">&quot;{prompt}&quot;</p>
         <CopyButton value={prompt} label="Copy example prompt" />
       </div>
     </div>
@@ -183,8 +234,7 @@ function CopyButton({ value, label }: { value: string; label: string }) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
-      // navigator.clipboard rejects under non-secure origins; the user can
-      // still select the text manually. Don't surface a fake error toast.
+      // navigator.clipboard rejects under non-secure origins
     }
   }, [value]);
 

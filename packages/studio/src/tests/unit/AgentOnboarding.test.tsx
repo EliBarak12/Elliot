@@ -4,9 +4,6 @@ import { AgentOnboarding } from "@/components/dashboard/AgentOnboarding";
 
 function installClipboardSpy() {
   const writeText = vi.fn().mockResolvedValue(undefined);
-  // Reinstall on every test — jsdom doesn't ship clipboard, and
-  // @testing-library/user-event's setup() can shadow it. fireEvent
-  // doesn't, so we stay in control of the spy.
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
     value: { writeText },
@@ -15,33 +12,60 @@ function installClipboardSpy() {
 }
 
 describe("AgentOnboarding", () => {
-  it("shows the make dev command and the example prompt by default", () => {
+  it("shows the marketplace install command for Claude Code by default", () => {
     render(<AgentOnboarding />);
     expect(screen.getByText(/Let your agent do the work/i)).toBeInTheDocument();
-    expect(screen.getByText(/\$ make dev/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/\$ \/plugin marketplace add EliBarak12\/elliot/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/\$ \/plugin install elliot@elliot/)).toBeInTheDocument();
     expect(
       screen.getByText(/I have an API at https:\/\/api.example.com/i)
     ).toBeInTheDocument();
   });
 
-  it("lists every auto-registered agent so the user knows it's covered", () => {
+  it("offers install commands for every supported agent surface", () => {
     render(<AgentOnboarding />);
-    for (const agent of [
+    for (const label of [
       "Claude Code",
-      "Cursor",
-      "VS Code / Copilot",
-      "Windsurf",
       "Codex",
+      "Cursor, VS Code, Windsurf",
+      "Local dev (this repo)",
     ]) {
-      expect(screen.getByText(agent)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
   });
 
-  it("copies the command to clipboard when the copy button is clicked", async () => {
+  it("switches to the Codex install commands when the Codex tab is selected", () => {
+    render(<AgentOnboarding />);
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+    expect(
+      screen.getByText(/\$ codex plugin marketplace add EliBarak12\/elliot/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/\$ \/plugin install elliot/)).toBeInTheDocument();
+  });
+
+  it("switches to the npx auto-install command when the cross-agent tab is selected", () => {
+    render(<AgentOnboarding />);
+    fireEvent.click(screen.getByRole("button", { name: "Cursor, VS Code, Windsurf" }));
+    expect(screen.getByText(/\$ npx @elliot\/connect/)).toBeInTheDocument();
+  });
+
+  it("still surfaces `make dev` for users who clone the repo", () => {
+    render(<AgentOnboarding />);
+    fireEvent.click(screen.getByRole("button", { name: "Local dev (this repo)" }));
+    expect(screen.getByText(/\$ make dev/)).toBeInTheDocument();
+  });
+
+  it("copies a marketplace command to clipboard when its copy button is clicked", async () => {
     const writeText = installClipboardSpy();
     render(<AgentOnboarding />);
-    fireEvent.click(screen.getByLabelText(/Copy command: make dev/i));
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith("make dev"));
+    fireEvent.click(
+      screen.getByLabelText(/Copy command: \/plugin marketplace add EliBarak12\/elliot/i)
+    );
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith("/plugin marketplace add EliBarak12/elliot")
+    );
   });
 
   it("copies the example prompt to clipboard", async () => {
@@ -58,9 +82,9 @@ describe("AgentOnboarding", () => {
   it("renders the compact reconnect hint when the agent has already produced output", () => {
     render(<AgentOnboarding compact />);
     expect(screen.getByText(/Your agent runs the show/i)).toBeInTheDocument();
-    // The full three-step walkthrough is not present in compact mode.
-    expect(screen.queryByText(/Tell your agent what to build/i)).not.toBeInTheDocument();
-    // But the reconnect command is still copyable.
-    expect(screen.getByText(/\$ make dev/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Tell your agent what to build/i)
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/\$ \/plugin install elliot@elliot/)).toBeInTheDocument();
   });
 });

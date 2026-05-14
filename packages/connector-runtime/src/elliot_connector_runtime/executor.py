@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-import httpx
 import jmespath
 
 from elliot_core.sqlite.engine import SQLiteEngine
@@ -104,10 +103,19 @@ class ToolExecutor:
         source: SourceConfig,
         arguments: dict[str, Any],
     ) -> list[dict[str, Any]]:
+        from elliot_core.http import SSRFError, safe_client, validate_url
+
         url = _interpolate(source.url or "", arguments)
         headers = _build_auth_headers(source.auth, self._secrets) if source.auth else {}
 
-        async with httpx.AsyncClient(timeout=30) as client:
+        # Agent-supplied `arguments` may reach `_interpolate`, so the resolved
+        # URL is attacker-influenced. Validate before any TCP connect.
+        try:
+            validate_url(url)
+        except SSRFError as exc:
+            raise ExecutorError(f"Refusing to fetch REST source: {exc.message}") from exc
+
+        async with safe_client(timeout=30) as client:
             resp = await client.get(url, headers=headers)
         resp.raise_for_status()
 

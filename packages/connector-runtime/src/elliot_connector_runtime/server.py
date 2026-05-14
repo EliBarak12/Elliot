@@ -604,11 +604,18 @@ def create_app(
 
 async def _ping_source(source: Any) -> None:
     """Lightweight reachability check for a source."""
-    import httpx
+    from elliot_core.http import SSRFError, safe_client, validate_url
 
     if source.type == "rest":
-        async with httpx.AsyncClient(timeout=3) as client:
-            await client.head(source.url or "")
+        url = source.url or ""
+        try:
+            validate_url(url)
+        except SSRFError as exc:
+            # /v1/health must not be usable as an SSRF probe — surface the
+            # block to the caller without making the HEAD request.
+            raise RuntimeError(f"SSRF_BLOCKED: {exc.message}") from exc
+        async with safe_client(timeout=3) as client:
+            await client.head(url)
     # DB and file sources: skip ping — they're checked when tools execute
 
 

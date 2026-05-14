@@ -241,7 +241,10 @@ def _probe_mcp_initialize(url: str, timeout: float = 2.0) -> tuple[bool, str | N
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        # nosec - URL is operator-supplied (resolved from ELLIOT_*_URL env or
+        # the local default). The CLI legitimately probes localhost, so this
+        # path bypasses the SSRF validator.
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
             raw = resp.read(8192).decode("utf-8", errors="replace")
             if "jsonrpc" in raw or resp.status in (200, 202):
                 return True, None

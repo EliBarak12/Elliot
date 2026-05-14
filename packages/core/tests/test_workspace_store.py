@@ -98,3 +98,85 @@ def test_save_secrets_does_not_duplicate_gitignore_entry(
     store.save_secrets({"K": "v2"})
     gi = (tmp_path / ".gitignore").read_text()
     assert gi.count(".elliot/secrets.enc") == 1
+
+
+# ── Audit C2: secret key hardening regression tests ──────────────────────────
+
+
+def test_save_secrets_refused_in_prod_without_real_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """ELLIOT_ENV=production + no ELLIOT_SECRET_KEY must refuse to encrypt."""
+    monkeypatch.delenv("ELLIOT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("ELLIOT_ALLOW_DEV_SECRET_KEY", raising=False)
+    monkeypatch.setenv("ELLIOT_ENV", "production")
+    s = WorkspaceStore(cwd=str(tmp_path))
+    with pytest.raises(ElliotError) as exc:
+        s.save_secrets({"X": "y"})
+    assert exc.value.code == "SECRETS_NO_KEY"
+
+
+def test_save_secrets_refused_in_prod_with_dev_placeholder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Using the literal dev-passphrase string in prod must also be refused."""
+    monkeypatch.setenv("ELLIOT_ENV", "production")
+    monkeypatch.setenv("ELLIOT_SECRET_KEY", "default-dev-key-do-not-use-in-prod")
+    monkeypatch.delenv("ELLIOT_ALLOW_DEV_SECRET_KEY", raising=False)
+    s = WorkspaceStore(cwd=str(tmp_path))
+    with pytest.raises(ElliotError) as exc:
+        s.save_secrets({"X": "y"})
+    assert exc.value.code == "SECRETS_NO_KEY"
+
+
+def test_save_secrets_allowed_in_prod_with_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """ELLIOT_ALLOW_DEV_SECRET_KEY=1 opts out of the prod refusal."""
+    monkeypatch.setenv("ELLIOT_ENV", "production")
+    monkeypatch.delenv("ELLIOT_SECRET_KEY", raising=False)
+    monkeypatch.setenv("ELLIOT_ALLOW_DEV_SECRET_KEY", "1")
+    s = WorkspaceStore(cwd=str(tmp_path))
+    s.save_secrets({"X": "y"})  # should not raise
+    assert s.load_secrets() == {"X": "y"}
+
+
+def test_save_secrets_allowed_in_dev_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """ELLIOT_ENV unset (or dev) lets the dev key through with a warning."""
+    monkeypatch.delenv("ELLIOT_ENV", raising=False)
+    monkeypatch.delenv("ELLIOT_SECRET_KEY", raising=False)
+    s = WorkspaceStore(cwd=str(tmp_path))
+    s.save_secrets({"X": "y"})
+    assert s.load_secrets() == {"X": "y"}
+
+
+def test_load_secrets_truncated_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A truncated secrets.enc must surface SECRETS_DECRYPT_FAILED, not crash."""
+    monkeypatch.setenv("ELLIOT_SECRET_KEY", "a-real-passphrase")
+    enc = tmp_path / ".elliot" / "secrets.enc"
+    enc.parent.mkdir(parents=True, exist_ok=True)
+    enc.write_bytes(b"short")  # < 12 + 16 = 28 bytes minimum
+    s = WorkspaceStore(cwd=str(tmp_path))
+    with pytest.raises(ElliotError) as exc:
+        s.load_secrets()
+    assert exc.value.code == "SECRETS_DECRYPT_FAILED"
+
+
+def test_load_session_corrupt_raises(tmp_path: Path):
+    """A corrupt session.json must raise SESSION_LOAD_FAILED, not JSONDecodeError."""
+    sess = tmp_path / ".elliot" / "session.json"
+    sess.parent.mkdir(parents=True, exist_ok=True)
+    sess.write_text("not-valid-json{{{")
+    s = WorkspaceStore(cwd=str(tmp_path))
+    with pytest.raises(ElliotError) as exc:
+        s.load_session()
+    assert exc.value.code == "SESSION_LOAD_FAILED"
+
+
+def test_save_session_is_atomic(tmp_path: Path):
+    """save_session must not leave a half-written session.json on the disk."""
+    s = WorkspaceStore(cwd=str(tmp_path))
+    s.save_session({"a": 1})
+    # tmp file is os.replace'd into place; nothing should be lying around.
+    leftover = (tmp_path / ".elliot" / "session.json.tmp").exists()
+    assert not leftover

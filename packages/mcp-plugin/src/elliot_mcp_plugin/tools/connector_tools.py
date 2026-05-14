@@ -134,9 +134,50 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
     def elliot_export_connector(path: str = ".elliot/connector.json") -> dict:  # type: ignore[type-arg]
         """Write the built ConnectorConfig to disk as JSON."""
         try:
+            from elliot_core.paths import PathEscape, ensure_under
+
             if session.connector is None:
                 return {"error": "No connector built yet — call elliot_build_connector first"}
-            dest = Path(path)
+            # Containment: the resolved destination must live under the
+            # session cwd (workspace._dir.parent), ELLIOT_CONNECTORS_DIR, or
+            # the parent of ELLIOT_CONNECTOR. Opt-out via
+            # ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH=1 for non-standard layouts.
+            project_root = Path(session.workspace._dir).resolve().parent
+            allowed_roots = [project_root]
+            connectors_dir_env = os.environ.get("ELLIOT_CONNECTORS_DIR")
+            if connectors_dir_env:
+                allowed_roots.append(Path(connectors_dir_env).resolve())
+            env_connector = os.environ.get("ELLIOT_CONNECTOR")
+            if env_connector:
+                allowed_roots.append(Path(env_connector).resolve().parent)
+            # Resolve relative paths against the project root so the default
+            # ".elliot/connector.json" continues to land where it always did.
+            candidate = path if os.path.isabs(path) else str(project_root / path)
+            dest = Path(candidate)
+            if os.environ.get("ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH", "").strip().lower() not in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }:
+                contained = False
+                for root in allowed_roots:
+                    try:
+                        ensure_under(root, dest)
+                        contained = True
+                        break
+                    except PathEscape:
+                        continue
+                if not contained:
+                    return to_mcp_error_content(
+                        ElliotError(
+                            "EXPORT_PATH_NOT_ALLOWED",
+                            "Export path is outside the allowed roots (project root, "
+                            "ELLIOT_CONNECTORS_DIR, ELLIOT_CONNECTOR parent). "
+                            "Set ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH=1 to opt out.",
+                            detail={"path": str(dest)},
+                        )
+                    )
             dest.parent.mkdir(parents=True, exist_ok=True)
             # Atomic write — never leave a half-written connector file on disk
             # if the write is interrupted (audit Low 33).
@@ -232,6 +273,54 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 or os.environ.get("ELLIOT_CONNECTOR")
                 or str(workspace_dir / "connector.json")
             )
+
+            # Audit finding C5: previously connector_path was an agent-supplied
+            # string written straight into the child uvicorn's env. An attacker
+            # who could call save_draft (C4) could then point the runtime at
+            # any file on disk. Enforce that the resolved connector path lives
+            # under the session cwd (typically the project root), the
+            # ELLIOT_CONNECTORS_DIR, or the directory of ELLIOT_CONNECTOR.
+            # Operators with non-standard layouts can opt out via
+            # ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH=1.
+            from elliot_core.paths import PathEscape, ensure_under
+
+            if os.environ.get("ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH", "").strip().lower() not in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }:
+                # Workspace _dir is e.g. <cwd>/.elliot, so the project root
+                # (workspace._dir.parent) is the default allowlist root.
+                allowed_roots = [Path(workspace_dir).resolve().parent]
+                connectors_dir_env = os.environ.get("ELLIOT_CONNECTORS_DIR")
+                if connectors_dir_env:
+                    allowed_roots.append(Path(connectors_dir_env).resolve())
+                env_connector = os.environ.get("ELLIOT_CONNECTOR")
+                if env_connector:
+                    allowed_roots.append(Path(env_connector).resolve().parent)
+
+                contained = False
+                for root in allowed_roots:
+                    try:
+                        ensure_under(root, chosen_connector)
+                        contained = True
+                        break
+                    except PathEscape:
+                        continue
+                if not contained:
+                    return to_mcp_error_content(
+                        ElliotError(
+                            "RUNTIME_BAD_CONNECTOR_PATH",
+                            (
+                                "connector_path is outside the allowed roots "
+                                "(project root, ELLIOT_CONNECTORS_DIR, ELLIOT_CONNECTOR parent). "
+                                "Set ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH=1 to opt out."
+                            ),
+                            detail={"connector_path": chosen_connector},
+                        )
+                    )
+
             if not Path(chosen_connector).exists():
                 return to_mcp_error_content(
                     ElliotError(

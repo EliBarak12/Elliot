@@ -5,20 +5,41 @@ from fastapi.responses import JSONResponse
 
 from elliot_core.errors import ElliotError
 
+# Audit Medium 30: previously the code → status map used prefix matching
+# (``"AUTH"`` → 401). That accidentally classified codes like ``AUTH_OK_FORCED``
+# as 401, so we keep an exact-match table here and only fall back to a small
+# allow-listed prefix family for the validation case.
 _CODE_TO_STATUS: dict[str, int] = {
     "NOT_FOUND": 404,
-    "VALIDATION": 422,
-    "AUTH": 401,
+    "VALIDATION_ERROR": 422,
+    "INVALID_TOOL": 422,
+    "INVALID_PARAM_TYPE": 422,
+    "INVALID_SQL": 422,
+    "INVALID_IDENTIFIER": 422,
+    "MISSING_PARAM": 422,
+    "AUTH_FAILED": 401,
     "FORBIDDEN": 403,
+    "PATH_ESCAPE": 403,
+    "SSRF_BLOCKED": 403,
     "TIMEOUT": 504,
-    "UPSTREAM": 502,
-    "RATE_LIMIT": 429,
+    "UPSTREAM_FETCH_FAILED": 502,
+    "RATE_LIMIT_EXCEEDED": 429,
+    "BODY_TOO_LARGE": 413,
 }
+
+# Narrow prefix fallbacks — only the families where we genuinely want every
+# member to share a status.
+_PREFIX_FALLBACK: tuple[tuple[str, int], ...] = (
+    ("VALIDATION_", 422),
+    ("AUTH_", 401),
+)
 
 
 def _status_for(error: ElliotError) -> int:
     code = error.code or ""
-    for prefix, status in _CODE_TO_STATUS.items():
+    if code in _CODE_TO_STATUS:
+        return _CODE_TO_STATUS[code]
+    for prefix, status in _PREFIX_FALLBACK:
         if code.startswith(prefix):
             return status
     return 500

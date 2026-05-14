@@ -179,11 +179,21 @@ class ToolExecutor:
         if not source:
             raise ElliotError("SOURCE_NOT_FOUND", f"Source '{tool.source_ids[0]}' not found")
 
+        from urllib.parse import quote
+
         mapping = tool.api_mapping
         base_url = (source.url or "").rstrip("/")
         path = mapping.path_template or ""
+        # Audit H4: previously `.replace("{key}", str(val))` substituted
+        # ANY param name and never URL-encoded the value, so an attacker-
+        # supplied id like "../admin?force=1" would mutate URL semantics.
+        # Only substitute declared placeholders, and URL-encode each value
+        # (safe="" so `/`, `?`, `#`, `..` are all percent-encoded).
+        declared = {p.name for p in tool.parameters}
         for name, val in params.items():
-            path = path.replace(f"{{{name}}}", str(val))
+            if name not in declared:
+                continue
+            path = path.replace(f"{{{name}}}", quote(str(val), safe=""))
 
         url = base_url + path
         query = {k: params[k] for k in mapping.query_params if k in params}

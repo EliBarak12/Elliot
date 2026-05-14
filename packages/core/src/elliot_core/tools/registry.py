@@ -12,7 +12,13 @@ class ToolRegistry:
         self._skills: dict[str, SkillDefinition] = {}
 
     def add(self, tool: ToolDefinition) -> None:
-        if any(t.name == tool.name for t in self._tools.values() if t.id != tool.id):
+        # Audit Medium 29: previously `add` was an upsert keyed on id, so two
+        # tools with the same id silently clobbered each other. Treat
+        # duplicate id as an explicit conflict — callers wanting to mutate
+        # an existing tool should use `update`.
+        if tool.id in self._tools:
+            raise ElliotError("TOOL_ID_CONFLICT", f"Tool id already exists: {tool.id}")
+        if any(t.name == tool.name for t in self._tools.values()):
             raise ElliotError("TOOL_NAME_CONFLICT", f"Tool name already exists: {tool.name}")
         self._tools[tool.id] = tool
 

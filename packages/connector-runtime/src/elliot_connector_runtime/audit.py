@@ -8,6 +8,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from elliot_core.redaction import redact_audit_arguments
+
 
 class AuditLog:
     """Append-only NDJSON audit log. Thread-safe."""
@@ -25,10 +27,13 @@ class AuditLog:
         duration_ms: float,
         error: str | None = None,
     ) -> None:
+        # CLAUDE.md "Never log: secret values, API keys, raw query results".
+        # `arguments` may contain agent-supplied auth tokens or API keys; the
+        # redactor masks any value whose key name matches a sensitive pattern.
         entry: dict[str, Any] = {
             "ts": time.time(),
             "tool_id": tool_id,
-            "arguments": arguments,
+            "arguments": redact_audit_arguments(arguments),
             "result_row_count": result_row_count,
             "duration_ms": round(duration_ms, 2),
         }

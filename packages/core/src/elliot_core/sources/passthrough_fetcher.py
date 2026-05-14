@@ -7,6 +7,7 @@ import httpx
 
 from elliot_core.errors import SourceFetchError
 from elliot_core.http import SSRFError, safe_client, validate_url
+from elliot_core.redaction import redact_url
 from elliot_core.sources.api_fetcher import (
     _build_auth_headers,
     _build_auth_query_params,
@@ -48,11 +49,11 @@ async def fetch_passthrough(
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
         raise SourceFetchError(
-            f"HTTP {exc.response.status_code} from {source.url} (passthrough)"
+            f"HTTP {exc.response.status_code} from {redact_url(source.url)} (passthrough)"
         ) from exc
     except Exception as exc:
         raise SourceFetchError(
-            f"Network error fetching {source.url}: {type(exc).__name__}"
+            f"Network error fetching {redact_url(source.url)}: {type(exc).__name__}"
         ) from exc
 
     data = resp.json()

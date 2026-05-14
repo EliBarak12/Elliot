@@ -305,8 +305,20 @@ def _register_resources(mcp: FastMCP, cfg: Any, executor: ToolExecutor, json: An
 
     @mcp.resource("connector://schema")
     def connector_schema() -> str:
-        """Full connector definition including all sources, tools, and skills."""
-        return c.model_dump_json(indent=2)
+        """Full connector definition including all sources, tools, and skills.
+
+        The in-memory ``ConnectorConfig`` has had ``resolve_secrets`` applied
+        to it during loader hydration, so source URLs / auth headers may
+        contain literal secret values. We mask known-secret fields and
+        redact URL userinfo / token-bearing query params before serializing.
+        """
+        from elliot_core.redaction import redact_url, redact_value
+
+        snapshot = redact_value(c.model_dump())
+        for source in snapshot.get("sources", []) or []:
+            if isinstance(source, dict) and source.get("url"):
+                source["url"] = redact_url(source.get("url"))
+        return json.dumps(snapshot, indent=2, default=str)
 
     for tool_def in c.tools:
         _register_sample_resource(mcp, executor, tool_def, json)

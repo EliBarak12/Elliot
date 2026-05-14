@@ -46,8 +46,16 @@ class ToolExecutor:
         tool: ToolDefinition,
         arguments: dict[str, Any],
     ) -> QueryResult:
+        from elliot_core.sqlite.query_runner import validate_tool_sql
+
         # Determine SQL: prefer explicit sql, fall back to build_select_sql for filter_groups tools
         if tool.sql:
+            # Even connector-supplied SQL must be a single SELECT/CTE — a
+            # malicious or buggy connector author cannot ship a DDL/DML tool
+            # (CLAUDE.md: "READ tools must not mutate").
+            ok, reason = validate_tool_sql(tool.sql)
+            if not ok:
+                raise ExecutorError(f"Tool {tool.id!r} has invalid SQL: {reason}")
             sql: str = tool.sql
             params: dict[str, Any] = {p.name: arguments.get(p.name) for p in tool.parameters}
         elif tool.filter_groups or tool.return_fields:
@@ -140,12 +148,27 @@ class ToolExecutor:
     def _query_postgres(self, source: SourceConfig) -> list[dict[str, Any]]:
         import psycopg2
         import psycopg2.extras
+        from psycopg2 import sql as psql
+
+        from elliot_core.sql import safe_ident
 
         dsn = self._resolve_dsn(source)
         conn = psycopg2.connect(dsn)
         try:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(source.query or f"SELECT * FROM {source.table}")
+                if source.query:
+                    cur.execute(source.query)
+                else:
+                    # source.table comes from connector config; validate-and-
+                    # quote via safe_ident (raises INVALID_IDENTIFIER on bad
+                    # input). psql.SQL+Identifier provides defense-in-depth
+                    # via the postgres protocol-level quoter.
+                    safe_ident(source.table or "")
+                    cur.execute(
+                        psql.SQL("SELECT * FROM {tbl}").format(
+                            tbl=psql.Identifier(source.table or "")
+                        )
+                    )
                 return [dict(row) for row in cur.fetchall()]
         finally:
             conn.close()

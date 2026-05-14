@@ -30,8 +30,16 @@ async def inspect_db_source(source: Any) -> TableSchema:
     """Introspect a postgres source — returns column schema and 3 sample rows."""
     import asyncpg
 
+    from elliot_core.sql import safe_ident
+
     url: str = source.url or ""
     table: str = getattr(source, "table", "") or ""
+    # Validate-and-quote the table identifier. ``source.table`` originates
+    # from the connector definition; previously this f-string allowed SQLi
+    # if a connector author or agent provided a hostile name. safe_ident
+    # raises ElliotError("INVALID_IDENTIFIER") on anything outside
+    # ^[A-Za-z_][A-Za-z0-9_]{0,62}$.
+    quoted_table = safe_ident(table)
 
     log.info("schema.inspect.start", source_id=source.id, type=source.type)
     conn = await asyncpg.connect(url)
@@ -53,7 +61,7 @@ async def inspect_db_source(source: Any) -> TableSchema:
             )
             for r in rows
         ]
-        sample = await conn.fetch(f"SELECT * FROM {table} LIMIT 3")  # noqa: S608
+        sample = await conn.fetch(f"SELECT * FROM {quoted_table} LIMIT 3")  # noqa: S608
         sample_rows = [dict(r) for r in sample]
         count_row = await conn.fetchrow(
             "SELECT reltuples::bigint FROM pg_class WHERE relname = $1", table

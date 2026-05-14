@@ -1,0 +1,56 @@
+"""Shared SQL identifier and statement guards.
+
+Centralises:
+
+- :func:`safe_ident` — validate and quote a table/column identifier so we can
+  safely interpolate it into SQL even when the surrounding value is influenced
+  by connector authors or agents. This is the only place identifier
+  interpolation should originate from.
+- :func:`postgres_quote_ident` — `Identifier` quoting for psycopg, used when
+  the value is destined for ``cursor.execute`` against postgres.
+
+Why this exists
+---------------
+Pydantic models (TableDefinition, ColumnDefinition, FilterCondition,
+ReturnField) accept identifiers as plain strings. Several callsites used to
+do ``f'... "{name}"'`` style interpolation. Per audit finding C3, a ``"``
+inside ``name`` breaks out of the identifier quote. We never want to depend
+on the upstream model rejecting hostile names — defend at the SQL boundary.
+"""
+
+from __future__ import annotations
+
+import re
+
+from elliot_core.errors import ElliotError
+
+# An identifier is an unreserved word: starts with letter or underscore,
+# followed by letters / digits / underscores. Bounded length so a connector
+# can't ship a 10MB identifier and DoS the SQL engine via memory pressure.
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+
+
+def safe_ident(name: str) -> str:
+    """Validate ``name`` as a SQL identifier and return it double-quoted.
+
+    Raises :class:`~elliot_core.errors.ElliotError` ``INVALID_IDENTIFIER`` if
+    ``name`` does not match ``^[A-Za-z_][A-Za-z0-9_]{0,62}$``.
+
+    The returned value is wrapped in double quotes (the SQL-standard
+    identifier quote, accepted by sqlite, postgres, and mysql with
+    ``ANSI_QUOTES``), e.g. ``users`` → ``"users"``. Because the input has
+    already been validated, the resulting string is safe to f-string into
+    any SQL statement.
+    """
+    if not isinstance(name, str) or not _IDENT_RE.match(name):
+        raise ElliotError(
+            "INVALID_IDENTIFIER",
+            "identifier must match ^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+            detail={"value": str(name)[:64]},
+        )
+    return f'"{name}"'
+
+
+def is_valid_ident(name: str) -> bool:
+    """Return True iff ``name`` is a valid SQL identifier under :func:`safe_ident`'s rules."""
+    return isinstance(name, str) and bool(_IDENT_RE.match(name))

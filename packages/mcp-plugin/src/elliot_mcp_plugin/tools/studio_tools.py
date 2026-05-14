@@ -118,10 +118,17 @@ def register_studio_tools(mcp: FastMCP, session: ElliotSession) -> None:
     @mcp.tool()
     def studio_run_sql(sql: str) -> dict:  # type: ignore[type-arg]
         """Run a raw SELECT against the in-memory SQLite engine (Studio debug only)."""
+        from elliot_core.sqlite.query_runner import validate_tool_sql
+
         try:
             log.info("studio.run_sql.start")
-            if not sql.strip().upper().startswith("SELECT"):
-                raise ElliotError("VALIDATION_ERROR", "Only SELECT statements are allowed")
+            # validate_tool_sql strips line+block comments, rejects multiple
+            # statements, blocks DDL/DML/ATTACH/PRAGMA, and verifies the
+            # query begins with SELECT or WITH. The old startswith("SELECT")
+            # check was bypassable via leading comments and ATTACH chains.
+            ok, reason = validate_tool_sql(sql)
+            if not ok:
+                raise ElliotError("VALIDATION_ERROR", reason)
             rows = session.engine.query(sql)
             return {"rows": rows, "row_count": len(rows)}
         except ElliotError as exc:

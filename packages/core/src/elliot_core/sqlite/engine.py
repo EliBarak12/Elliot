@@ -6,6 +6,7 @@ import sqlite3
 from typing import Any
 
 from elliot_core.errors import ElliotError
+from elliot_core.sql import safe_ident
 from elliot_core.types.sqlite import FlattenedTable, FlattenResult
 
 
@@ -37,15 +38,20 @@ class SQLiteEngine:
         self._conn.commit()
 
     def load_table(self, table: FlattenedTable, *, commit: bool = True) -> None:
+        # Identifier validation defends against malicious table/column names
+        # (which can arrive from connector definitions). safe_ident raises
+        # ElliotError("INVALID_IDENTIFIER") on anything outside the regex.
+        quoted_table = safe_ident(table.name)
         cols = ", ".join(
-            f'"{c.name}" {c.sqlite_type}{"" if c.nullable else " NOT NULL"}' for c in table.columns
+            f"{safe_ident(c.name)} {c.sqlite_type}{'' if c.nullable else ' NOT NULL'}"
+            for c in table.columns
         )
-        self._conn.execute(f'DROP TABLE IF EXISTS "{table.name}"')
-        self._conn.execute(f'CREATE TABLE "{table.name}" ({cols})')
+        self._conn.execute(f"DROP TABLE IF EXISTS {quoted_table}")
+        self._conn.execute(f"CREATE TABLE {quoted_table} ({cols})")
         placeholders = ", ".join(["?"] * len(table.columns))
         col_names = [c.name for c in table.columns]
         self._conn.executemany(
-            f'INSERT INTO "{table.name}" VALUES ({placeholders})',
+            f"INSERT INTO {quoted_table} VALUES ({placeholders})",
             [tuple(_bindable(row.get(n)) for n in col_names) for row in table.rows],
         )
         if commit:
@@ -67,10 +73,12 @@ class SQLiteEngine:
             self._conn.execute("ROLLBACK TO SAVEPOINT load_result")
             self._conn.execute("RELEASE SAVEPOINT load_result")
             # Drop any tables already created in this savepoint window so callers
-            # never see partial state after an ingest failure.
+            # never see partial state after an ingest failure. Names were
+            # validated by load_table -> safe_ident; if cleanup is reached we
+            # still re-validate defensively to avoid raising during rollback.
             for name in created:
-                with contextlib.suppress(sqlite3.Error):
-                    self._conn.execute(f'DROP TABLE IF EXISTS "{name}"')
+                with contextlib.suppress(sqlite3.Error, ElliotError):
+                    self._conn.execute(f"DROP TABLE IF EXISTS {safe_ident(name)}")
             self._conn.commit()
             raise
 
@@ -80,19 +88,22 @@ class SQLiteEngine:
         Transactional: on any failure the table is rolled back so the database
         is never left with a partial / half-populated table.
         """
+        quoted_table = safe_ident(table_name)
         try:
             self._conn.execute("SAVEPOINT ingest")
             if not rows:
-                self._conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
-                self._conn.execute(f'CREATE TABLE "{table_name}" (_empty INTEGER)')
+                self._conn.execute(f"DROP TABLE IF EXISTS {quoted_table}")
+                self._conn.execute(f"CREATE TABLE {quoted_table} (_empty INTEGER)")
             else:
                 cols = list(rows[0].keys())
-                col_defs = ", ".join(f'"{c}" TEXT' for c in cols)
-                self._conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
-                self._conn.execute(f'CREATE TABLE "{table_name}" ({col_defs})')
+                # Validate each column name. Rejecting bad columns here means
+                # callers can't sneak DDL through dict keys.
+                col_defs = ", ".join(f"{safe_ident(c)} TEXT" for c in cols)
+                self._conn.execute(f"DROP TABLE IF EXISTS {quoted_table}")
+                self._conn.execute(f"CREATE TABLE {quoted_table} ({col_defs})")
                 placeholders = ", ".join(["?"] * len(cols))
                 self._conn.executemany(
-                    f'INSERT INTO "{table_name}" VALUES ({placeholders})',
+                    f"INSERT INTO {quoted_table} VALUES ({placeholders})",
                     [tuple(_ingest_value(row.get(c)) for c in cols) for row in rows],
                 )
             self._conn.execute("RELEASE SAVEPOINT ingest")
@@ -101,7 +112,7 @@ class SQLiteEngine:
             self._conn.execute("ROLLBACK TO SAVEPOINT ingest")
             self._conn.execute("RELEASE SAVEPOINT ingest")
             with contextlib.suppress(sqlite3.Error):
-                self._conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+                self._conn.execute(f"DROP TABLE IF EXISTS {quoted_table}")
             self._conn.commit()
             raise
 
@@ -117,26 +128,30 @@ class SQLiteEngine:
         return [row[0] for row in rows]
 
     def get_table_schema(self, table_name: str) -> list[dict[str, Any]]:
-        rows = self._conn.execute(f'PRAGMA table_info("{table_name}")').fetchall()
+        quoted_table = safe_ident(table_name)
+        rows = self._conn.execute(f"PRAGMA table_info({quoted_table})").fetchall()
         return [dict(row) for row in rows]
 
     def get_table_stats(self, table_name: str) -> dict[str, int]:
-        row = self._conn.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()
+        quoted_table = safe_ident(table_name)
+        row = self._conn.execute(f"SELECT COUNT(*) FROM {quoted_table}").fetchone()
         return {"row_count": row[0]}
 
     def profile_column(self, table_name: str, col: str) -> dict[str, Any]:
+        quoted_table = safe_ident(table_name)
+        quoted_col = safe_ident(col)
         sql = f"""
             SELECT
-                MIN("{col}") as min_val,
-                MAX("{col}") as max_val,
-                SUM(CASE WHEN "{col}" IS NULL THEN 1 ELSE 0 END) as null_count,
-                COUNT(DISTINCT "{col}") as distinct_count
-            FROM "{table_name}"
+                MIN({quoted_col}) as min_val,
+                MAX({quoted_col}) as max_val,
+                SUM(CASE WHEN {quoted_col} IS NULL THEN 1 ELSE 0 END) as null_count,
+                COUNT(DISTINCT {quoted_col}) as distinct_count
+            FROM {quoted_table}
         """
         row = dict(self._conn.execute(sql).fetchone())
         top = self._conn.execute(
-            f'SELECT "{col}", COUNT(*) as n FROM "{table_name}" '
-            f'GROUP BY "{col}" ORDER BY n DESC LIMIT 5'
+            f"SELECT {quoted_col}, COUNT(*) as n FROM {quoted_table} "
+            f"GROUP BY {quoted_col} ORDER BY n DESC LIMIT 5"
         ).fetchall()
         row["top_values"] = [r[0] for r in top]
         return row

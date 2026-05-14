@@ -129,7 +129,10 @@ function SessionRow({ session }: { session: AgentSession }) {
       {expanded && (
         <div className="bg-muted/30 py-1 animate-fade-in-up">
           {session.events.map((event, i) => (
-            <EventRow key={i} event={event} />
+            // ts is high-resolution (float seconds) and unique within a
+            // session; combining with the type+index gives a stable key
+            // that survives reorder/delete operations.
+            <EventRow key={`${event.ts}-${event.type}-${i}`} event={event} />
           ))}
         </div>
       )}

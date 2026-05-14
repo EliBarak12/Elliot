@@ -42,12 +42,22 @@ export function AddSourceDialog({ open, onClose }: Props) {
     setLoading(true);
     setError(null);
     try {
+      // Reject inline credentials in postgres connection strings.
+      // CLAUDE.md: "Secrets never in logs, never hardcoded — use
+      // `{{ env:VAR }}` in connector files." A `:password@` pattern
+      // would land verbatim in the saved connector and in any audit
+      // log of this call.
+      if (sourceType === "postgres" && /:[^@\s/]+@/.test(url)) {
+        setError(
+          "Inline credentials are not allowed. Use a {{ env:VAR }} placeholder " +
+            "(e.g. postgresql://user:{{ env:DB_PASSWORD }}@host/db) so the secret " +
+            "stays in your environment, not in the connector file."
+        );
+        setLoading(false);
+        return;
+      }
       const config =
-        sourceType === "rest"
-          ? { url }
-          : sourceType === "file"
-            ? { path }
-            : { url };
+        sourceType === "rest" ? { url } : sourceType === "file" ? { path } : { url };
       await callTool("elliot_discover_source", {
         source_type: sourceType,
         name,

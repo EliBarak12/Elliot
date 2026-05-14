@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import os
+import re
 import uuid
+from pathlib import Path
 from typing import Any
 
 import structlog
 from mcp.server.fastmcp import FastMCP
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.paths import PathEscape, safe_join
 from elliot_core.sources.api_fetcher import fetch_endpoint
 from elliot_core.sources.db_connector import query_database
 from elliot_core.sources.file_reader import read_file
@@ -34,6 +40,34 @@ _TYPE_MAP: dict[str, str] = {
     "mysql": "mysql",
 }
 
+# Uploaded file basename rules (used by elliot_upload_file). Bounded length,
+# no traversal, only printable ASCII letters / digits / `.-_`.
+_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_ALLOWED_UPLOAD_SUFFIXES = frozenset(
+    {".json", ".jsonl", ".ndjson", ".csv", ".txt", ".yaml", ".yml"}
+)
+_DEFAULT_UPLOAD_MAX_BYTES = 50 * 1024 * 1024  # 50 MiB
+
+
+def _upload_max_bytes() -> int:
+    raw = os.environ.get("ELLIOT_UPLOAD_MAX_BYTES", "")
+    try:
+        v = int(raw) if raw else _DEFAULT_UPLOAD_MAX_BYTES
+        return max(1024, v)
+    except ValueError:
+        return _DEFAULT_UPLOAD_MAX_BYTES
+
+
+def _sources_dir(session: ElliotSession) -> Path:
+    """Return the Elliot-managed uploads directory for this session.
+
+    Lives under the workspace's ``.elliot/sources/`` so it is inside the
+    file_reader allowlist by default (no ELLIOT_FILE_ROOT tuning needed).
+    """
+    d = Path(session.workspace._dir) / "sources"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
 
 def _build_source_config(
     source_type: str, config: dict[str, Any], source_id: str, name: str
@@ -45,6 +79,110 @@ def _build_source_config(
 
 
 def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
+    @mcp.tool()
+    def elliot_upload_file(
+        file_name: str,
+        content: str,
+        encoding: str = "text",
+    ) -> dict:  # type: ignore[type-arg]
+        """Stage a file inside Elliot's managed sources directory and return its path.
+
+        Use this before elliot_discover_source when the file lives on the
+        user's machine. The agent reads the local file, sends the contents
+        here, and Elliot saves them under .elliot/sources/. The returned
+        managed_path is always inside the file-reader allowlist, so the
+        agent does NOT need to configure ELLIOT_FILE_ROOT.
+
+        Workflow:
+            up = elliot_upload_file(file_name="data.json", content="...")
+            elliot_discover_source(
+                source_type="json",
+                config={"path": up["managed_path"]},
+                name="my_source",
+            )
+
+        Args:
+            file_name: basename only (no directory parts). Must match
+                ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ and end in one of
+                .json / .jsonl / .ndjson / .csv / .txt / .yaml / .yml.
+            content: file body as UTF-8 text (default) or base64-encoded
+                bytes (set encoding="base64" for binary).
+            encoding: "text" or "base64". Defaults to "text".
+        """
+        try:
+            log.info("source.upload.start", file_name=file_name, encoding=encoding)
+            if encoding not in ("text", "base64"):
+                raise ElliotError(
+                    "VALIDATION_ERROR",
+                    "encoding must be 'text' or 'base64'",
+                    detail={"encoding": encoding},
+                )
+            if not _FILENAME_RE.match(file_name):
+                raise ElliotError(
+                    "INVALID_FILE_NAME",
+                    "file_name must be a plain basename (letters, digits, dot, dash, "
+                    "underscore only) with no path separators",
+                    detail={"file_name": file_name},
+                )
+            suffix = Path(file_name).suffix.lower()
+            if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
+                raise ElliotError(
+                    "INVALID_FILE_NAME",
+                    f"unsupported file extension {suffix!r}; allowed: "
+                    + ", ".join(sorted(_ALLOWED_UPLOAD_SUFFIXES)),
+                    detail={"file_name": file_name},
+                )
+
+            if encoding == "base64":
+                try:
+                    data: bytes = base64.b64decode(content, validate=True)
+                except (ValueError, binascii.Error) as exc:
+                    raise ElliotError(
+                        "VALIDATION_ERROR",
+                        "content is not valid base64",
+                    ) from exc
+            else:
+                data = content.encode("utf-8")
+
+            max_bytes = _upload_max_bytes()
+            if len(data) > max_bytes:
+                raise ElliotError(
+                    "FILE_TOO_LARGE",
+                    f"file exceeds {max_bytes} bytes; set ELLIOT_UPLOAD_MAX_BYTES "
+                    "to raise the cap if the source is genuinely large",
+                    detail={"bytes": len(data), "limit": max_bytes},
+                )
+
+            # safe_join guarantees the resolved destination stays under the
+            # session's sources/ directory — even though _FILENAME_RE already
+            # forbids `..` / `/`, this is defence-in-depth.
+            dest_root = _sources_dir(session)
+            try:
+                dest = safe_join(dest_root, file_name)
+            except PathEscape as exc:
+                raise ElliotError(
+                    "INVALID_FILE_NAME",
+                    "file_name resolves outside the managed sources directory",
+                ) from exc
+
+            # Atomic write — readers never see a half-written file even if
+            # the agent re-uploads while a discover is in-flight.
+            tmp = dest.with_name(dest.name + ".tmp")
+            tmp.write_bytes(data)
+            os.replace(tmp, dest)
+
+            log.info("source.upload.saved", path=str(dest), bytes=len(data))
+            return {
+                "managed_path": str(dest),
+                "file_name": file_name,
+                "size_bytes": len(data),
+            }
+        except ElliotError as exc:
+            return to_mcp_error_content(exc)
+        except Exception as exc:
+            log.error("source.upload.failed", error=str(exc), exc_info=True)
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", "upload failed"))
+
     @mcp.tool()
     async def elliot_discover_source(
         source_type: str,

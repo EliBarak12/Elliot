@@ -15,16 +15,30 @@ from elliot_core.types.source import FetchResult, SourceConfig
 _SIZE_WARN_BYTES = 100 * 1024 * 1024  # 100 MB
 
 
-def _file_root() -> Path:
-    """Return the directory tree that file: sources are restricted to.
+def _allowed_roots() -> list[Path]:
+    """Return every directory tree under which file: sources may live.
 
-    Defaults to the current working directory (the project root in normal
-    runs). Operators can override with ELLIOT_FILE_ROOT for deployments
-    where connector data files live elsewhere. Setting
-    ELLIOT_FILE_READER_ALLOW_ABSOLUTE=1 disables the containment check
+    The list is the union of:
+
+    - ``ELLIOT_FILE_ROOT`` (defaults to the current working directory) — the
+      operator-controlled root for connector data files.
+    - The session's framework-managed sources directory (``.elliot/sources/``
+      under cwd, or the explicit ``ELLIOT_MANAGED_SOURCES_DIR`` override).
+      This is where ``elliot_upload_file`` stages agent-uploaded content; it
+      is always allowed regardless of how ``ELLIOT_FILE_ROOT`` is set so the
+      upload→discover flow works without env tuning.
+
+    Setting ``ELLIOT_FILE_READER_ALLOW_ABSOLUTE=1`` disables containment
     entirely — for trusted environments only.
     """
-    return Path(os.environ.get("ELLIOT_FILE_ROOT", os.getcwd())).resolve()
+    roots = [Path(os.environ.get("ELLIOT_FILE_ROOT", os.getcwd())).resolve()]
+    managed = Path(
+        os.environ.get("ELLIOT_MANAGED_SOURCES_DIR")
+        or os.path.join(os.getcwd(), ".elliot", "sources")
+    ).resolve()
+    if managed not in roots:
+        roots.append(managed)
+    return roots
 
 
 def _file_root_unrestricted() -> bool:
@@ -60,20 +74,33 @@ def read_file(config: SourceConfig) -> FetchResult:
 
     # Audit finding H3: previously `Path(config.path)` was opened verbatim,
     # so a writeable connector could read arbitrary host files. Resolve and
-    # assert containment under ELLIOT_FILE_ROOT (defaults to cwd). Operators
-    # who need absolute access can set ELLIOT_FILE_READER_ALLOW_ABSOLUTE=1.
+    # assert containment under one of the allowed roots (ELLIOT_FILE_ROOT
+    # plus the framework-managed .elliot/sources/). Operators who need
+    # absolute access can set ELLIOT_FILE_READER_ALLOW_ABSOLUTE=1.
     if _file_root_unrestricted():
-        path = Path(raw_path).resolve()
+        path: Path = Path(raw_path).resolve()
     else:
-        try:
-            path = ensure_under(_file_root(), raw_path)
-        except PathEscape as exc:
+        roots = _allowed_roots()
+        last_err: PathEscape | None = None
+        resolved: Path | None = None
+        for root in roots:
+            try:
+                resolved = ensure_under(root, raw_path)
+                break
+            except PathEscape as exc:
+                last_err = exc
+        if resolved is None:
             raise ElliotError(
                 "FILE_NOT_ALLOWED",
-                "File path is outside the allowed root. "
-                "Set ELLIOT_FILE_ROOT or ELLIOT_FILE_READER_ALLOW_ABSOLUTE=1 for trusted paths.",
-                detail={"path": exc.candidate},
-            ) from exc
+                "File path is outside the allowed roots. "
+                "Upload the file via elliot_upload_file (recommended), or set "
+                "ELLIOT_FILE_ROOT / ELLIOT_FILE_READER_ALLOW_ABSOLUTE=1 for trusted paths.",
+                detail={
+                    "path": last_err.candidate if last_err else raw_path,
+                    "allowed_roots": [str(r) for r in roots],
+                },
+            ) from last_err
+        path = resolved
 
     if not path.exists():
         raise ElliotError("FILE_NOT_FOUND", f"File not found: {config.path}")

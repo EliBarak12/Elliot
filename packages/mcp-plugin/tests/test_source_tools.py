@@ -391,3 +391,86 @@ def test_list_sources_exception_does_not_raise(mcp: FastMCP, session: ElliotSess
     session.sources = None  # type: ignore[assignment]
     result = _tool(mcp, "elliot_list_sources")()
     assert "text" in result or "error" in result
+
+
+# ── elliot_upload_file ──────────────────────────────────────────────────────
+
+
+def test_upload_file_round_trips_through_discover_source(
+    mcp: FastMCP, session: ElliotSession, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """The whole point of the tool: upload then discover, without any
+    ELLIOT_FILE_ROOT tuning, regardless of cwd."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ELLIOT_FILE_ROOT", raising=False)
+    monkeypatch.delenv("ELLIOT_FILE_READER_ALLOW_ABSOLUTE", raising=False)
+
+    payload = json.dumps([{"id": 1, "name": "Ada"}, {"id": 2, "name": "Lin"}])
+    upload = _tool(mcp, "elliot_upload_file")(file_name="people.json", content=payload)
+    assert "managed_path" in upload
+    assert upload["file_name"] == "people.json"
+    assert upload["size_bytes"] == len(payload.encode("utf-8"))
+    # File actually exists where we said it did.
+    assert Path(upload["managed_path"]).read_text() == payload
+
+    # And discover_source can read it back without tuning ELLIOT_FILE_ROOT.
+    out = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": upload["managed_path"]},
+        name="people",
+    )
+    assert "source_id" in out
+    assert out["row_count"] == 2
+
+
+def test_upload_file_rejects_path_separators(mcp: FastMCP):
+    bad = _tool(mcp, "elliot_upload_file")(file_name="../escape.json", content="{}")
+    assert "text" in bad
+    assert "INVALID_FILE_NAME" in bad["text"]
+
+
+def test_upload_file_rejects_absolute(mcp: FastMCP):
+    bad = _tool(mcp, "elliot_upload_file")(file_name="/etc/passwd", content="{}")
+    assert "text" in bad
+    assert "INVALID_FILE_NAME" in bad["text"]
+
+
+def test_upload_file_rejects_disallowed_extension(mcp: FastMCP):
+    bad = _tool(mcp, "elliot_upload_file")(file_name="evil.sh", content="echo")
+    assert "text" in bad
+    assert "INVALID_FILE_NAME" in bad["text"]
+
+
+def test_upload_file_rejects_oversize(mcp: FastMCP, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ELLIOT_UPLOAD_MAX_BYTES", "1024")
+    big = "x" * 4096
+    bad = _tool(mcp, "elliot_upload_file")(file_name="big.csv", content=big)
+    assert "text" in bad
+    assert "FILE_TOO_LARGE" in bad["text"]
+
+
+def test_upload_file_base64_encoding(mcp: FastMCP):
+    import base64 as _b64
+
+    raw = b'[{"id":1}]'
+    encoded = _b64.b64encode(raw).decode("ascii")
+    out = _tool(mcp, "elliot_upload_file")(file_name="bin.json", content=encoded, encoding="base64")
+    assert "managed_path" in out
+    assert Path(out["managed_path"]).read_bytes() == raw
+
+
+def test_upload_file_invalid_base64(mcp: FastMCP):
+    bad = _tool(mcp, "elliot_upload_file")(
+        file_name="bin.json", content="not::base64", encoding="base64"
+    )
+    assert "text" in bad
+    assert "VALIDATION_ERROR" in bad["text"]
+
+
+def test_upload_file_overwrite_is_atomic(mcp: FastMCP, session: ElliotSession):
+    """A second upload to the same filename replaces atomically, no .tmp left."""
+    _tool(mcp, "elliot_upload_file")(file_name="x.json", content='{"v":1}')
+    out = _tool(mcp, "elliot_upload_file")(file_name="x.json", content='{"v":2}')
+    assert Path(out["managed_path"]).read_text() == '{"v":2}'
+    leftover = Path(out["managed_path"]).with_name("x.json.tmp")
+    assert not leftover.exists()

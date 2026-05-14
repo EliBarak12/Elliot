@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: packages/mcp-plugin/Dockerfile
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     env_file: .env
     volumes:
       - ./connectors:/app/connectors:ro
@@ -12,13 +12,14 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:3000/healthz"]
       interval: 30s
       retries: 3
+    restart: unless-stopped
 
   runtime:
     build:
       context: .
       dockerfile: packages/connector-runtime/Dockerfile
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     env_file: .env
     volumes:
       - ./connectors:/app/connectors:ro
@@ -27,28 +28,55 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
       interval: 30s
       retries: 3
+    restart: unless-stopped
 
   studio:
     build:
       context: packages/studio
       dockerfile: Dockerfile
     ports:
-      - "80:80"
+      - "127.0.0.1:8080:8080"
     env_file: .env
     depends_on:
-      - plugin
-      - runtime
+      plugin:
+        condition: service_healthy
+      runtime:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 30s
+      retries: 3
+    restart: unless-stopped
 
   mysql:
     image: mysql:8.0
     profiles: ["mysql"]
     environment:
       MYSQL_DATABASE: elliot
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
+      # Audit C7: no fallback default. Operators MUST supply this in .env.
+      # `:?` makes docker-compose fail fast if the variable is unset.
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set in .env}
     volumes:
       - mysql-data:/var/lib/mysql
+    # Audit C7: bind to loopback only so the database is not exposed on every
+    # host interface by default. Re-export via a reverse proxy or remove the
+    # `127.0.0.1:` prefix when you need remote access AND have changed the
+    # root password.
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
+    healthcheck:
+      test:
+        - "CMD"
+        - "mysqladmin"
+        - "ping"
+        - "-h"
+        - "127.0.0.1"
+        - "-uroot"
+        - "-p${MYSQL_ROOT_PASSWORD}"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
 volumes:
   elliot-data:

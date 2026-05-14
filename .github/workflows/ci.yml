@@ -78,7 +78,11 @@ jobs:
         with:
           version: "latest"
           python-version: "3.13"
-      - run: uv export --no-emit-project --frozen --format requirements-txt > requirements-audit.txt
+      # --no-emit-workspace (not --no-emit-project) drops the root project AND
+      # every workspace member; without it the export carries `-e ./packages/...`
+      # editable-install lines that pip-audit cannot resolve against PyPI, and
+      # the action exits non-zero before running a single check.
+      - run: uv export --no-emit-workspace --frozen --format requirements-txt > requirements-audit.txt
       - uses: pypa/gh-action-pip-audit@v1.1.0
         with:
           inputs: requirements-audit.txt

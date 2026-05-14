@@ -42,11 +42,20 @@ class SQLiteEngine:
         # (which can arrive from connector definitions). safe_ident raises
         # ElliotError("INVALID_IDENTIFIER") on anything outside the regex.
         quoted_table = safe_ident(table.name)
+        self._conn.execute(f"DROP TABLE IF EXISTS {quoted_table}")
+        if not table.columns:
+            # Zero-column tables arise from empty JSON arrays / all-empty
+            # objects (e.g. `"teaserBlocks": []` in nested payloads). SQLite
+            # rejects `CREATE TABLE foo ()` with a syntax error near `)`, so
+            # emit a placeholder marker column — same shape as ingest() uses.
+            self._conn.execute(f"CREATE TABLE {quoted_table} (_empty INTEGER)")
+            if commit:
+                self._conn.commit()
+            return
         cols = ", ".join(
             f"{safe_ident(c.name)} {c.sqlite_type}{'' if c.nullable else ' NOT NULL'}"
             for c in table.columns
         )
-        self._conn.execute(f"DROP TABLE IF EXISTS {quoted_table}")
         self._conn.execute(f"CREATE TABLE {quoted_table} ({cols})")
         placeholders = ", ".join(["?"] * len(table.columns))
         col_names = [c.name for c in table.columns]

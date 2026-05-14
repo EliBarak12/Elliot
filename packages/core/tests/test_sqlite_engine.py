@@ -108,6 +108,52 @@ def test_ingest_rolls_back_partial_table_on_failure(engine: SQLiteEngine):
     assert "good_table" in engine.get_table_names()
 
 
+def test_load_table_with_zero_columns_creates_placeholder(engine: SQLiteEngine):
+    """Regression: empty nested JSON arrays (e.g. `"teaserBlocks": []`)
+    produced FlattenedTables with zero columns, which previously emitted
+    `CREATE TABLE "..." ()` and failed with `near ")": syntax error`."""
+    from elliot_core.types.sqlite import FlattenedTable
+
+    engine.load_table(FlattenedTable(name="empty_child", columns=[], rows=[]))
+    assert "empty_child" in engine.get_table_names()
+    schema = engine.get_table_schema("empty_child")
+    assert [c["name"] for c in schema] == ["_empty"]
+
+
+def test_load_result_handles_nested_empty_arrays(engine: SQLiteEngine):
+    """Regression: a JSON payload with nested empty arrays (the getInsights
+    shape: `facts.*.cols`, `teaserBlocks`, `actions`) used to fail with
+    `[INTERNAL_ERROR] near ")": syntax error`. The whole tree must load."""
+    data = [
+        {
+            "ok": True,
+            "insights": [
+                {
+                    "id": "x",
+                    "teaserBlocks": [],
+                    "actions": [],
+                    "facts": {
+                        "confirmedTransaction": {
+                            "type": "PTransaction",
+                            "cols": [],
+                            "rows": [],
+                        }
+                    },
+                }
+            ],
+        }
+    ]
+    result = flatten(data, "get_insights_raw")
+    engine.load_result(result)
+    names = engine.get_table_names()
+    assert "get_insights_raw" in names
+    assert "get_insights_raw_insights" in names
+    assert any("teaserblocks" in n for n in names)
+    assert any("actions" in n for n in names)
+    assert any("cols" in n for n in names)
+    assert any("rows" in n for n in names)
+
+
 def test_load_result_rolls_back_when_child_table_fails(
     engine: SQLiteEngine, monkeypatch: pytest.MonkeyPatch
 ):

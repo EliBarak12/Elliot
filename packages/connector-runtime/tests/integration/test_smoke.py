@@ -45,6 +45,7 @@ def _wait_for_health(url: str, timeout: float = 10.0) -> bool:
 
 
 @pytest.mark.e2e
+@pytest.mark.integration
 def test_runtime_health_and_audit(tmp_path: Path) -> None:
     connector_file = tmp_path / "smoke.connector.json"
     connector_file.write_text(json.dumps(MINIMAL_CONNECTOR))

@@ -71,6 +71,28 @@ def test_load_connector_schema_error(tmp_path: Path):
         load_connector(p)
 
 
+def test_load_connector_via_dotdot_path_outside_dir(tmp_path: Path):
+    """Path-traversal regression for ``load_connector``.
+
+    The loader is documented as trust-bounded to the repo-relative
+    connectors directory; callers are expected to pre-validate paths via
+    ``elliot_core.paths.safe_join``. This test pins the loader behaviour:
+    a `../` traversal that resolves to a non-existent file outside the
+    expected root must raise ``ConnectorLoadError`` and not silently
+    return a config object. If a future refactor accidentally widens the
+    loader's reach, this test will catch it.
+    """
+    inner = tmp_path / "connectors"
+    inner.mkdir()
+    outside = tmp_path / "outside.connector.json"
+    # outside.connector.json is *not* created — accessing it via
+    # `connectors/../outside.connector.json` should NOT silently succeed.
+    traversal = inner / ".." / "outside.connector.json"
+    with pytest.raises(ConnectorLoadError):
+        load_connector(traversal)
+    assert not outside.exists(), "test setup error: traversal target should not exist"
+
+
 # ---------------------------------------------------------------------------
 # discover_connectors
 # ---------------------------------------------------------------------------

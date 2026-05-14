@@ -12,6 +12,8 @@ from mcp.server.fastmcp import FastMCP
 
 from elliot_mcp_plugin.session import ElliotSession
 
+pytestmark = pytest.mark.integration
+
 
 def _tool(mcp: FastMCP, name: str):
     fn = mcp._tool_manager._tools[name].fn

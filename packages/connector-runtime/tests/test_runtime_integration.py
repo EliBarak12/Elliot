@@ -8,7 +8,6 @@ and mock outbound HTTP calls with respx.
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 
 import httpx
@@ -348,16 +347,24 @@ def test_mcp_tool_call_writes_observability(tmp_path: Path) -> None:
         os.environ.pop("ELLIOT_DB_URL", None)
 
 
-def test_cache_ttl_expiry(tmp_path: Path) -> None:
+def test_cache_ttl_expiry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """TTL expiry is verified by advancing the monotonic clock, not by
+    real-time sleep. ttl_seconds=0.01 + time.sleep(0.05) was flaky on slow
+    CI hosts."""
     import elliot_connector_runtime.cache as cache_module
 
     p = tmp_path / "test.connector.json"
     p.write_text(json.dumps(MINIMAL_CONNECTOR))
 
-    cache = cache_module.ConnectorCache(ttl_seconds=0.01)
-    first = cache.get(p)
+    fake_now = [1000.0]
 
-    time.sleep(0.05)
+    def _now() -> float:
+        return fake_now[0]
+
+    monkeypatch.setattr(cache_module.time, "monotonic", _now)
+    cache = cache_module.ConnectorCache(ttl_seconds=10.0)
+    first = cache.get(p)
+    fake_now[0] += 11.0  # Advance past the TTL.
     second = cache.get(p)
     assert first is not second
 

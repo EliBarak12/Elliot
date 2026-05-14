@@ -54,6 +54,10 @@ class TaskStore:
 
     def __init__(self) -> None:
         self._tasks: dict[str, TaskRecord] = {}
+        # Keep strong references to in-flight asyncio.Task objects so the
+        # event loop cannot garbage-collect them mid-await (audit H7) and so
+        # we can cancel them cleanly on app shutdown.
+        self._inflight: dict[str, asyncio.Task[None]] = {}
 
     def submit(
         self,
@@ -63,7 +67,13 @@ class TaskStore:
         task_id = uuid.uuid4().hex[:12]
         record = TaskRecord(task_id=task_id, tool_id=tool_id, status="pending")
         self._tasks[task_id] = record
-        asyncio.ensure_future(self._run(record, coro))
+        task = asyncio.ensure_future(self._run(record, coro))
+        self._inflight[task_id] = task
+
+        def _cleanup(_t: asyncio.Task[None], tid: str = task_id) -> None:
+            self._inflight.pop(tid, None)
+
+        task.add_done_callback(_cleanup)
         log.info("task.submitted", task_id=task_id, tool_id=tool_id)
         return task_id
 
@@ -79,6 +89,11 @@ class TaskStore:
             record.result = await coro
             record.status = "completed"
             log.info("task.completed", task_id=record.task_id, tool_id=record.tool_id)
+        except asyncio.CancelledError:
+            record.status = "failed"
+            record.error = "cancelled (server shutting down)"
+            log.info("task.cancelled", task_id=record.task_id)
+            raise
         except Exception as exc:
             record.error = str(exc)
             record.status = "failed"
@@ -86,6 +101,19 @@ class TaskStore:
         finally:
             record.duration_ms = round((time.monotonic() - t0) * 1000, 1)
             record.updated_at = time.time()
+
+    async def cancel_all(self) -> int:
+        """Cancel every in-flight task. Called on app shutdown so we never
+        leave tasks marked ``running`` after the loop closes (audit H7).
+        Returns the number of tasks cancelled."""
+        tasks = list(self._inflight.values())
+        if not tasks:
+            return 0
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        log.info("task.cancel_all", count=len(tasks))
+        return len(tasks)
 
     def get(self, task_id: str) -> TaskRecord | None:
         return self._tasks.get(task_id)

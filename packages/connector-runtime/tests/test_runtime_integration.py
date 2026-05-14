@@ -89,6 +89,33 @@ def test_runtime_requires_api_key_when_set(
     assert client.get("/v1/audit", headers={"Authorization": "Bearer secret"}).status_code == 200
 
 
+def test_slowapi_middleware_registered(app) -> None:
+    """The rate limiter must be wired (audit H5)."""
+    from slowapi.middleware import SlowAPIMiddleware
+
+    middleware_types = [m.cls for m in app.user_middleware]
+    assert SlowAPIMiddleware in middleware_types
+
+
+def test_body_size_middleware_rejects_oversize(
+    connector_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Audit H7: a request with Content-Length above the cap must be 413'd
+    before any body is materialised."""
+    monkeypatch.setenv("ELLIOT_MAX_REQUEST_BODY_BYTES", "1024")
+    app = create_app(connector_path=str(connector_file), secrets={})
+    client = TestClient(app)
+    big = "x" * 4096
+    resp = client.post(
+        "/v1/audit",
+        headers={"Content-Type": "application/json"},
+        content=big,
+    )
+    assert resp.status_code == 413
+    body = resp.json()
+    assert body["error"]["code"] == "BODY_TOO_LARGE"
+
+
 def test_audit_record_and_tail(tmp_path: Path) -> None:
     log = AuditLog(tmp_path / "audit.ndjson")
     log.record("tool_x", {"a": 1}, result_row_count=5, duration_ms=12.3)

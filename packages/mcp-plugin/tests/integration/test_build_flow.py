@@ -13,6 +13,10 @@ from elliot_core.connector.serializer import deserialize_connector
 from elliot_mcp_plugin.server import create_elliot_server
 from elliot_mcp_plugin.session import ElliotSession
 
+# CLAUDE.md: integration tests carry pytest.mark.integration so the suite
+# can be selected/deselected via `-m integration` / `-m "not integration"`.
+pytestmark = pytest.mark.integration
+
 
 def _tool(mcp: FastMCP, name: str):
     fn = mcp._tool_manager._tools[name].fn

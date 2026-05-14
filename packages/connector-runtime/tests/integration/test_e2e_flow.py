@@ -18,6 +18,8 @@ from elliot_core.tools.registry import ToolRegistry
 from elliot_core.tools.validator import validate_tool_definition
 from elliot_core.types.source import SourceConfig
 
+pytestmark = pytest.mark.integration
+
 CSV_DATA = (
     "id,name,category,price\n1,Widget A,gadgets,9.99\n2,Widget B,gadgets,19.99\n3,Donut,food,1.49\n"
 )

@@ -232,18 +232,17 @@ def test_stop_runtime_when_not_running(mcp: FastMCP):
 # ── elliot_start_runtime: truthful health-check + log capture ────────────────
 
 
-def test_start_runtime_refuses_when_no_connector(mcp: FastMCP, tmp_path: Path):
+def test_start_runtime_refuses_when_no_connector(
+    mcp: FastMCP, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     """Regression: start_runtime used to return success even when the
     runtime couldn't load a connector. Now it must fail loudly with a
     RUNTIME_NO_CONNECTOR code if no connector path exists."""
-    import os
-
-    cwd = os.getcwd()
-    try:
-        os.chdir(tmp_path)
-        result = _tool(mcp, "elliot_start_runtime")()
-    finally:
-        os.chdir(cwd)
+    # monkeypatch.chdir restores cwd automatically; the previous try/finally
+    # raw os.chdir would leak cwd into other tests if anything in the body
+    # raised before the finally clause ran.
+    monkeypatch.chdir(tmp_path)
+    result = _tool(mcp, "elliot_start_runtime")()
     assert "text" in result
     assert "RUNTIME_NO_CONNECTOR" in result["text"]
 

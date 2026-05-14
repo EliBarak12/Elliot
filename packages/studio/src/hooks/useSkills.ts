@@ -18,5 +18,9 @@ export function useSkills() {
       if (Array.isArray(raw)) return raw;
       return Array.isArray(raw?.skills) ? raw.skills : [];
     },
+    // Live-refresh so skills the agent creates appear in the UI without a
+    // page reload.
+    refetchInterval: 4000,
+    refetchOnWindowFocus: true,
   });
 }

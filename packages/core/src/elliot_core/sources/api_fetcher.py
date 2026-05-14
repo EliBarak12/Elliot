@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from elliot_core.errors import SourceFetchError
+from elliot_core.http import SSRFError, safe_client, validate_url
 from elliot_core.types.source import FetchResult, SourceConfig
 
 _RETRY_STATUSES = {429, 500, 503}
@@ -76,13 +77,21 @@ async def fetch_endpoint(config: SourceConfig, secrets: dict[str, str]) -> Fetch
     cursor: str | None = None
     next_url: str | None = None
 
-    async with httpx.AsyncClient(timeout=config.timeout_ms / 1000) as client:
+    async with safe_client(timeout=config.timeout_ms / 1000) as client:
         while True:
             if page_count >= pagination.max_pages:
                 warnings.append(f"Reached max_pages limit ({pagination.max_pages})")
                 break
 
             request_url = next_url or (config.url or "")
+            # SSRF guard: validate every URL we're about to call. The initial
+            # source.url comes from the connector definition; next_url comes
+            # from the upstream response (e.g. rel="next") and is therefore
+            # attacker-influenced.
+            try:
+                validate_url(request_url)
+            except SSRFError as exc:
+                raise SourceFetchError(f"Refusing to fetch: {exc.message}") from exc
             request_params: dict[str, Any] = dict(base_params)
 
             if pagination.strategy == "offset":

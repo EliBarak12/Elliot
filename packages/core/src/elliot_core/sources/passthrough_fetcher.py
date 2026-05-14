@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from elliot_core.errors import SourceFetchError
+from elliot_core.http import SSRFError, safe_client, validate_url
 from elliot_core.sources.api_fetcher import (
     _build_auth_headers,
     _build_auth_query_params,
@@ -30,11 +31,17 @@ async def fetch_passthrough(
     base_params: dict[str, Any] = dict(_build_auth_query_params(source, secrets))
     base_params.update({k: v for k, v in query_params.items() if v is not None})
 
+    target_url = source.url or ""
     try:
-        async with httpx.AsyncClient(timeout=source.timeout_ms / 1000) as client:
+        validate_url(target_url)
+    except SSRFError as exc:
+        raise SourceFetchError(f"Refusing to fetch: {exc.message}") from exc
+
+    try:
+        async with safe_client(timeout=source.timeout_ms / 1000) as client:
             resp = await client.request(
                 method=source.method,
-                url=source.url or "",
+                url=target_url,
                 params=base_params or None,
                 headers=headers,
             )

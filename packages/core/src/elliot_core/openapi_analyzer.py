@@ -155,7 +155,11 @@ def _build_tool(
 
 
 def _fetch_spec(url: str) -> dict[str, Any]:
-    r = httpx.get(url, timeout=10, follow_redirects=True)
+    # SSRF guard: the URL ultimately comes from agent / connector-builder input.
+    from elliot_core.http import validate_url
+
+    validate_url(url)
+    r = httpx.get(url, timeout=10, follow_redirects=False)
     r.raise_for_status()
     try:
         return r.json()

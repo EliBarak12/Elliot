@@ -35,10 +35,13 @@ async function _doConnect(): Promise<Client> {
   } catch (err) {
     _client = null;
     _connected = false;
+    console.error("[mcp-client] connect failed", err);
     if (!_connectionErrorShown) {
       _connectionErrorShown = true;
+      // Finite duration so the toast is dismissable; the Retry action
+      // still allows the operator to recover without a reload.
       toast.error("Cannot connect to Elliot plugin. Is it running on :3000?", {
-        duration: Infinity,
+        duration: 30_000,
         action: {
           label: "Retry",
           onClick: () => {

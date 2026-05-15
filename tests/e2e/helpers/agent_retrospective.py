@@ -101,6 +101,10 @@ class Retrospective:
 
 _TOOL_NS = re.compile(r"^mcp__elliot__(.+)$")
 
+# Claude Code's deferred-tool loader. Counts as "tool use" but is part of
+# the CLI's schema-resolution path, not an attempt to escape the policy.
+_SYSTEM_TOOLS = frozenset({"ToolSearch"})
+
 
 def _normalize_tool_name(name: str) -> str:
     """Strip ``mcp__elliot__`` prefix so we can compare against bare names."""
@@ -156,8 +160,17 @@ def parse_stream(events: Iterable[dict[str, Any]]) -> Retrospective:
                     tool_use_index[block.get("id", "")] = rec
                     tool_calls_this_turn.append(rec)
                     counts[name] += 1
-                    if raw_name.startswith("mcp__elliot__"):
-                        stages[stage] += 1
+                    if raw_name.startswith("mcp__"):
+                        # MCP tool — counts toward stage coverage when it's
+                        # one of Elliot's, and is on-policy for any
+                        # ``mcp__<server>__*`` allowed prefix the agent was
+                        # given (builder = elliot, consumer = ecommerce).
+                        if raw_name.startswith("mcp__elliot__"):
+                            stages[stage] += 1
+                    elif raw_name in _SYSTEM_TOOLS:
+                        # Claude Code's internal tool-schema loader. Tracked
+                        # for accounting but not treated as an escape.
+                        pass
                     else:
                         off_policy[raw_name] += 1
             turn_records.append(

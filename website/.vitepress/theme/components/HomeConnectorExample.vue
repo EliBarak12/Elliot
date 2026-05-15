@@ -26,12 +26,13 @@ onMounted(() => {
 
 <template>
   <section ref="el" class="elliot-section">
-    <span class="elliot-section__eyebrow">One file. Many tools.</span>
+    <span class="elliot-section__eyebrow">One file. Many actions.</span>
     <h2 class="elliot-section__title">A connector is a declaration, not a service.</h2>
     <p class="elliot-section__lede">
-      Describe your sources, the tools you want exposed, and the skills agents
-      can chain. Elliot generates safe parameterised SQL, wires auth from env
-      vars, and registers everything with MCP automatically.
+      Describe your sources, the actions you want exposed, and the skills
+      agents can chain. Elliot generates safe parameterised SQL, wires auth
+      from env vars, and registers your connector with every agent
+      automatically.
     </p>
 
     <div class="elliot-example">

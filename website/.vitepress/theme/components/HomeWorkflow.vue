@@ -54,11 +54,10 @@ onMounted(() => {
 <template>
   <section ref="el" class="elliot-section">
     <span class="elliot-section__eyebrow">How it works</span>
-    <h2 class="elliot-section__title">From schema to agent in five steps.</h2>
+    <h2 class="elliot-section__title">From your API to an agent-ready connector in five steps.</h2>
     <p class="elliot-section__lede">
       One connector file, one CLI, one running stack. No SQL writing, no glue
-      services, no bespoke OpenAPI wrappers for every API your agent has to
-      reach.
+      services, no bespoke wrappers for every API your agent has to reach.
     </p>
 
     <div class="elliot-workflow">

@@ -6,7 +6,7 @@ const siteUrl = "https://elibarak12.github.io/Elliot/";
 export default defineConfig({
   title: "Elliot",
   description:
-    "Elliot is the AX (Agent Experience) platform — turn any API or database into agent-native MCP tools with minimum tokens, clean error recovery, and full observability.",
+    "Elliot turns any API or database into an agent-ready connector — with minimum tokens, clean error recovery, and full session observability. Build your connector, make your product agent-ready.",
   lang: "en-US",
   cleanUrls: true,
   lastUpdated: true,
@@ -19,13 +19,13 @@ export default defineConfig({
     ["link", { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" }],
     ["meta", { name: "theme-color", content: "#00cec8" }],
     ["meta", { property: "og:type", content: "website" }],
-    ["meta", { property: "og:title", content: "Elliot — AX Platform for AI Agents" }],
+    ["meta", { property: "og:title", content: "Elliot — Build your connector. Make your product agent-ready." }],
     [
       "meta",
       {
         property: "og:description",
         content:
-          "Turn any API or database into agent-native MCP tools. Design, validate, deploy, and observe agent-ready tool sets.",
+          "Turn any API or database into an agent-ready connector. Design, validate, deploy, and observe — one file, one command, every agent.",
       },
     ],
     ["meta", { property: "og:image", content: ogImage }],

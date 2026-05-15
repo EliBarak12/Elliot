@@ -51,9 +51,9 @@ onMounted(() => {
     <span class="elliot-section__eyebrow">The five principles</span>
     <h2 class="elliot-section__title">Designed for agents, not humans.</h2>
     <p class="elliot-section__lede">
-      Every line of Elliot follows five rules. They are the difference between
-      a tool an agent occasionally gets right and a tool it can reliably call
-      in production.
+      Every connector Elliot ships follows five rules. They are the
+      difference between a connector an agent occasionally gets right and a
+      connector it can reliably call in production.
     </p>
 
     <div class="elliot-principles">

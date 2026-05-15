@@ -5,15 +5,15 @@ import { withBase } from "vitepress";
 <template>
   <section class="elliot-section">
     <div class="elliot-cta">
-      <h2 class="elliot-cta__title">Ready to make your product agentic?</h2>
+      <h2 class="elliot-cta__title">Ready to make your product agent-ready?</h2>
       <p class="elliot-cta__body">
-        Clone the repo, run <code>make dev</code>, and your first connector is
-        live on an MCP endpoint in under five minutes. Free, MIT-licensed, and
-        runs anywhere you can run Python and Node.
+        Clone the repo, run <code>make dev</code>, and your first connector
+        is live in under five minutes. Free, MIT-licensed, and runs anywhere
+        you can run Python and Node.
       </p>
       <div class="elliot-cta__buttons">
         <a class="elliot-cta__btn elliot-cta__btn--primary" :href="withBase('/docs/quickstart')">
-          Start the quickstart
+          Build your connector
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M5 12h14" />
             <path d="M13 6l6 6-6 6" />

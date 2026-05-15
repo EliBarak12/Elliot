@@ -35,14 +35,12 @@
 
   <!-- Tagline -->
   <text x="80" y="380" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Display',Inter,sans-serif"
-        font-size="56" font-weight="600" fill="#ffffff" letter-spacing="-2">AX is the new UX.</text>
-  <text x="80" y="446" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Display',Inter,sans-serif"
-        font-size="28" font-weight="400" fill="#ffffff" fill-opacity="0.72" letter-spacing="-0.5">
-    Turn any API or database into agent-native MCP tools.
-  </text>
+        font-size="48" font-weight="600" fill="#ffffff" letter-spacing="-2">Build your connector.</text>
+  <text x="80" y="432" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Display',Inter,sans-serif"
+        font-size="48" font-weight="600" fill="#ffffff" letter-spacing="-2">Make your product agent-ready.</text>
   <text x="80" y="486" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Display',Inter,sans-serif"
-        font-size="28" font-weight="400" fill="#ffffff" fill-opacity="0.72" letter-spacing="-0.5">
-    Design, validate, deploy, observe.
+        font-size="26" font-weight="400" fill="#ffffff" fill-opacity="0.72" letter-spacing="-0.5">
+    Turn any API or database into an agent-ready connector.
   </text>
 
   <!-- URL chip -->

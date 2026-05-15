@@ -151,6 +151,12 @@ def elliot_stack(
             # workspace — the default lockdown only allows ELLIOT_CONNECTORS_DIR
             # which is fine for production but awkward here.
             "ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH": "1",
+            # Bearer-token secret used by the mock /reviews API. The connector
+            # config references it as ``{{ env:REVIEWS_TOKEN }}`` (or
+            # ``secret_key: "REVIEWS_TOKEN"`` resolved from ELLIOT_SECRET_*).
+            "REVIEWS_TOKEN": "e2e-reviews-secret-001",
+            "ELLIOT_SECRET_REVIEWS_TOKEN": "e2e-reviews-secret-001",
+            "ELLIOT_E2E_REVIEWS_TOKEN": "e2e-reviews-secret-001",
         }
     )
     if extra_env:

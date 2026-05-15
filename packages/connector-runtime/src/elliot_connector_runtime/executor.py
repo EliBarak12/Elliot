@@ -339,8 +339,35 @@ def _interpolate(template: str, values: dict[str, Any]) -> str:
     return template
 
 
+def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
+    """Resolve ``auth.secret_key`` to a concrete header value.
+
+    Three paths must work, matching ``elliot_core.sources.api_fetcher``:
+
+    1. ``"{{ env:REVIEWS_TOKEN }}"`` — env-var template. Look it up.
+    2. ``"REVIEWS_TOKEN"`` — bare env-var name. Look up via secrets dict
+       (with lower-case fallback because the loader lower-cases keys).
+    3. The runtime loader applies ``elliot_core.secrets.resolve_secrets``
+       at load time, so a template like ``{{ env:X }}`` may already have
+       been substituted with the literal secret value. In that case we
+       must return the key as-is — it IS the value.
+
+    Mirroring ``api_fetcher`` keeps plugin-time and runtime-time fetches
+    behaving identically.
+    """
+    import os
+
+    if key.startswith("{{ env:") and key.endswith(" }}"):
+        env_var = key[len("{{ env:") : -len(" }}")].strip()
+        return secrets.get(env_var) or secrets.get(env_var.lower()) or os.environ.get(env_var, "")
+    # Case 2: bare env-var name found in the secrets dict (or its lowercase
+    # twin). Case 3: anything else is the resolved secret literal — return
+    # it unchanged, just like api_fetcher does.
+    return secrets.get(key) or secrets.get(key.lower()) or key
+
+
 def _build_auth_headers(auth: AuthConfig, secrets: dict[str, str]) -> dict[str, str]:
-    secret_val = secrets.get(auth.secret_key, "")
+    secret_val = _resolve_secret(auth.secret_key, secrets)
     if auth.type == "api_key":
         header = auth.header_name or "X-Api-Key"
         return {header: secret_val}

@@ -21,10 +21,11 @@ test-cov:
 	uv run pytest --tb=short --cov --cov-report=term-missing
 
 # Real-user end-to-end suite. Boots plugin/runtime/studio in a temp workspace,
-# runs the canonical workflow over MCP-over-HTTP (Layer 1), drives a headless
-# Claude Code agent against the live plugin (Layer 2 — costs API tokens), and
-# verifies the resulting state in Studio via Playwright (Layer 3). Not part
-# of the pre-push mandatory suite; opt-in via these targets.
+# runs the canonical workflow over MCP-over-HTTP (Layer 1, free), drives a
+# three-agent pipeline against the live plugin (Layer 2 — builder + consumer +
+# reviewer, costs API tokens), and walks all 9 Studio pages in Chromium
+# (Layer 3, free). Not part of the pre-push mandatory suite; opt-in via these
+# targets.
 e2e:
 	PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers \
 	uv run pytest tests/e2e -v --tb=short
@@ -32,6 +33,9 @@ e2e:
 e2e-mcp:
 	uv run pytest tests/e2e/test_layer1_mcp_protocol.py -v --tb=short
 
+# Builder → Consumer → Reviewer multi-agent pipeline. Set budget knobs via
+# ELLIOT_E2E_BUILDER_BUDGET_USD / ELLIOT_E2E_CONSUMER_BUDGET_USD /
+# ELLIOT_E2E_REVIEWER_BUDGET_USD if you want tighter / looser caps.
 e2e-agent:
 	uv run pytest tests/e2e/test_layer2_claude_agent.py -v --tb=short
 

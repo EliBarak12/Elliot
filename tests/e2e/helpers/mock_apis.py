@@ -7,18 +7,30 @@ the e2e test reproducible without depending on outbound network — when the
 suite is run on an unrestricted machine you can flip the URL base via env
 to point at the actual public hosts (their schemas match by design).
 
-Endpoints (all served from a single FastAPI app, dispatched by path prefix):
+Endpoints (all served from a single FastAPI app):
 
-* ``/users``                — jsonplaceholder-shape: nested ``address.geo`` +
+* ``/users``                 — jsonplaceholder-shape: nested ``address.geo`` +
                               ``company``. Adds ``plan`` and ``mrr`` so we
                               can build enterprise/plan-tier business tools.
-* ``/products``             — dummyjson-shape: nested ``dimensions`` +
-                              ``meta`` + arrays (``tags``, ``images``,
-                              ``reviews``).
-* ``/orders``               — stripe/commercejs-shape: nested ``customer``,
-                              ``billing_address``, arrays of ``line_items``.
-* ``/reviews``              — flat per-product reviews keyed by ``product_id``
-                              with nested ``reviewer`` and ``response``.
+                              **Cursor-paginated** ``?after=<id>&limit=N`` →
+                              ``{data, next_cursor, has_more}``. The
+                              non-paginated ``/users`` flat list is kept for
+                              the cheap MCP layer.
+* ``/products``              — dummyjson-shape: nested ``dimensions`` +
+                              ``meta`` + arrays (``tags``).
+* ``/orders``                — stripe-shape with **offset pagination**:
+                              ``?offset=N&limit=M`` → ``{items, total,
+                              offset, limit}``. Arrays of nested
+                              ``line_items``.
+* ``/reviews``               — flat per-product reviews keyed by
+                              ``product_id`` with nested ``reviewer`` and
+                              ``response``. **Bearer-token required**:
+                              ``Authorization: Bearer <ELLIOT_E2E_REVIEWS_TOKEN>``.
+* ``/organizations``         — heavily nested 5th API: 5-level structure
+                              (org → departments → teams → members →
+                              skills[]) with mixed types (ISO dates, enums,
+                              nullable). Pushes flattener depth + arrays
+                              hard.
 
 The dataset is the same across runs — no randomness — so eval assertions
 are deterministic.
@@ -26,12 +38,19 @@ are deterministic.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query
+
+# The reviews API simulates a bearer-token-gated service. Real users would
+# configure ``{{ env:REVIEWS_TOKEN }}`` in the connector and set the value
+# in their .env; tests inject it via this env var at mock-server start.
+REVIEWS_TOKEN_ENV = "ELLIOT_E2E_REVIEWS_TOKEN"
+DEFAULT_REVIEWS_TOKEN = "e2e-reviews-secret-001"
 
 # ── Seed data ────────────────────────────────────────────────────────────────
 
@@ -254,6 +273,164 @@ ORDERS: list[dict[str, Any]] = [
     },
 ]
 
+ORGANIZATIONS: list[dict[str, Any]] = [
+    {
+        "id": "org_acme",
+        "name": "Acme Corp",
+        "tier": "enterprise",
+        "status": "active",
+        "founded_at": "2018-03-14T00:00:00Z",
+        "headquarters": {
+            "country": "US",
+            "address": {
+                "street": "1 Market St",
+                "city": "San Francisco",
+                "coords": {"lat": 37.7937, "lng": -122.3965},
+            },
+        },
+        "departments": [
+            {
+                "id": "dept_eng",
+                "name": "Engineering",
+                "budget_usd": 2_500_000,
+                "lead_user_id": 1,
+                "teams": [
+                    {
+                        "id": "team_platform",
+                        "name": "Platform",
+                        "type": "backend",
+                        "members": [
+                            {
+                                "user_id": 1,
+                                "role": "lead",
+                                "joined_at": "2019-01-15",
+                                "skills": ["python", "postgres", "kubernetes"],
+                            },
+                            {
+                                "user_id": 4,
+                                "role": "engineer",
+                                "joined_at": "2024-06-01",
+                                "skills": ["go", "redis"],
+                            },
+                        ],
+                    },
+                    {
+                        "id": "team_ml",
+                        "name": "ML",
+                        "type": "research",
+                        "members": [
+                            {
+                                "user_id": 3,
+                                "role": "lead",
+                                "joined_at": "2020-09-12",
+                                "skills": ["python", "pytorch", "rust"],
+                            },
+                        ],
+                    },
+                ],
+            },
+            {
+                "id": "dept_ops",
+                "name": "Operations",
+                "budget_usd": 800_000,
+                "lead_user_id": 2,
+                "teams": [
+                    {
+                        "id": "team_sre",
+                        "name": "SRE",
+                        "type": "infra",
+                        "members": [
+                            {
+                                "user_id": 2,
+                                "role": "lead",
+                                "joined_at": "2021-04-01",
+                                "skills": ["terraform", "aws", "incident-mgmt"],
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    },
+    {
+        "id": "org_initech",
+        "name": "Initech",
+        "tier": "enterprise",
+        "status": "active",
+        "founded_at": "2010-08-22T00:00:00Z",
+        "headquarters": {
+            "country": "US",
+            "address": {
+                "street": "500 Innovation Blvd",
+                "city": "Seattle",
+                "coords": {"lat": 47.6205, "lng": -122.3493},
+            },
+        },
+        "departments": [
+            {
+                "id": "dept_eng_initech",
+                "name": "Engineering",
+                "budget_usd": 1_800_000,
+                "lead_user_id": 3,
+                "teams": [
+                    {
+                        "id": "team_data",
+                        "name": "Data",
+                        "type": "backend",
+                        "members": [
+                            {
+                                "user_id": 3,
+                                "role": "lead",
+                                "joined_at": "2022-02-14",
+                                "skills": ["spark", "sql"],
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    },
+    {
+        "id": "org_umbrella",
+        "name": "Umbrella",
+        "tier": "enterprise",
+        "status": "active",
+        "founded_at": "1998-06-05T00:00:00Z",
+        "headquarters": {
+            "country": "DE",
+            "address": {
+                "street": "Berliner Str 1",
+                "city": "Berlin",
+                "coords": {"lat": 52.5305, "lng": 13.3849},
+            },
+        },
+        "departments": [
+            {
+                "id": "dept_rd",
+                "name": "R&D",
+                "budget_usd": 3_200_000,
+                "lead_user_id": 5,
+                "teams": [
+                    {
+                        "id": "team_bio",
+                        "name": "Bio",
+                        "type": "research",
+                        "members": [
+                            {
+                                "user_id": 5,
+                                "role": "lead",
+                                "joined_at": "2017-11-30",
+                                "skills": ["biology", "python"],
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    },
+]
+
+
 REVIEWS: list[dict[str, Any]] = [
     {
         "id": 7001,
@@ -311,6 +488,8 @@ REVIEWS: list[dict[str, Any]] = [
 def build_app() -> FastAPI:
     app = FastAPI(title="Elliot E2E Mock APIs")
 
+    # ── Flat endpoints (used by the cheap MCP layer) ──────────────────────
+
     @app.get("/users")
     def list_users() -> list[dict[str, Any]]:
         return USERS
@@ -337,9 +516,64 @@ def build_app() -> FastAPI:
     def list_orders() -> list[dict[str, Any]]:
         return ORDERS
 
+    # ── Pagination & auth variants (exercised by the agent layer) ─────────
+
+    @app.get("/v2/users")
+    def list_users_cursor(
+        after: int | None = Query(None, description="last seen user id"),
+        limit: int = Query(2, ge=1, le=10),
+    ) -> dict[str, Any]:
+        """Cursor-paginated users — ``{data, next_cursor, has_more}``."""
+        sorted_users = sorted(USERS, key=lambda u: u["id"])
+        start = 0
+        if after is not None:
+            for i, u in enumerate(sorted_users):
+                if u["id"] == after:
+                    start = i + 1
+                    break
+        page = sorted_users[start : start + limit]
+        next_cursor = page[-1]["id"] if page and start + limit < len(sorted_users) else None
+        return {
+            "data": page,
+            "next_cursor": next_cursor,
+            "has_more": next_cursor is not None,
+        }
+
+    @app.get("/v2/orders")
+    def list_orders_offset(
+        offset: int = Query(0, ge=0),
+        limit: int = Query(3, ge=1, le=20),
+    ) -> dict[str, Any]:
+        """Offset-paginated orders — ``{items, total, offset, limit}``."""
+        sorted_orders = sorted(ORDERS, key=lambda o: o["id"])
+        items = sorted_orders[offset : offset + limit]
+        return {
+            "items": items,
+            "total": len(sorted_orders),
+            "offset": offset,
+            "limit": limit,
+        }
+
     @app.get("/reviews")
-    def list_reviews() -> list[dict[str, Any]]:
+    def list_reviews(
+        authorization: str | None = Header(default=None),
+    ) -> list[dict[str, Any]]:
+        """Bearer-token-gated. Real callers send ``Authorization: Bearer <token>``."""
+        expected = os.environ.get(REVIEWS_TOKEN_ENV, DEFAULT_REVIEWS_TOKEN)
+        provided = ""
+        if authorization and authorization.lower().startswith("bearer "):
+            provided = authorization.split(None, 1)[1].strip()
+        if provided != expected:
+            raise HTTPException(
+                status_code=401,
+                detail={"error": "missing or invalid bearer token"},
+            )
         return REVIEWS
+
+    @app.get("/organizations")
+    def list_organizations() -> list[dict[str, Any]]:
+        """Deeply nested — 5 levels (org → dept → team → member → skills[])."""
+        return ORGANIZATIONS
 
     @app.get("/health")
     def health() -> dict[str, str]:

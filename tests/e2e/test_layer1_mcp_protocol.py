@@ -30,25 +30,42 @@ import pytest
 from .helpers.mcp_client import call_tool_json, open_mcp_session
 from .helpers.stack import StackEndpoints
 
-SOURCE_DEFS = [
-    ("users", "/users"),
-    ("products", "/products"),
-    ("orders", "/orders"),
-    ("reviews", "/reviews"),
+# Each entry is (logical_name, path, extra_config). ``extra_config`` is merged
+# into the SourceConfig — used here to layer bearer auth on /reviews without
+# repeating the URL.
+SOURCE_DEFS: list[tuple[str, str, dict]] = [
+    ("users", "/users", {}),
+    ("products", "/products", {}),
+    ("orders", "/orders", {}),
+    (
+        "reviews",
+        "/reviews",
+        {"auth": {"type": "bearer", "secret_key": "{{ env:REVIEWS_TOKEN }}"}},
+    ),
+    # 5-level deeply nested source: org → dept → team → member → skills[].
+    ("organizations", "/organizations", {}),
 ]
 
-EXPECTED_ROWS = {"users": 6, "products": 5, "orders": 6, "reviews": 5}
+EXPECTED_ROWS = {
+    "users": 6,
+    "products": 5,
+    "orders": 6,
+    "reviews": 5,
+    "organizations": 3,
+}
 
 # Columns the flattener must produce from the nested mock payloads. Each
-# entry asserts a non-trivial part of the schema-detection path: nested
-# objects (address.geo.lat → address_geo_lat), nested object inside nested
-# object (reviewer.verified → reviewer_verified), object→child-table
-# (orders.line_items → orders_line_items).
+# entry asserts a non-trivial part of the schema-detection path.
 NESTED_COLUMNS = {
     "users": {"address_city", "address_geo_lat", "company_name", "company_industry"},
     "products": {"dimensions_width", "meta_sku"},
     "orders": {"billing_address_city"},
     "reviews": {"reviewer_id", "reviewer_verified"},
+    "organizations": {
+        "headquarters_country",
+        "headquarters_address_city",
+        "headquarters_address_coords_lat",
+    },
 }
 
 # Four business tools spanning all 4 sources. Each is a real, useful query
@@ -136,7 +153,75 @@ BUSINESS_TOOLS = [
             }
         ],
     },
+    {
+        "name": "list_org_team_leads",
+        "description": (
+            "Lookup org leadership: returns one row per team lead with their "
+            "org, department, team, and the lead's user_id. Joins through "
+            "five levels of the organizations source — proof that the "
+            "flattener exploded the nested members[] array into a queryable "
+            "child table."
+        ),
+        "category": "READ",
+        "sql": (
+            "SELECT o.id AS org_id, o.name AS org_name, "
+            "d.name AS department_name, t.name AS team_name, "
+            "m.user_id, m.joined_at "
+            'FROM "organizations" o '
+            'JOIN "organizations_departments" d ON d._parent_id = o.rowid '
+            'JOIN "organizations_departments_teams" t ON t._parent_id = d.rowid '
+            'JOIN "organizations_departments_teams_members" m ON m._parent_id = t.rowid '
+            "WHERE m.role = 'lead' "
+            "ORDER BY o.name, d.name, t.name"
+        ),
+        "parameters": [],
+    },
 ]
+
+# One reusable Elliot skill that chains the four customer-side tools into a
+# multi-step workflow. ``elliot_create_skill`` validates that every step's
+# tool_id exists in the registry, so this exercises both the skill-storage
+# path and the tool-cross-reference check.
+BUSINESS_SKILL = {
+    "name": "find_at_risk_accounts",
+    "description": (
+        "Surface enterprise customers likely to churn. Pulls active "
+        "enterprise customers, fetches each one's order history, and "
+        "cross-references with unresolved low-rating reviews."
+    ),
+    "steps": [
+        {
+            "alias": "customers",
+            "tool_id": "list_active_enterprise_customers",
+            "params": {},
+        },
+        {
+            "alias": "low_reviews",
+            "tool_id": "pending_reviews_with_low_rating",
+            "params": {"max_rating": "{{ max_rating }}"},
+        },
+        {
+            "alias": "history",
+            "tool_id": "customer_order_history",
+            "params": {"customer_id": "{{ customer_id }}"},
+        },
+    ],
+    "input_parameters": [
+        {
+            "name": "customer_id",
+            "type": "integer",
+            "required": True,
+            "description": "Which enterprise customer to drill into",
+        },
+        {
+            "name": "max_rating",
+            "type": "integer",
+            "required": False,
+            "description": "Review rating threshold (default 3)",
+            "default": 3,
+        },
+    ],
+}
 
 
 @pytest.fixture(scope="module")
@@ -167,26 +252,27 @@ async def test_full_workflow_via_mcp_wire_protocol(
             "elliot_list_sources",
             "elliot_sample_data",
             "elliot_create_tool",
+            "elliot_create_skill",
+            "elliot_list_skills",
             "elliot_build_connector",
             "elliot_lint_connector",
             "elliot_export_connector",
             "elliot_run_eval",
+            "elliot_quality_scan",
             "elliot_start_runtime",
             "elliot_stop_runtime",
         }
         missing = required - tool_names
         assert not missing, f"Elliot plugin is missing expected MCP tools: {missing}"
 
-        # ── 1. Discover the 4 nested REST sources ──────────────────────────
-        for name, path in SOURCE_DEFS:
+        # ── 1. Discover the 5 REST sources (pagination + auth + nesting) ──
+        for name, path, extra in SOURCE_DEFS:
+            cfg: dict = {"url": f"{api_base_url}{path}"}
+            cfg.update(extra)
             res = await call_tool_json(
                 session,
                 "elliot_discover_source",
-                {
-                    "source_type": "rest",
-                    "config": {"url": f"{api_base_url}{path}"},
-                    "name": name,
-                },
+                {"source_type": "rest", "config": cfg, "name": name},
             )
             assert res["row_count"] == EXPECTED_ROWS[name], (
                 f"Wrong row count for {name}: got {res['row_count']}"
@@ -216,10 +302,16 @@ async def test_full_workflow_via_mcp_wire_protocol(
             "the flattener didn't process address.geo."
         )
 
-        # ── 4. Define the 4 business tools ─────────────────────────────────
+        # ── 4. Define the business tools ───────────────────────────────────
         for tool in BUSINESS_TOOLS:
             res = await call_tool_json(session, "elliot_create_tool", tool)
             assert res.get("status") == "created", f"create_tool failed: {res}"
+
+        # ── 4b. Define the multi-step skill chaining those tools ──────────
+        skill_res = await call_tool_json(session, "elliot_create_skill", BUSINESS_SKILL)
+        assert skill_res.get("status") == "created", f"create_skill failed: {skill_res}"
+        skills = await call_tool_json(session, "elliot_list_skills", {})
+        assert skills["count"] == 1, f"Expected 1 skill, got {skills['count']}"
 
         # ── 5. Build the connector ─────────────────────────────────────────
         built = await call_tool_json(

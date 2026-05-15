@@ -41,8 +41,30 @@ For each tool call `elliot_create_tool`:
 - Add typed `parameters` with clear names (prefer `user_id` over `user`, `start_date` over `from`)
 - For constrained strings, add `enum` values
 
+**SQL conventions** — the runtime executes against in-memory SQLite:
+- Reference parameters with a **colon prefix**: `WHERE plan = :plan` — declare
+  each one in the tool's `parameters` list. **NOT** `{{ plan }}` (Jinja) or
+  `$plan` (Bash); SQLite parses neither and the runtime will reject the SQL
+  at `elliot_create_tool` time.
+- Refer to source tables by the **logical name** you passed to
+  `elliot_discover_source` (and quote with double quotes if it contains
+  punctuation): `FROM "users"`, `FROM "purchase_orders"`.
+- Flattener-produced child tables are named `{source}_{field}` — e.g. an
+  `orders` source whose rows contain a `line_items[]` array gives you a
+  child table `orders_line_items` you can JOIN on `_parent_id`.
+
 Example good description:
 > "Search customers by name or email. Use before create_customer to avoid duplicates. Returns id, name, email, plan. Max 20 results."
+
+Example good SQL:
+```sql
+SELECT id, name, email, plan
+FROM "users"
+WHERE (:plan IS NULL OR plan = :plan)
+  AND status = 'active'
+ORDER BY mrr DESC
+LIMIT 20
+```
 
 ### 5. Validate
 Call `elliot_lint_connector` — fix every issue it reports before saving.

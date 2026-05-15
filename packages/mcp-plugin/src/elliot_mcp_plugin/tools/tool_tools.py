@@ -95,7 +95,23 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
         sql: str,
         parameters: list[dict],  # type: ignore[type-arg]
     ) -> dict:  # type: ignore[type-arg]
-        """Define a new SQL-backed business tool and register it in the session."""
+        """Define a new SQL-backed business tool and register it in the session.
+
+        SQL conventions (the runtime executes against in-memory SQLite):
+          * Reference tool parameters with a colon prefix — ``WHERE plan = :plan`` —
+            and declare each in ``parameters``. ``{{ plan }}`` / Jinja syntax is
+            REJECTED at registration time.
+          * Tables are named after the ``name`` you passed to
+            ``elliot_discover_source`` (quote with double quotes:
+            ``FROM "users"``).
+          * Flattener child tables are ``{source}_{field}`` — e.g. nested
+            arrays in ``orders.line_items[]`` produce ``orders_line_items``,
+            joinable on ``_parent_id``.
+
+        ``source_ids`` is inferred from the SQL — only the source whose
+        tables appear after ``FROM`` / ``JOIN`` will be materialized at
+        call time, so unrelated source failures don't cascade.
+        """
         try:
             if category.lower() not in _CATEGORY_MAP:
                 valid = ", ".join(sorted(_CATEGORY_MAP))

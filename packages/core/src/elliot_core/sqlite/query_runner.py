@@ -16,6 +16,14 @@ DDL_PATTERN = re.compile(
 _LINE_COMMENT = re.compile(r"--[^\n]*")
 _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 
+# Common templating-syntax footgun: agents trained on Jinja / mustache write
+# ``{{ var }}`` inside SQL bodies expecting Elliot to interpolate it. SQLite
+# rejects this with ``unrecognized token: "{"`` which gives the *consumer*
+# agent (the one calling the tool downstream) a useless error message
+# instead of a fix-it-at-build-time signal. Detect it at validate time so
+# the builder hears about it on ``elliot_create_tool`` / lint.
+_JINJA_PARAM_TEMPLATE = re.compile(r"\{\{\s*\w+\s*\}\}")
+
 
 def _strip_comments(sql: str) -> str:
     """Strip ``-- line`` and ``/* block */`` comments.
@@ -41,6 +49,14 @@ def validate_tool_sql(sql: str) -> tuple[bool, str]:
         return False, f"Forbidden keyword: {m.group()}"
     if not no_comments.upper().lstrip().startswith(("SELECT", "WITH")):
         return False, "SQL must start with SELECT or WITH"
+    jinja = _JINJA_PARAM_TEMPLATE.search(no_comments)
+    if jinja:
+        name = jinja.group(0).strip("{} ").strip()
+        return False, (
+            f"SQL contains '{jinja.group(0)}' — Elliot uses colon-prefixed "
+            f"SQLite parameters, not Jinja templates. Use ':{name}' instead and "
+            "declare the parameter on the tool."
+        )
     return True, ""
 
 

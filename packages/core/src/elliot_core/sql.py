@@ -54,3 +54,31 @@ def safe_ident(name: str) -> str:
 def is_valid_ident(name: str) -> bool:
     """Return True iff ``name`` is a valid SQL identifier under :func:`safe_ident`'s rules."""
     return isinstance(name, str) and bool(_IDENT_RE.match(name))
+
+
+_TABLE_REF_RE = re.compile(
+    r"(?:FROM|JOIN)\s+(?:\"([^\"]+)\"|`([^`]+)`|([A-Za-z_][A-Za-z0-9_]*))",
+    re.IGNORECASE,
+)
+
+
+def extract_table_names(sql: str) -> list[str]:
+    """Pull every table identifier that appears after ``FROM`` or ``JOIN``.
+
+    Used to decide which sources a tool actually queries — so the runtime
+    only materializes the sources the tool's SQL references, not every
+    source in the connector. A bearer-auth failure on an unrelated source
+    used to break every tool because tool.source_ids was set to "all"; with
+    this helper the auto-assignment narrows to just the tables the SQL
+    touches.
+
+    Quoting: tables may appear as ``"name"``, `` `name` ``, or bare. The
+    return order is the first-occurrence order in the SQL, with duplicates
+    removed.
+    """
+    seen: list[str] = []
+    for match in _TABLE_REF_RE.finditer(sql or ""):
+        name = next((g for g in match.groups() if g), None)
+        if name and name not in seen:
+            seen.append(name)
+    return seen

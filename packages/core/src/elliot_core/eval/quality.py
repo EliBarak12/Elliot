@@ -6,11 +6,18 @@ from dataclasses import dataclass, field
 from elliot_core.types.connector import ConnectorConfig
 from elliot_core.types.tool import ToolDefinition
 
+# Accept both the third-person-singular present form ("Returns the X")
+# and the imperative form ("Return the X"). Real users — and the agentic
+# builder — write both, and prior to this they tripped the false-positive
+# starts_with_verb warning purely because of conjugation. Each entry below
+# matches both ``Verb`` and ``Verbs`` thanks to the optional trailing s.
 _VERB_RE = re.compile(
-    r"^(Returns|Lists|Gets|Finds|Creates|Updates|Deletes|Calculates|"
-    r"Searches|Fetches|Checks|Counts|Filters|Retrieves|"
-    r"Aggregates|Exports|Generates|Computes|Loads|Sends|Submits|"
-    r"Removes|Shows|Runs|Executes|Inserts|Streams|Resolves|Validates)\b",
+    r"^(Return|List|Get|Find|Create|Update|Delete|Calculate|"
+    r"Search|Fetch|Check|Count|Filter|Retrieve|"
+    r"Aggregate|Export|Generate|Compute|Load|Send|Submit|"
+    r"Remove|Show|Run|Execute|Insert|Stream|Resolve|Validate|"
+    r"Surface|Pull|Lookup|Identify|Detect|Match|Group|Rank|Sort|Join|Map|Report|Summari[sz]e|"
+    r"Yield|Produce|Build|Compose|Assemble)s?\b",
     re.IGNORECASE,
 )
 _JARGON = frozenset({"sql", "endpoint", "table", "column", "database", "api", "select", "from"})

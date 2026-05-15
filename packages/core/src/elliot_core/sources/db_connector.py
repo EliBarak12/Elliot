@@ -19,11 +19,25 @@ def _resolve_dsn(config: SourceConfig, secrets: dict[str, str]) -> str:
     return url
 
 
+def _quote_table(name: str, *, dialect: str) -> str:
+    """Quote a table identifier using the dialect's identifier quote.
+
+    Postgres + SQLite use double-quotes; MySQL/MariaDB use backticks. The
+    quote character also serves as the escape mechanism — doubling it
+    embeds a literal quote — so we apply that defensively even though
+    Elliot's tool registry won't usually accept identifiers containing
+    one.
+    """
+    if dialect == "mysql":
+        return "`" + name.replace("`", "``") + "`"
+    return '"' + name.replace('"', '""') + '"'
+
+
 def query_database(config: SourceConfig, secrets: dict[str, str]) -> FetchResult:
     sql = config.query
     if not sql:
         if config.table:
-            sql = f'SELECT * FROM "{config.table}"'
+            sql = f"SELECT * FROM {_quote_table(config.table, dialect=config.type)}"
         else:
             raise ElliotError("INVALID_TOOL", f"Source '{config.id}' has no query or table")
 

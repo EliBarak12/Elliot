@@ -17,12 +17,32 @@ _RETRY_STATUSES = {429, 500, 503}
 _MAX_RETRIES = 3
 
 
-def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
-    if key.startswith("{{ env:") and key.endswith(" }}"):
-        import os
+_ENV_VAR_NAME = __import__("re").compile(r"^[A-Z][A-Z0-9_]*$")
 
-        env_var = key[7:-3].strip()
-        return secrets.get(env_var) or os.environ.get(env_var, "")
+
+def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
+    """Resolve ``auth.secret_key`` to the concrete secret value.
+
+    Three forms are accepted:
+
+    * ``"{{ env:NAME }}"`` — env-var template. Looks up ``NAME`` in the
+      passed-in ``secrets`` dict, then in ``os.environ``.
+    * ``"NAME"`` — bare env-var-shaped name (UPPER_SNAKE). Treated the same
+      as the template form: secrets dict first (case-insensitive), then
+      ``os.environ``. Falling back to the literal key for an env-var-shaped
+      input was a UX trap — the bearer header silently became ``"Bearer
+      NAME"`` and agents spent turns debugging "401 unauthorized".
+    * Any other string — returned verbatim. This covers the case where
+      ``elliot_core.secrets.resolve_secrets`` has already replaced a
+      ``{{ env:VAR }}`` template at load time with the resolved value.
+    """
+    import os
+
+    if key.startswith("{{ env:") and key.endswith(" }}"):
+        env_var = key[len("{{ env:") : -len(" }}")].strip()
+        return secrets.get(env_var) or secrets.get(env_var.lower()) or os.environ.get(env_var, "")
+    if _ENV_VAR_NAME.match(key):
+        return secrets.get(key) or secrets.get(key.lower()) or os.environ.get(key) or ""
     return secrets.get(key, key)
 
 

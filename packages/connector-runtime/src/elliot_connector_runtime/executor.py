@@ -248,28 +248,90 @@ class ToolExecutor:
 
         url = _interpolate(source.url or "", arguments)
         headers = _build_auth_headers(source.auth, self._secrets) if source.auth else {}
+        pagination = source.pagination
+        all_rows: list[dict[str, Any]] = []
+        page = 1
+        offset = 0
+        cursor: str | None = None
+        next_url: str | None = None
+        pages_fetched = 0
 
-        # Agent-supplied `arguments` may reach `_interpolate`, so the resolved
-        # URL is attacker-influenced. Validate before any TCP connect.
-        try:
-            validate_url(url)
-        except SSRFError as exc:
-            raise ExecutorError(f"Refusing to fetch REST source: {exc.message}") from exc
+        async with safe_client(timeout=source.timeout_ms / 1000) as client:
+            while True:
+                if pages_fetched >= pagination.max_pages:
+                    break
 
-        async with safe_client(timeout=30) as client:
-            resp = await client.get(url, headers=headers)
-        resp.raise_for_status()
+                request_url = next_url or url
+                try:
+                    validate_url(request_url)
+                except SSRFError as exc:
+                    raise ExecutorError(f"Refusing to fetch REST source: {exc.message}") from exc
 
-        data = resp.json()
+                params: dict[str, Any] = {}
+                if pagination.strategy == "offset":
+                    params["offset"] = offset
+                    params["limit"] = pagination.page_size
+                elif pagination.strategy == "page":
+                    params["page"] = page
+                elif pagination.strategy == "cursor" and cursor:
+                    params["cursor"] = cursor
 
-        if source.data_path:
-            data = jmespath.search(source.data_path, data)
+                resp = await client.get(request_url, headers=headers, params=params or None)
+                resp.raise_for_status()
+                pages_fetched += 1
 
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict):
-            return [data]
-        raise ExecutorError(f"REST source {source.id!r} returned unexpected type: {type(data)}")
+                data = resp.json()
+                if source.data_path:
+                    data = jmespath.search(source.data_path, data)
+
+                # Unwrap a paginated envelope (``{items: [...], total, ...}``)
+                # the same way the design-time api_fetcher does. Without this
+                # the runtime materializes the wrapper as a single row and
+                # the agent's ``FROM "<source>"`` returns nothing.
+                rows: list[dict[str, Any]]
+                if isinstance(data, list):
+                    rows = data
+                elif isinstance(data, dict):
+                    found: list[dict[str, Any]] | None = None
+                    for key in ("data", "items", "results", "records", "rows"):
+                        value = data.get(key)
+                        if isinstance(value, list):
+                            found = value
+                            break
+                    rows = found if found is not None else [data]
+                else:
+                    raise ExecutorError(
+                        f"REST source {source.id!r} returned unexpected type: {type(data)}"
+                    )
+
+                all_rows.extend(rows)
+
+                if pagination.strategy == "none" or not rows:
+                    break
+                if pagination.strategy == "offset":
+                    if len(rows) < pagination.page_size:
+                        break
+                    offset += pagination.page_size
+                elif pagination.strategy == "page":
+                    if len(rows) < pagination.page_size:
+                        break
+                    page += 1
+                elif pagination.strategy == "cursor":
+                    cursor = (data.get("next_cursor") if isinstance(data, dict) else None) or (
+                        data.get(pagination.cursor_field or "cursor")
+                        if isinstance(data, dict)
+                        else None
+                    )
+                    if not cursor:
+                        break
+                elif pagination.strategy == "link_header":
+                    next_url = _parse_link_next(resp.headers.get("link", ""))
+                    if not next_url:
+                        break
+                else:
+                    break
+
+        return all_rows
 
     async def _fetch_db(self, source: SourceConfig) -> list[dict[str, Any]]:
         import functools
@@ -314,6 +376,14 @@ class ToolExecutor:
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 
+def _parse_link_next(link_header: str) -> str | None:
+    """Return the next URL from an RFC 5988 ``Link: <url>; rel="next"`` header."""
+    import re
+
+    m = re.search(r'<([^>]+)>;\s*rel="next"', link_header or "")
+    return m.group(1) if m else None
+
+
 def _extract_table_names(sql: str) -> list[str]:
     """Extract table identifiers after FROM and JOIN keywords.
 
@@ -339,8 +409,35 @@ def _interpolate(template: str, values: dict[str, Any]) -> str:
     return template
 
 
+def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
+    """Resolve ``auth.secret_key`` to a concrete header value.
+
+    Three paths must work, matching ``elliot_core.sources.api_fetcher``:
+
+    1. ``"{{ env:REVIEWS_TOKEN }}"`` — env-var template. Look it up.
+    2. ``"REVIEWS_TOKEN"`` — bare env-var name. Look up via secrets dict
+       (with lower-case fallback because the loader lower-cases keys).
+    3. The runtime loader applies ``elliot_core.secrets.resolve_secrets``
+       at load time, so a template like ``{{ env:X }}`` may already have
+       been substituted with the literal secret value. In that case we
+       must return the key as-is — it IS the value.
+
+    Mirroring ``api_fetcher`` keeps plugin-time and runtime-time fetches
+    behaving identically.
+    """
+    import os
+
+    if key.startswith("{{ env:") and key.endswith(" }}"):
+        env_var = key[len("{{ env:") : -len(" }}")].strip()
+        return secrets.get(env_var) or secrets.get(env_var.lower()) or os.environ.get(env_var, "")
+    # Case 2: bare env-var name found in the secrets dict (or its lowercase
+    # twin). Case 3: anything else is the resolved secret literal — return
+    # it unchanged, just like api_fetcher does.
+    return secrets.get(key) or secrets.get(key.lower()) or key
+
+
 def _build_auth_headers(auth: AuthConfig, secrets: dict[str, str]) -> dict[str, str]:
-    secret_val = secrets.get(auth.secret_key, "")
+    secret_val = _resolve_secret(auth.secret_key, secrets)
     if auth.type == "api_key":
         header = auth.header_name or "X-Api-Key"
         return {header: secret_val}

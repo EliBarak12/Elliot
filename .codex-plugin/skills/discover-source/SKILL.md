@@ -41,6 +41,13 @@ Map their answer:
 - `auth_env_var` — env var name holding the credential (e.g. `ACME_API_KEY`). **Never the value.**
 - `pagination` — `cursor`, `offset`, `page`, `link_header`, or `none`
 
+When you call `elliot_discover_source`, pass auth as
+``auth: {"type": "bearer", "secret_key": "{{ env:ACME_API_KEY }}"}``.
+The template form is preferred; a bare ``"ACME_API_KEY"`` resolves the
+same way (env-var name → `os.environ` lookup → secrets dict fallback).
+Anything that isn't shaped like an env-var name is treated as a literal
+token, so don't put the actual credential there.
+
 **For Postgres / MySQL:**
 - `connection_string_env_var` — env var name (e.g. `ACME_DB_URL`). **Never the actual URL.**
 - `schema` — defaults to `public`; ask only if user hints at a non-default schema.

@@ -57,6 +57,10 @@ app.add_middleware(
         "Authorization",
         "x-client-name",
         "Mcp-Session-Id",
+        # The MCP TypeScript SDK (>=1.10) tags every request with this header
+        # so the server can negotiate protocol version. Browser preflight will
+        # fail without it in the allow-list — Studio cannot reach :3000/mcp.
+        "Mcp-Protocol-Version",
     ],
     allow_methods=["GET", "POST", "OPTIONS", "DELETE"],
 )

@@ -25,10 +25,11 @@ onMounted(() => {
 <template>
   <section ref="el" class="elliot-section">
     <span class="elliot-section__eyebrow">Architecture</span>
-    <h2 class="elliot-section__title">Three services. One contract. Any agent.</h2>
+    <h2 class="elliot-section__title">One connector. Three services. Any agent.</h2>
     <p class="elliot-section__lede">
-      A FastMCP plugin exposes tools, a runtime executes them safely, and
-      Studio gives you a glass cockpit for every session.
+      A lightweight plugin exposes your connector to agents, a runtime
+      executes calls safely, and Studio gives you a glass cockpit for every
+      session.
     </p>
 
     <div class="elliot-arch elliot-reveal">

@@ -1,0 +1,47 @@
+name: Connector request
+description: Ask for a new starter connector (REST API, database, SaaS product).
+title: "connector: "
+labels: ["connector", "good first issue"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Connector requests are great first contributions — they're focused, testable, and ship value to every user. If you want to build it yourself, say so under "Volunteer" below.
+  - type: input
+    id: service
+    attributes:
+      label: Service / API / database
+      placeholder: "e.g. Stripe, Postgres, internal billing API"
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: What would an agent do with it?
+      description: One or two concrete scenarios. E.g. "Claude Code looks up a customer's recent invoices to draft a refund email."
+    validations:
+      required: true
+  - type: textarea
+    id: tools
+    attributes:
+      label: Suggested tools
+      description: List the verb-first tool names you'd want, with their description + parameters.
+      placeholder: |
+        - list_customers(query?, limit=50) — search by email or name
+        - get_customer_invoices(customer_id, since?) — last 90 days by default
+    validations:
+      required: true
+  - type: input
+    id: auth
+    attributes:
+      label: Auth model
+      placeholder: "Bearer token / OAuth / API key in header / connection string"
+  - type: dropdown
+    id: volunteer
+    attributes:
+      label: Will you build it?
+      options:
+        - "I want to build this connector"
+        - "Looking for a maintainer to build this"
+    validations:
+      required: true

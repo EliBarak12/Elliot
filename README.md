@@ -1,36 +1,101 @@
-# Elliot — AI AX (Agent Experience) Platform
+<div align="center">
 
-> **AX** is to agents what UX is to users and DX is to developers. Elliot is the interface layer that makes your product feel native to AI agents — design, validate, deploy, and observe agent-ready tools built around your existing APIs, databases, and files.
+<img src="website/public/logo-mark.svg" alt="Elliot" width="96" height="96" />
 
-Turn your existing product into an agentic-native product. Elliot wraps your data sources in MCP tools agents can call efficiently — with minimum tokens, clean error recovery, and full observability of every session.
+# Elliot
+
+**Turn any API or database into MCP tools for Claude, Cursor, and Codex — with built-in observability.**
+
+[![CI](https://github.com/EliBarak12/Elliot/actions/workflows/ci.yml/badge.svg)](https://github.com/EliBarak12/Elliot/actions/workflows/ci.yml)
+[![Docs](https://github.com/EliBarak12/Elliot/actions/workflows/docs.yml/badge.svg)](https://github.com/EliBarak12/Elliot/actions/workflows/docs.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-success.svg)](LICENSE)
+[![MCP compatible](https://img.shields.io/badge/MCP-compatible-00cec8)](https://modelcontextprotocol.io)
+[![Python 3.13](https://img.shields.io/badge/Python-3.13-3776ab.svg?logo=python&logoColor=white)](pyproject.toml)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CLAUDE.md#before-every-push--mandatory-checks)
+
+**[Docs](https://elibarak12.github.io/Elliot/)** · **[Quickstart](https://elibarak12.github.io/Elliot/docs/quickstart)** · **[The five principles](https://elibarak12.github.io/Elliot/docs/five-principles)** · **[Agent Experience (AX)](https://elibarak12.github.io/Elliot/docs/ax-principles)**
+
+</div>
 
 ---
 
-## The Problem
+Elliot is the interface layer that makes your product feel native to AI agents. Design, validate, deploy, and observe agent-ready tools built around your existing APIs, databases, and files — with **minimum tokens, clean error recovery, and full observability** of every session.
+
+> **AX** is to agents what UX is to users and DX is to developers. Elliot's job is to make AX measurable.
+
+## 60-second quickstart
+
+```bash
+git clone https://github.com/EliBarak12/Elliot.git && cd Elliot
+make setup
+make dev          # boots plugin (:3000) + runtime (:3001) + studio (:5173)
+                  # and writes the MCP config for every detected coding agent
+```
+
+That's it. Open Studio at <http://localhost:5173>, scaffold a connector, lint it, and your agent can use it in the same session.
+
+## Install for your agent
+
+`make dev` runs `elliot connect`, which detects every coding agent on your machine and writes the MCP config for each. If you'd rather wire one client manually:
+
+<table>
+<tr><th>Claude Code</th><th>Cursor</th></tr>
+<tr><td>
+
+```
+/plugin marketplace add EliBarak12/Elliot
+/plugin install elliot@elliot
+```
+
+</td><td>
+
+Add to your Cursor MCP config:
+```json
+{ "mcpServers": { "elliot": {
+  "url": "http://localhost:3000/mcp/"
+}}}
+```
+
+</td></tr>
+<tr><th>Codex</th><th>Windsurf / VS Code Copilot</th></tr>
+<tr><td>
+
+```
+codex plugin marketplace add EliBarak12/Elliot
+/plugin install elliot
+```
+
+</td><td>
+
+Pointed to `http://localhost:3000/mcp/` by `elliot connect`, or by the same JSON snippet as Cursor.
+
+</td></tr>
+</table>
+
+Every install path wires the MCP URL only — Elliot's server still needs to be running (`make dev` locally, or a hosted endpoint).
+
+## Why Elliot
 
 Connecting an API to Claude is easy. Making it work *well* with agents is not. Agents fail when:
-- Tool descriptions are vague → wrong tool called
-- Results are too large → context window fills up
-- Errors are unstructured → agent can’t recover
-- No observability → you don’t know it’s broken
 
-Elliot makes these problems visible and fixable.
+- **Tool descriptions are vague** → the agent picks the wrong tool
+- **Results are too large** → context window fills up before the answer
+- **Errors are unstructured** → the agent can't recover or escalate
+- **No observability** → you don't know it's broken until a user complains
 
----
+Elliot makes these visible and fixable. Every tool ships with a structured schema, a token estimate, an actionable error shape, and a session trace — every call, every agent, with the client and model attributed.
 
-## How It Works
+## How it works
 
 ```
 1. Connect your data sources
    └ REST APIs, PostgreSQL, MySQL, CSV / JSON files — all in one connector
-   └ Local files on the user's machine: agents call elliot_upload_file
-     (stages to .elliot/sources/) then elliot_discover_source — no
-     ELLIOT_FILE_ROOT configuration needed.
+   └ Local files: agents call elliot_upload_file then elliot_discover_source
 
 2. Build tools (no SQL required)
-   └ Define: name, description, parameters, filter conditions, return fields
-   └ Elliot generates safe parameterized queries internally
-   └ OR: let an AI agent build the connector for you via the agentic builder
+   └ Define name, description, parameters, filter conditions, return fields
+   └ Elliot generates safe parameterised queries
+   └ Or: let an AI agent build the connector for you via the agentic builder
 
 3. Lint for agent-readiness
    └ elliot lint my-domain.connector.json
@@ -44,85 +109,29 @@ Elliot makes these problems visible and fixable.
    └ elliot-studio (:5173) — observe, run, edit
 ```
 
----
+## What the agent gets on first connect
 
-## Install
+Whatever install path you use, the agent's first action on connect is to call `prompts/get name=getting_started`. That one prompt teaches the [five principles](https://elibarak12.github.io/Elliot/docs/five-principles), the canonical workflow (`discover-source` → `build-connector` → `lint-connector` → `run-eval` → `deploy`), and the available reference resources (templates, error-code dictionary, install docs).
 
-Elliot is an HTTP MCP server plus a plugin bundle (6 skills + connector templates + reference resources). **Every install path below wires up the URL `http://localhost:3000/mcp/` — none of them brings up the server itself.** You still need either a local clone running `make dev` or a hosted Elliot endpoint.
-
-### Today: `make dev` (works end to end)
-
-```
-git clone https://github.com/EliBarak12/Elliot.git && cd Elliot
-make setup
-make dev
-```
-
-`make dev` boots plugin + runtime + studio and runs `elliot connect`, which writes the MCP config for every detected coding agent (Claude Code, Cursor, VS Code/Copilot, Windsurf, Codex). The skills travel through the MCP server itself via `prompts/list` and `resources/list` — every agent sees them.
-
-### Marketplace install (Claude Code)
-
-```
-/plugin marketplace add EliBarak12/Elliot
-/plugin install elliot@elliot
-```
-
-Marketplace manifest lives at `.claude-plugin/marketplace.json` per spec; works against the repo's default branch. **Wires the URL only — you must also have an Elliot server running** (the `make dev` step above, or a hosted endpoint).
-
-### Marketplace install (Codex)
-
-```
-codex plugin marketplace add EliBarak12/Elliot
-/plugin install elliot
-```
-
-Experimental — Codex's plugin format (March 2026) is still stabilizing. Same caveat: URL-only, server must be running.
-
-### Cross-agent auto-install (planned, not yet on npm)
-
-```
-npx @elliot/connect
-```
-
-The logic exists at `packages/mcp-plugin/scripts/install.py`. Will detect every coding agent on the host and write the right MCP config for each. Until the npm wrapper is published, the equivalent today is `uv run elliot connect` from a clone.
-
-### What the agent gets on first connect
-
-Whatever install path you use, the agent's first action on connect is to call `prompts/get name=getting_started` (the rewritten FastMCP `instructions` string explicitly tells it to). That one prompt teaches the five principles, the canonical workflow (`discover-source` → `build-connector` → `lint-connector` → `run-eval` → `deploy`), and the available reference resources (templates, error-code dictionary, install docs).
-
----
-
-## Getting Started (local dev / contributing)
+## Local dev
 
 ```bash
 # Prerequisites: uv (Python 3.13), pnpm (Node 22)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 npm install -g pnpm
 
-# Clone and install
-git clone https://github.com/elibarak12/elliot.git && cd elliot
+git clone https://github.com/EliBarak12/Elliot.git && cd Elliot
 make setup
-
-# Copy env vars
 cp .env.example .env
-
-# Start all services (auto-registers Elliot with every detected agent first)
 make dev              # or: honcho start (skips auto-register)
 
-# Check everything is running
 elliot status
-
-# Scaffold your first connector
 elliot init --template rest-api-key my-api.connector.json
-
-# Lint + eval
 elliot lint my-api.connector.json
 elliot eval my-api.eval.yaml
 ```
 
----
-
-## Repository Structure
+## Repository structure
 
 ```
 elliot/
@@ -138,21 +147,17 @@ elliot/
 └── .env.example       all env vars documented
 ```
 
----
+## Tech stack
 
-## Tech Stack
-
-| Layer | Language | Key Libraries |
+| Layer | Language | Key libraries |
 |---|---|---|
 | Core library | Python 3.13 | `pydantic`, `sqlite3`, `httpx`, `sqlalchemy` |
 | MCP plugin | Python 3.13 | `mcp` (FastMCP), `fastapi`, `uvicorn`, `structlog` |
 | Connector runtime | Python 3.13 | `mcp` (FastMCP), `fastapi`, `uvicorn`, `slowapi`, `pymysql` |
-| Studio UI | TypeScript | React 19, Vite, shadcn/ui, TanStack Router v1 / Query v5 / Table v8, Zustand v5 |
+| Studio UI | TypeScript | React 19, Vite, shadcn/ui, TanStack Router/Query/Table, Zustand v5 |
 | Package managers | `uv` (Python) · `pnpm` (Node 22) | |
 
----
-
-## Key Ports
+## Key ports
 
 | Service | Port | Purpose |
 |---|---|---|
@@ -160,8 +165,10 @@ elliot/
 | `elliot-connector-runtime` | 3001 | Tool execution, session tracking, observation store |
 | `elliot-studio` | 5173 | Visual dashboard — sessions, tools, metrics, editor |
 
----
+## Contributing
+
+PRs welcome. Good first issues are labelled [`good first issue`](https://github.com/EliBarak12/Elliot/issues?q=is%3Aopen+label%3A%22good+first+issue%22). Before pushing, run the [mandatory checks](CLAUDE.md#before-every-push--mandatory-checks). New connectors are especially valuable — see the [connector request template](.github/ISSUE_TEMPLATE/connector_request.yml).
 
 ## License
 
-MIT
+[MIT](LICENSE)

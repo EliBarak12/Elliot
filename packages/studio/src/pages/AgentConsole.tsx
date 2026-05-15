@@ -21,10 +21,19 @@ interface SessionEvent {
   error: string | null;
 }
 
+interface AgentIdentity {
+  client?: string | null;
+  client_version?: string | null;
+  model?: string | null;
+  modality?: string | null;
+  user_agent?: string | null;
+}
+
 interface AgentSession {
   session_id: string;
   started_at: number;
   agent_hint: string | null;
+  agent_identity?: AgentIdentity | null;
   events: SessionEvent[];
   total_tool_calls: number;
   total_tokens_estimated: number;
@@ -102,10 +111,26 @@ function SessionRow({ session }: { session: AgentSession }) {
         <span className="font-mono text-xs font-medium text-foreground shrink-0">
           {session.session_id}
         </span>
-        {session.agent_hint && (
-          <span className="text-xs text-muted-foreground truncate max-w-[10rem]">
-            {session.agent_hint}
-          </span>
+        {session.agent_identity?.client ? (
+          <div className="flex items-center gap-1.5 shrink-0">
+            <Badge variant="outline" className="font-mono text-2xs">
+              {session.agent_identity.client}
+              {session.agent_identity.client_version
+                ? `/${session.agent_identity.client_version}`
+                : ""}
+            </Badge>
+            {session.agent_identity.model && (
+              <Badge variant="secondary" className="font-mono text-2xs">
+                {session.agent_identity.model}
+              </Badge>
+            )}
+          </div>
+        ) : (
+          session.agent_hint && (
+            <span className="text-xs text-muted-foreground truncate max-w-[10rem]">
+              {session.agent_hint}
+            </span>
+          )
         )}
         <span className="text-2xs text-muted-foreground tabular-nums">{time}</span>
         <div className="ml-auto flex items-center gap-3 shrink-0">

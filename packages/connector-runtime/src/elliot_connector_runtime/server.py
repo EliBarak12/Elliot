@@ -22,7 +22,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from elliot_core.agent_identity import AgentIdentity, get_current_agent_identity
 from elliot_core.auth_middleware import ApiKeyMiddleware
+from elliot_core.http_middleware import AgentIdentityMiddleware
 
 from .audit import AuditLog
 from .cache import ConnectorCache
@@ -96,6 +98,32 @@ def _build_limiter() -> Limiter:
 
     limit = os.environ.get("ELLIOT_RATE_LIMIT", "120/minute")
     return Limiter(key_func=get_remote_address, default_limits=[limit])
+
+
+def _require_destructive_confirmation() -> bool:
+    """Whether WRITE/ACTION tool calls must include ``confirm=True``.
+
+    Toggled with ``ELLIOT_REQUIRE_DESTRUCTIVE_CONFIRMATION``. Off by default
+    so existing connectors keep working; turn it on to enforce the AX
+    interactivity pattern for sensitive operations.
+    """
+    raw = os.environ.get("ELLIOT_REQUIRE_DESTRUCTIVE_CONFIRMATION", "")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _identity_payload(identity: AgentIdentity | None) -> dict[str, Any] | None:
+    if identity is None:
+        return None
+    payload = identity.to_dict()
+    return payload if any(payload.values()) else None
+
+
+def _agent_hint_from_identity(identity: AgentIdentity | None) -> str:
+    """Best-effort string for the legacy ``agent_hint`` column."""
+    if identity is None:
+        return "mcp"
+    label = identity.display()
+    return label if label and label != "unknown" else "mcp"
 
 
 def _suggest(tool_id: str, avg_tokens: float, max_tokens: float) -> str | None:
@@ -178,14 +206,16 @@ def _register_tool(
 
     td: ToolDefinition = tool_def
     read_only = td.category == "READ"
+    is_destructive = td.category in ("WRITE", "ACTION")
     annotations = ToolAnnotations(
         title=td.name,
         readOnlyHint=read_only,
-        destructiveHint=td.category in ("WRITE", "ACTION"),
+        destructiveHint=is_destructive,
         idempotentHint=read_only,
         openWorldHint=True,
     )
     run_async: bool = getattr(td, "run_async", False)
+    require_confirmation = is_destructive and _require_destructive_confirmation()
 
     def _observe(
         tool_id: str,
@@ -200,11 +230,18 @@ def _register_tool(
         if audit is not None:
             with contextlib.suppress(Exception):
                 audit.record(tool_id, arguments, row_count, duration_ms, error=error)
+        identity = get_current_agent_identity()
+        identity_payload = _identity_payload(identity)
+        agent_hint = _agent_hint_from_identity(identity)
         token_estimate = 0
         if session_id is not None:
             if tracker is not None:
                 with contextlib.suppress(Exception):
-                    tracker.get_or_start_session(session_id, agent_hint="mcp")
+                    tracker.get_or_start_session(
+                        session_id,
+                        agent_hint=agent_hint,
+                        agent_identity=identity_payload,
+                    )
                     tracker.record_tool_call(
                         session_id=session_id,
                         tool_id=tool_id,
@@ -226,8 +263,9 @@ def _register_tool(
                 with contextlib.suppress(Exception):
                     store.open_session(
                         session_id,
-                        agent_hint="mcp",
+                        agent_hint=agent_hint,
                         connector_slug=connector_slug,
+                        agent_identity=identity_payload,
                     )
                     store.write_tool_call(
                         session_id=session_id,
@@ -256,6 +294,23 @@ def _register_tool(
             # MCP-driven invocation is traceable in the observation store.
             with contextlib.suppress(Exception):
                 session_id = ctx.request_id
+
+        if require_confirmation:
+            confirmed = bool(kwargs.pop("confirm", False))
+            if not confirmed:
+                exc = ElliotError(
+                    "CONFIRMATION_REQUIRED",
+                    (
+                        f"Tool '{td.id}' is {td.category}. Re-call with confirm=true "
+                        "after the user authorises this destructive operation."
+                    ),
+                    {"tool_id": td.id, "category": td.category},
+                )
+                _observe(td.id, kwargs, [], 0.0, str(exc), session_id)
+                error_content = to_mcp_error_content(exc)
+                raise ValueError(error_content["text"])
+        else:
+            kwargs.pop("confirm", None)
 
         if run_async:
 
@@ -317,6 +372,15 @@ def _register_tool(
                 inspect.Parameter.KEYWORD_ONLY,
                 annotation=annotation,
                 default=default,
+            )
+        )
+    if require_confirmation:
+        params.append(
+            inspect.Parameter(
+                "confirm",
+                inspect.Parameter.KEYWORD_ONLY,
+                annotation=bool,
+                default=False,
             )
         )
     object.__setattr__(
@@ -579,6 +643,9 @@ def create_app(
     # Body-size cap (audit H7). Outer real middleware so a huge request is
     # rejected before any downstream layer materialises it.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=_max_body_bytes())
+    # Bind the parsed AX agent identity to a contextvar so tool handlers can
+    # attribute calls to a specific client/model rather than a generic 'mcp'.
+    app.add_middleware(AgentIdentityMiddleware)
     studio_origin = os.environ.get("ELLIOT_STUDIO_ORIGIN", "http://localhost:5173")
     app.add_middleware(
         CORSMiddleware,

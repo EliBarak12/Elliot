@@ -157,6 +157,12 @@ def elliot_stack(
             "REVIEWS_TOKEN": "e2e-reviews-secret-001",
             "ELLIOT_SECRET_REVIEWS_TOKEN": "e2e-reviews-secret-001",
             "ELLIOT_E2E_REVIEWS_TOKEN": "e2e-reviews-secret-001",
+            # The file_reader's path containment defaults to ``cwd``, which
+            # for the spawned uvicorn is the repo root. Tests stage uploads
+            # under the workspace, so widen the allow-list to include the
+            # workspace too — without this every file-source discover_source
+            # call after elliot_upload_file gets a FILE_NOT_ALLOWED.
+            "ELLIOT_FILE_ROOT": str(workspace),
         }
     )
     if extra_env:

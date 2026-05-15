@@ -87,8 +87,17 @@ def seeded_stack(stack: StackEndpoints, api_base_url: str) -> Iterator[StackEndp
     eval_dir.mkdir(parents=True, exist_ok=True)
     (eval_dir / "ecommerce-ops-smoke.json").write_text(
         '{"id":"ecommerce-ops-smoke","name":"E-Commerce Ops smoke",'
-        '"cases":[{"id":"enterprise-customers-non-empty",'
-        '"tool_id":"list_active_enterprise_customers","params":{},"match_mode":"shape"}]}'
+        '"cases":['
+        '{"id":"enterprise-customers-non-empty",'
+        '"tool_id":"list_active_enterprise_customers","params":{},"match_mode":"shape"},'
+        '{"id":"top-products-default",'
+        '"tool_id":"top_products_by_revenue","params":{},"match_mode":"shape"},'
+        '{"id":"customer-history-alice",'
+        '"tool_id":"customer_order_history","params":{"customer_id":1},"match_mode":"shape"},'
+        '{"id":"low-reviews-default",'
+        '"tool_id":"pending_reviews_with_low_rating","params":{"max_rating":3},'
+        '"match_mode":"shape"}'
+        "]}"
     )
 
     async def _seed() -> None:
@@ -134,19 +143,49 @@ def seeded_stack(stack: StackEndpoints, api_base_url: str) -> Iterator[StackEndp
             pass
         time.sleep(0.5)
 
-    async def _exercise_runtime() -> None:
-        # Drive real tool calls through the runtime so the observation store
-        # has data for the Metrics + Console pages. A tool that errors is
-        # still recorded in observability — that's exactly what we want the
-        # Metrics page to surface — so we suppress on each call.
-        async with open_mcp_session(runtime_mcp_url) as runtime_session:
-            for tool, args in [
+    # Simulate two distinct consumer agents hitting the deployed runtime.
+    # Each opens its own streamable-HTTP MCP session, so the runtime records
+    # them as separate observability sessions, and the Studio Metrics /
+    # Console pages render the cross-consumer rollup. Real consumer agents
+    # produce the exact same record shape — see the Layer 2 multi-agent
+    # pipeline for the LLM-driven equivalent.
+    consumer_scenarios: list[tuple[str, list[tuple[str, dict]]]] = [
+        # Consumer A — "sales analyst" — high-level revenue questions.
+        (
+            "consumer-a-sales",
+            [
                 ("list_active_enterprise_customers", {}),
+                ("top_products_by_revenue", {"limit": 3}),
+                ("top_products_by_revenue", {"limit": 5}),
+                ("list_active_enterprise_customers", {}),
+            ],
+        ),
+        # Consumer B — "support analyst" — drilling into customer history
+        # and complaints. Also exercises an error path for visual contrast
+        # on the Metrics page.
+        (
+            "consumer-b-support",
+            [
                 ("customer_order_history", {"customer_id": 1}),
+                ("customer_order_history", {"customer_id": 3}),
                 ("pending_reviews_with_low_rating", {"max_rating": 3}),
-            ]:
-                with contextlib.suppress(AssertionError):
-                    await call_tool_json(runtime_session, tool, args)
+                ("pending_reviews_with_low_rating", {"max_rating": 2}),
+                # Intentionally-bad arg so the Metrics page has a "failed" call
+                # to contrast against the successful rows.
+                ("customer_order_history", {"customer_id": -999}),
+            ],
+        ),
+    ]
+
+    async def _exercise_runtime() -> None:
+        for _label, calls in consumer_scenarios:
+            async with open_mcp_session(runtime_mcp_url) as runtime_session:
+                for tool, args in calls:
+                    with contextlib.suppress(AssertionError):
+                        await call_tool_json(runtime_session, tool, args)
+            # Tiny gap between consumers so timestamps in the session log
+            # are distinct (the Studio Console page sorts by ``opened_at``).
+            await asyncio.sleep(0.4)
 
     asyncio.run(_exercise_runtime())
 
@@ -172,6 +211,20 @@ def _goto(page: Page, url: str) -> None:
 
 def test_every_studio_page_renders_seeded_state(seeded_stack: StackEndpoints) -> None:
     log_dir = seeded_stack.log_dir
+
+    # Independently confirm via the runtime API that the consumer load
+    # produced data. If this fails the screenshots will be empty no matter
+    # how long we wait.
+    sessions = httpx.get("http://127.0.0.1:3001/v1/sessions", timeout=10).json()
+    assert len(sessions) >= 2, (
+        f"Expected at least 2 consumer sessions in observability, got {len(sessions)}"
+    )
+    metrics = httpx.get("http://127.0.0.1:3001/v1/metrics/token-efficiency", timeout=10).json()
+    assert metrics["sessions_analysed"] >= 2, (
+        f"Metrics endpoint shows {metrics['sessions_analysed']} sessions — "
+        "the runtime didn't aggregate the two consumers."
+    )
+
     with sync_playwright() as pw:  # type: ignore[union-attr]
         browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
         context = browser.new_context(viewport={"width": 1366, "height": 900})
@@ -180,6 +233,10 @@ def test_every_studio_page_renders_seeded_state(seeded_stack: StackEndpoints) ->
             # Walk every Studio page and snapshot it.
             for label, path in PAGES:
                 _goto(page, f"{seeded_stack.studio_url}{path}")
+                # Metrics + Console pages fetch from the runtime — they need
+                # a bit longer to settle than the plain MCP-backed pages.
+                if label in {"metrics", "console", "evaluation", "dashboard"}:
+                    page.wait_for_timeout(2_500)
                 page.screenshot(path=str(log_dir / f"studio-{label}.png"), full_page=True)
 
             # ── Page-specific assertions ────────────────────────────────────

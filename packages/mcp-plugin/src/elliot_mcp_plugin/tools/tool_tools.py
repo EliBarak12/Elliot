@@ -8,6 +8,7 @@ import structlog
 from mcp.server.fastmcp import FastMCP
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.sql import extract_table_names
 from elliot_core.types.tool import ToolDefinition
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -41,6 +42,50 @@ def _normalize_tool_input(tool: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _infer_source_ids_from_sql(sql: str, session: ElliotSession) -> list[str]:
+    """Pick the minimum set of session sources a tool's SQL actually needs.
+
+    Auto-assigning every source to every tool caused two real problems:
+    (1) a bearer-auth failure on one source broke unrelated tool calls
+    because the runtime materializes every ``source_id`` before executing;
+    and (2) it wastes outbound HTTP calls on each invocation.
+
+    Mapping: walk the SQL, pull each table identifier referenced after
+    ``FROM`` / ``JOIN``, and match it against the registered sources by
+    name. Flattener-produced child tables (``orders_line_items``) get
+    bucketed under their parent (``orders``) by a prefix match — they're
+    materialized as part of the parent source. When the SQL references no
+    known source (or the parse missed everything), fall back to "all
+    sources" so the tool isn't silently broken.
+    """
+    referenced = extract_table_names(sql)
+    if not referenced:
+        return list(session.sources.keys())
+
+    source_by_name = {src.name: sid for sid, src in session.sources.items()}
+    matched: list[str] = []
+    for tbl in referenced:
+        if tbl in source_by_name:
+            sid = source_by_name[tbl]
+            if sid not in matched:
+                matched.append(sid)
+            continue
+        # Try prefix match for flattener child tables: "orders_line_items"
+        # depends on the "orders" source. Longest prefix wins to avoid
+        # matching "orders" to "organizations" by accident.
+        candidates = sorted(
+            (n for n in source_by_name if tbl.startswith(n + "_")),
+            key=len,
+            reverse=True,
+        )
+        if candidates:
+            sid = source_by_name[candidates[0]]
+            if sid not in matched:
+                matched.append(sid)
+
+    return matched or list(session.sources.keys())
+
+
 def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
     @mcp.tool()
     def elliot_create_tool(
@@ -56,7 +101,7 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 valid = ", ".join(sorted(_CATEGORY_MAP))
                 return {"error": f"Unknown category '{category}'. Valid: {valid}"}
             mapped_category = _CATEGORY_MAP[category.lower()]
-            source_ids = list(session.sources.keys())
+            source_ids = _infer_source_ids_from_sql(sql, session)
             tool = ToolDefinition.model_validate(
                 {
                     "id": name,

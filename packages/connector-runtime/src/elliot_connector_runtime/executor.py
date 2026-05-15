@@ -268,6 +268,18 @@ class ToolExecutor:
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
+            # When the upstream returns a paginated envelope (``{items: [...],
+            # total, offset, limit}``, ``{data: [...]}``) treat it the same
+            # way the design-time api_fetcher does — unwrap the first array
+            # value under a conventional key. Without this the runtime
+            # materializes the wrapper itself as a single row, the actual
+            # records land in a child table named ``<source>_items``, and
+            # every tool the agent wrote against ``FROM "<source>"`` silently
+            # returns zero or one row.
+            for key in ("data", "items", "results", "records", "rows"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    return value
             return [data]
         raise ExecutorError(f"REST source {source.id!r} returned unexpected type: {type(data)}")
 

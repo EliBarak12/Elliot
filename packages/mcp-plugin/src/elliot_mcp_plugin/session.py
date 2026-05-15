@@ -26,6 +26,12 @@ class ElliotSession:
         self.runtime_log_path: Path | None = None
         self.tool_sql: dict[str, str] = {}
         self.connector: ConnectorConfig | None = None
+        # mtime of session.json the last time we synced it into memory.
+        # Used by `refresh_from_disk` to skip the reload when nothing changed.
+        self._last_loaded_mtime: float | None = None
+
+    def _session_path(self) -> Path:
+        return self.workspace._dir / "session.json"
 
     def load(self) -> None:
         data = self.workspace.load_session()
@@ -41,6 +47,7 @@ class ElliotSession:
         for sk in data.get("skills", []):
             self.registry.add_skill(SkillDefinition.model_validate(sk))
         self.tool_sql = data.get("tool_sql", {})
+        self._track_mtime()
         log.info("session.loaded", sources=len(self.sources), tools=len(self.registry.get_all()))
 
     def save(self) -> None:
@@ -55,8 +62,47 @@ class ElliotSession:
                 "tool_sql": self.tool_sql,
             }
         )
+        # Track our own write so refresh_from_disk treats it as up-to-date and
+        # doesn't re-read the file we just produced.
+        self._track_mtime()
         log.info(
             "session.saved",
             sources=len(self.sources),
             tools=len(self.registry.get_all()),
         )
+
+    def _track_mtime(self) -> None:
+        path = self._session_path()
+        try:
+            self._last_loaded_mtime = path.stat().st_mtime
+        except FileNotFoundError:
+            self._last_loaded_mtime = None
+
+    def refresh_from_disk(self) -> bool:
+        """Re-sync in-memory state from session.json if the file has changed.
+
+        Returns True if a reload happened. Cheap when nothing changed
+        (one stat() call), so safe to call on every list endpoint to
+        keep the Studio in sync with whatever the agent — possibly
+        running in a separate plugin process sharing the same workspace
+        — has just written. ``runtime_process`` and the in-memory SQLite
+        engine are left alone; only the metadata that lives in
+        session.json is replaced.
+        """
+        path = self._session_path()
+        try:
+            current_mtime = path.stat().st_mtime
+        except FileNotFoundError:
+            return False
+        if self._last_loaded_mtime is not None and current_mtime <= self._last_loaded_mtime:
+            return False
+        # The file is newer than our in-memory snapshot. Drop the metadata we
+        # serialise into session.json and re-read it. Anything not persisted
+        # (engine, runtime_process, builder) stays untouched.
+        self.registry.clear()
+        self.sources.clear()
+        self.tool_sql = {}
+        self.product_context = None
+        self.connector = None
+        self.load()
+        return True

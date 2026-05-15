@@ -101,6 +101,10 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
     def elliot_list_tools() -> dict:  # type: ignore[type-arg]
         """List all user-defined connector tools with their full definitions."""
         try:
+            # Pick up any tools the agent created since our last list — even
+            # if the agent's MCP client spawned its own plugin process and
+            # writes to the same workspace.
+            session.refresh_from_disk()
             return {
                 "tools": [t.model_dump() for t in session.registry.get_all()],
                 "count": len(session.registry.get_all()),

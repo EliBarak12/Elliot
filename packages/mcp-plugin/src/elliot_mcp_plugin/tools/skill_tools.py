@@ -115,6 +115,10 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
         is also included for clients that only need a summary.
         """
         try:
+            # Pick up skills the agent created since our last list — even
+            # if the agent runs in a separate plugin process sharing the
+            # same workspace.
+            session.refresh_from_disk()
             return {
                 "skills": [
                     {**s.model_dump(), "step_count": len(s.steps)}

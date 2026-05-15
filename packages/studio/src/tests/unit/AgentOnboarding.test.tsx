@@ -88,4 +88,58 @@ describe("AgentOnboarding", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByText(/\$ \/plugin install elliot@elliot/)).toBeInTheDocument();
   });
+
+  it(
+    "rerender from non-compact -> compact does NOT throw (Rules of Hooks regression)",
+    () => {
+      // Reproduces the Dashboard crash where audit-log growth flipped
+      // `compact` from false to true and the previously-after-return useState
+      // call disappeared, breaking React's hook-order invariant.
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const { rerender, unmount } = render(<AgentOnboarding compact={false} />);
+        // Sanity: full panel rendered
+        expect(screen.getByText(/Let your agent do the work/i)).toBeInTheDocument();
+
+        // This is the exact transition that used to crash:
+        expect(() => rerender(<AgentOnboarding compact={true} />)).not.toThrow();
+
+        // Compact variant should now be visible
+        expect(screen.getByText(/Your agent runs the show/i)).toBeInTheDocument();
+
+        // And React must not have logged the "rendered fewer hooks" complaint
+        const hookErrors = consoleError.mock.calls.filter((args) =>
+          String(args[0] ?? "").includes("Rendered fewer hooks")
+        );
+        expect(hookErrors).toHaveLength(0);
+
+        unmount();
+      } finally {
+        consoleError.mockRestore();
+      }
+    }
+  );
+
+  it(
+    "rerender from compact -> non-compact also does NOT throw",
+    () => {
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const { rerender, unmount } = render(<AgentOnboarding compact={true} />);
+        expect(screen.getByText(/Your agent runs the show/i)).toBeInTheDocument();
+
+        expect(() => rerender(<AgentOnboarding compact={false} />)).not.toThrow();
+        expect(screen.getByText(/Let your agent do the work/i)).toBeInTheDocument();
+
+        const hookErrors = consoleError.mock.calls.filter((args) =>
+          String(args[0] ?? "").includes("hooks")
+        );
+        expect(hookErrors).toHaveLength(0);
+
+        unmount();
+      } finally {
+        consoleError.mockRestore();
+      }
+    }
+  );
 });

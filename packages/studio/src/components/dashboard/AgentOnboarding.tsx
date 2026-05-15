@@ -62,11 +62,18 @@ interface AgentOnboardingProps {
 }
 
 export function AgentOnboarding({ compact = false }: AgentOnboardingProps) {
+  // React's Rules of Hooks: every hook must run on every render, in the same
+  // order. Call useState BEFORE any conditional return — otherwise the hook
+  // count changes when `compact` flips (e.g. when the audit log gets its first
+  // entry and Dashboard re-renders with compact={true}), and the entire
+  // Dashboard subtree crashes with "Rendered fewer hooks than during the
+  // previous render."
+  const [selectedId, setSelectedId] = React.useState<string>(INSTALL_OPTIONS[0].id);
+
   if (compact) {
     return <CompactReconnectHint />;
   }
 
-  const [selectedId, setSelectedId] = React.useState<string>(INSTALL_OPTIONS[0].id);
   const selected =
     INSTALL_OPTIONS.find((o) => o.id === selectedId) ?? INSTALL_OPTIONS[0];
 

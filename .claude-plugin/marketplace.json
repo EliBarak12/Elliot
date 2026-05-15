@@ -10,8 +10,8 @@
     {
       "name": "elliot",
       "source": {
-        "source": "github",
-        "repo": "EliBarak12/Elliot"
+        "source": "url",
+        "url": "https://github.com/EliBarak12/Elliot.git"
       },
       "description": "Elliot platform plugin: 6 skills (getting-started, discover-source, build-connector, lint-connector, run-eval, deploy) plus the Elliot MCP server. Use this to design, validate, deploy, and observe agent-ready connectors for any data source.",
       "version": "1.0.0",

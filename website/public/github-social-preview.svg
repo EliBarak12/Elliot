@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-label="Elliot — turn any API or database into MCP tools for Claude, Cursor, and Codex">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-label="Elliot — the AX platform. Build your connector, make your product agent-ready.">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#0b0d10"/>
@@ -30,27 +30,27 @@
   <text x="200" y="148" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Display',Inter,sans-serif"
         font-size="76" font-weight="700" fill="#ffffff" letter-spacing="-2.4">Elliot</text>
 
-  <!-- AX badge -->
+  <!-- Category chip -->
   <g transform="translate(200,168)">
-    <rect x="0" y="0" width="200" height="32" rx="16" fill="#ffffff" fill-opacity="0.08" stroke="#00cec8" stroke-opacity="0.5"/>
-    <text x="100" y="22" text-anchor="middle" font-family="ui-monospace,SF Mono,Menlo" font-size="14" fill="#00cec8" letter-spacing="0.5">
-      MCP · AGENT EXPERIENCE
+    <rect x="0" y="0" width="232" height="32" rx="16" fill="#ffffff" fill-opacity="0.08" stroke="#00cec8" stroke-opacity="0.5"/>
+    <text x="116" y="22" text-anchor="middle" font-family="ui-monospace,SF Mono,Menlo" font-size="14" fill="#00cec8" letter-spacing="0.6">
+      CONNECTOR · AX PLATFORM
     </text>
   </g>
 
   <!-- Headline -->
   <text x="80" y="320" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Display',Inter,sans-serif"
-        font-size="58" font-weight="700" fill="#ffffff" letter-spacing="-2">Turn any API or database</text>
+        font-size="58" font-weight="700" fill="#ffffff" letter-spacing="-2">Build your <tspan fill="#00cec8">Connector</tspan>.</text>
   <text x="80" y="384" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Display',Inter,sans-serif"
-        font-size="58" font-weight="700" fill="#ffffff" letter-spacing="-2">into <tspan fill="#00cec8">MCP tools</tspan> agents love.</text>
+        font-size="58" font-weight="700" fill="#ffffff" letter-spacing="-2">Make your product agent-ready.</text>
 
   <!-- Subhead -->
   <text x="80" y="448" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Display',Inter,sans-serif"
         font-size="24" font-weight="400" fill="#ffffff" fill-opacity="0.72" letter-spacing="-0.3">
-    Minimum tokens. Clean error recovery. Full session observability.
+    The AX platform for any API or database. Minimum tokens. Clean errors. Full observability.
   </text>
 
-  <!-- Compatibility chips -->
+  <!-- Agent-client compatibility chips -->
   <g transform="translate(80,500)" font-family="ui-monospace,SF Mono,Menlo" font-size="15">
     <g>
       <rect x="0" y="0" width="138" height="40" rx="20" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.16"/>

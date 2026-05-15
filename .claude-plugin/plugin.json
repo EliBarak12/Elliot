@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "description": "Turn any API or database into agent-ready MCP tools. Design, validate, deploy, and observe connector tool sets with Claude.",
   "skills": [
+    "skills/getting-started",
+    "skills/discover-source",
     "skills/build-connector",
     "skills/lint-connector",
     "skills/run-eval",

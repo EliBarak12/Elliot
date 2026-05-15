@@ -373,12 +373,16 @@ source = { editable = "packages/mcp-plugin" }
 dependencies = [
     { name = "elliot-core" },
     { name = "mcp" },
+    { name = "pyyaml" },
+    { name = "structlog" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "elliot-core", editable = "packages/core" },
     { name = "mcp", specifier = ">=1.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "structlog", specifier = ">=24.0" },
 ]
 
 [[package]]

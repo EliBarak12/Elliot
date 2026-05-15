@@ -1,6 +1,7 @@
-.PHONY: dev setup test test-cov lint format typecheck build-studio ci
+.PHONY: dev setup test test-cov lint format typecheck build-studio sync-skills sync-skills-check ci
 
 dev:
+	uv run python scripts/sync_skills.py
 	uv run elliot connect
 	honcho start
 
@@ -27,5 +28,11 @@ typecheck:
 build-studio:
 	pnpm --filter @elliot/studio run build
 
-ci: lint typecheck test-cov
+sync-skills:
+	uv run python scripts/sync_skills.py
+
+sync-skills-check:
+	uv run python scripts/sync_skills.py --check
+
+ci: lint typecheck test-cov sync-skills-check
 	@echo "All checks passed."

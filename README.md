@@ -46,7 +46,39 @@ Elliot makes these problems visible and fixable.
 
 ---
 
-## Getting Started
+## Install (one command)
+
+Elliot ships as a plugin bundle: **6 skills + the MCP server + connector templates** all in one. Pick your agent.
+
+### Claude Code
+
+```
+/plugin marketplace add EliBarak12/elliot
+/plugin install elliot@elliot
+```
+
+### Codex (plugins, March 2026+)
+
+```
+codex plugin marketplace add EliBarak12/elliot
+/plugin install elliot
+```
+
+### Cursor, VS Code/Copilot, Windsurf, or any MCP-speaking agent
+
+```
+npx @elliot/connect
+```
+
+Detects every coding agent on your machine and writes the right MCP config for each. Skills travel through the MCP server itself via `prompts/list` and `resources/list` — every agent sees them.
+
+### What you get on first connect
+
+Your agent will call `prompts/get name=getting_started` and learn the five principles, the canonical workflow (`discover-source` → `build-connector` → `lint-connector` → `run-eval` → `deploy`), and the available reference resources (templates, error codes, principles).
+
+---
+
+## Getting Started (local dev / contributing)
 
 ```bash
 # Prerequisites: uv (Python 3.13), pnpm (Node 22)
@@ -68,12 +100,6 @@ elliot status
 
 # Scaffold your first connector
 elliot init --template rest-api-key my-api.connector.json
-
-# Or let an agent build it for you:
-# 1. `make dev` already wires up every detected agent
-#    (Claude Code, Cursor, VS Code/Copilot, Windsurf, Codex).
-#    To re-run the wiring on its own: `elliot connect`.
-# 2. Ask: "I have an API at https://api.myapp.com — help me build a connector"
 
 # Lint + eval
 elliot lint my-api.connector.json

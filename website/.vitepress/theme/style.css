@@ -1,0 +1,549 @@
+/**
+ * Elliot Docs — brand styling.
+ *
+ * Mirrors packages/studio/src/index.css design tokens:
+ *   - Brand: Elliot Teal #00cec8 (HSL 178 100% 38%)
+ *   - Apple-inspired neutral system, tight heading tracking,
+ *     soft layered shadows, 10px radius.
+ */
+
+:root {
+  /* Brand */
+  --elliot-teal: #00cec8;
+  --elliot-teal-bright: #14e5df;
+  --elliot-teal-deep: #008f8b;
+  --elliot-ink: #0b0d10;
+
+  /* VitePress brand overrides — light theme */
+  --vp-c-brand-1: #008f8b;
+  --vp-c-brand-2: #00b4af;
+  --vp-c-brand-3: #00cec8;
+  --vp-c-brand-soft: rgba(0, 206, 200, 0.12);
+
+  --vp-c-tip-1: #008f8b;
+  --vp-c-tip-2: #00b4af;
+  --vp-c-tip-3: #00cec8;
+  --vp-c-tip-soft: rgba(0, 206, 200, 0.12);
+
+  --vp-c-default-soft: rgba(15, 17, 21, 0.04);
+
+  /* Apple-style radii */
+  --vp-c-bg: #fafafa;
+  --vp-c-bg-alt: #f4f4f5;
+  --vp-c-bg-soft: #f7f7f8;
+
+  /* Typography — Apple-stack first */
+  --vp-font-family-base:
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+    "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --vp-font-family-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+
+  /* Hero gradient — used by VP home and custom sections */
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background:
+    linear-gradient(120deg, #00cec8 0%, #008f8b 60%, #0b0d10 100%);
+
+  --vp-home-hero-image-background-image:
+    radial-gradient(60% 60% at 50% 50%, rgba(0, 206, 200, 0.45) 0%, rgba(0, 206, 200, 0) 70%);
+  --vp-home-hero-image-filter: blur(56px);
+
+  --elliot-grid-line: rgba(15, 17, 21, 0.06);
+  --elliot-surface: #ffffff;
+  --elliot-surface-2: #f5f6f7;
+  --elliot-border: rgba(15, 17, 21, 0.08);
+  --elliot-text-muted: rgba(15, 17, 21, 0.6);
+
+  --elliot-shadow-md:
+    0 2px 4px -1px rgb(0 0 0 / 0.04),
+    0 4px 12px -2px rgb(0 0 0 / 0.06);
+  --elliot-shadow-lg:
+    0 4px 8px -2px rgb(0 0 0 / 0.05),
+    0 12px 32px -4px rgb(0 0 0 / 0.08);
+  --elliot-shadow-xl:
+    0 8px 16px -4px rgb(0 0 0 / 0.06),
+    0 24px 48px -8px rgb(0 0 0 / 0.12);
+}
+
+.dark {
+  --vp-c-brand-1: #14e5df;
+  --vp-c-brand-2: #00cec8;
+  --vp-c-brand-3: #00b4af;
+  --vp-c-brand-soft: rgba(20, 229, 223, 0.16);
+
+  --vp-c-tip-1: #14e5df;
+  --vp-c-tip-2: #00cec8;
+  --vp-c-tip-3: #00b4af;
+  --vp-c-tip-soft: rgba(20, 229, 223, 0.16);
+
+  --vp-c-bg: #0b0d10;
+  --vp-c-bg-alt: #111317;
+  --vp-c-bg-soft: #14171c;
+
+  --vp-home-hero-name-background:
+    linear-gradient(120deg, #14e5df 0%, #00cec8 50%, #ffffff 100%);
+
+  --elliot-grid-line: rgba(255, 255, 255, 0.06);
+  --elliot-surface: #14171c;
+  --elliot-surface-2: #1a1e24;
+  --elliot-border: rgba(255, 255, 255, 0.08);
+  --elliot-text-muted: rgba(255, 255, 255, 0.6);
+
+  --elliot-shadow-md:
+    0 2px 4px -1px rgb(0 0 0 / 0.4),
+    0 4px 12px -2px rgb(0 0 0 / 0.3);
+  --elliot-shadow-lg:
+    0 4px 8px -2px rgb(0 0 0 / 0.5),
+    0 12px 32px -4px rgb(0 0 0 / 0.4);
+  --elliot-shadow-xl:
+    0 8px 16px -4px rgb(0 0 0 / 0.6),
+    0 24px 48px -8px rgb(0 0 0 / 0.5);
+}
+
+html {
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Tight heading tracking — Apple style */
+.VPDoc h1,
+.VPDoc h2,
+.VPDoc h3,
+.VPDoc h4,
+.VPHero .name,
+.VPHero .text,
+.elliot-section h2,
+.elliot-section h3 {
+  letter-spacing: -0.02em;
+}
+
+/* Larger, softer hero on the homepage */
+.VPHome .VPHero {
+  padding-top: 88px;
+  padding-bottom: 32px;
+}
+
+.VPHome .VPHero .name {
+  font-size: clamp(2.6rem, 6vw, 4.4rem);
+  line-height: 1.04;
+}
+
+.VPHome .VPHero .text {
+  font-size: clamp(1.8rem, 4vw, 2.6rem);
+  line-height: 1.1;
+}
+
+.VPHome .VPHero .tagline {
+  font-size: clamp(1rem, 1.6vw, 1.2rem);
+  line-height: 1.55;
+  max-width: 620px;
+}
+
+/* Action buttons — subtle elevation and brand glow */
+.VPHome .VPButton.brand {
+  background: linear-gradient(135deg, #00cec8, #008f8b);
+  border-color: transparent;
+  box-shadow: 0 8px 24px -10px rgba(0, 206, 200, 0.6);
+  transition:
+    transform 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    box-shadow 240ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.VPHome .VPButton.brand:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 32px -12px rgba(0, 206, 200, 0.7);
+}
+
+/* Feature cards — lift on hover */
+.VPHome .VPFeature {
+  transition:
+    transform 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    box-shadow 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    border-color 240ms cubic-bezier(0.32, 0.72, 0, 1);
+  background: var(--elliot-surface);
+}
+
+.VPHome .VPFeature:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--elliot-shadow-lg);
+  border-color: var(--vp-c-brand-3);
+}
+
+.VPHome .VPFeature .icon {
+  background: var(--vp-c-brand-soft) !important;
+}
+
+/* Subtle grid background for hero */
+.VPHome::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--elliot-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--elliot-grid-line) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image:
+    radial-gradient(ellipse at 50% 0%, black 0%, transparent 65%);
+  -webkit-mask-image:
+    radial-gradient(ellipse at 50% 0%, black 0%, transparent 65%);
+  z-index: 0;
+}
+
+.VPHome {
+  position: relative;
+}
+
+.VPHome .VPHero,
+.VPHome .VPFeatures {
+  position: relative;
+  z-index: 1;
+}
+
+/* ------------------------------------------------------------------
+   Custom landing-page sections
+   ------------------------------------------------------------------ */
+
+.elliot-section {
+  position: relative;
+  padding: 88px 24px;
+  max-width: 1152px;
+  margin: 0 auto;
+}
+
+@media (max-width: 768px) {
+  .elliot-section {
+    padding: 56px 20px;
+  }
+}
+
+.elliot-section__eyebrow {
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--vp-c-brand-1);
+  margin-bottom: 14px;
+}
+
+.elliot-section__title {
+  font-size: clamp(1.8rem, 3.6vw, 2.6rem);
+  font-weight: 700;
+  line-height: 1.1;
+  margin: 0 0 16px;
+  color: var(--vp-c-text-1);
+}
+
+.elliot-section__lede {
+  font-size: clamp(1.05rem, 1.5vw, 1.18rem);
+  line-height: 1.6;
+  color: var(--vp-c-text-2);
+  max-width: 720px;
+  margin: 0 0 48px;
+}
+
+/* Principles grid */
+.elliot-principles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.elliot-principle {
+  position: relative;
+  padding: 24px;
+  border-radius: 16px;
+  border: 1px solid var(--elliot-border);
+  background: var(--elliot-surface);
+  box-shadow: var(--elliot-shadow-md);
+  transition:
+    transform 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    box-shadow 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    border-color 240ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.elliot-principle:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--elliot-shadow-lg);
+  border-color: var(--vp-c-brand-3);
+}
+
+.elliot-principle__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+  font-weight: 700;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 14px;
+}
+
+.elliot-principle__title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0 0 8px;
+  color: var(--vp-c-text-1);
+}
+
+.elliot-principle__body {
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--vp-c-text-2);
+  margin: 0;
+}
+
+/* Workflow steps */
+.elliot-workflow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  counter-reset: step;
+}
+
+.elliot-step {
+  position: relative;
+  padding: 24px;
+  border-radius: 16px;
+  border: 1px solid var(--elliot-border);
+  background: var(--elliot-surface);
+  box-shadow: var(--elliot-shadow-md);
+  counter-increment: step;
+}
+
+.elliot-step::before {
+  content: counter(step, decimal-leading-zero);
+  position: absolute;
+  top: 18px;
+  right: 22px;
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--vp-c-brand-1);
+  opacity: 0.6;
+}
+
+.elliot-step__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--vp-c-brand-soft), transparent);
+  color: var(--vp-c-brand-1);
+  margin-bottom: 16px;
+}
+
+.elliot-step__title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0 0 8px;
+  color: var(--vp-c-text-1);
+}
+
+.elliot-step__body {
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--vp-c-text-2);
+  margin: 0;
+}
+
+.elliot-step__code {
+  display: inline-block;
+  margin-top: 10px;
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.84rem;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--vp-c-bg-soft);
+  border: 1px solid var(--elliot-border);
+  color: var(--vp-c-text-1);
+}
+
+/* Architecture diagram */
+.elliot-arch {
+  position: relative;
+  padding: 32px;
+  border-radius: 24px;
+  background: var(--elliot-surface);
+  border: 1px solid var(--elliot-border);
+  box-shadow: var(--elliot-shadow-xl);
+  overflow: hidden;
+}
+
+.elliot-arch__svg-wrap {
+  width: 100%;
+  max-width: 920px;
+  margin: 0 auto;
+}
+
+.elliot-arch__svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Connector example */
+.elliot-example {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 28px;
+  align-items: stretch;
+}
+
+@media (max-width: 880px) {
+  .elliot-example {
+    grid-template-columns: 1fr;
+  }
+}
+
+.elliot-example__code {
+  border-radius: 16px;
+  border: 1px solid var(--elliot-border);
+  background: var(--elliot-surface);
+  box-shadow: var(--elliot-shadow-lg);
+  overflow: hidden;
+}
+
+.elliot-example__code .vp-code-group,
+.elliot-example__code pre {
+  margin: 0 !important;
+}
+
+.elliot-example__panels {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.elliot-panel {
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px solid var(--elliot-border);
+  background: var(--elliot-surface);
+  box-shadow: var(--elliot-shadow-md);
+}
+
+.elliot-panel__label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--vp-c-brand-1);
+}
+
+.elliot-panel__title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 6px 0 4px;
+}
+
+.elliot-panel__body {
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--vp-c-text-2);
+  margin: 0;
+}
+
+/* CTA callout */
+.elliot-cta {
+  position: relative;
+  padding: 56px 32px;
+  border-radius: 28px;
+  background:
+    radial-gradient(120% 120% at 0% 0%, rgba(0, 206, 200, 0.18), transparent 50%),
+    radial-gradient(120% 120% at 100% 100%, rgba(0, 143, 139, 0.22), transparent 55%),
+    var(--elliot-surface);
+  border: 1px solid var(--elliot-border);
+  box-shadow: var(--elliot-shadow-xl);
+  overflow: hidden;
+  text-align: center;
+}
+
+.elliot-cta__title {
+  font-size: clamp(1.6rem, 3.2vw, 2.4rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 12px;
+  line-height: 1.1;
+}
+
+.elliot-cta__body {
+  font-size: 1.05rem;
+  line-height: 1.6;
+  color: var(--vp-c-text-2);
+  margin: 0 auto 28px;
+  max-width: 560px;
+}
+
+.elliot-cta__buttons {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+}
+
+.elliot-cta__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  text-decoration: none !important;
+  transition:
+    transform 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    box-shadow 240ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.elliot-cta__btn--primary {
+  background: linear-gradient(135deg, #00cec8, #008f8b);
+  color: #fff !important;
+  box-shadow: 0 10px 28px -10px rgba(0, 206, 200, 0.6);
+}
+
+.elliot-cta__btn--primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 36px -12px rgba(0, 206, 200, 0.75);
+}
+
+.elliot-cta__btn--ghost {
+  background: var(--vp-c-bg-soft);
+  color: var(--vp-c-text-1) !important;
+  border: 1px solid var(--elliot-border);
+}
+
+.elliot-cta__btn--ghost:hover {
+  border-color: var(--vp-c-brand-3);
+  color: var(--vp-c-brand-1) !important;
+}
+
+/* Reveal on scroll — subtle fade-up */
+.elliot-reveal {
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 480ms cubic-bezier(0.32, 0.72, 0, 1),
+    transform 480ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.elliot-reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Inline code blocks inside docs — gentle background */
+.vp-doc :not(pre) > code {
+  background: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+}

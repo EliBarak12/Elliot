@@ -1,5 +1,6 @@
 packages:
   - 'packages/studio'
+  - 'website'
 allowBuilds:
   esbuild: false
 # Reject packages published less than 3 days ago — defends against

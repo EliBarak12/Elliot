@@ -590,6 +590,9 @@ def create_app(
             "Authorization",
             "x-client-name",
             "Mcp-Session-Id",
+            # MCP TS SDK >=1.10 sends Mcp-Protocol-Version on every call;
+            # without it the browser preflight fails.
+            "Mcp-Protocol-Version",
         ],
     )
     app.mount("/mcp", _mcp_app)

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 from typing import Any
 
 import jmespath
+import structlog
 
 from elliot_core.sqlite.engine import SQLiteEngine
+from elliot_core.sqlite.flattener import flatten
 from elliot_core.tools.query_builder import build_select_sql
 from elliot_core.types import (
     AuthConfig,
@@ -17,17 +21,35 @@ from elliot_core.types import (
     ToolDefinition,
 )
 
+log = structlog.get_logger(__name__)
+
 
 class ExecutorError(Exception):
     pass
+
+
+# Bug: Studio's `elliot_discover_source` flattens a source into a primary
+# table named `<source.table_name>` plus child tables named
+# `<source.table_name>_<field>[_...]`. Connector tools authored against
+# those names used to fail in the runtime because the executor only ever
+# ingested a single flat table keyed by `source.id`, never running the
+# flattener. This module now mirrors the discover path: each source is
+# fetched, flattened, and loaded into a long-lived per-executor engine.
+_DEFAULT_TTL_SECONDS = 300
 
 
 class ToolExecutor:
     """
     Executes a ToolDefinition against the connector's live data sources.
 
-    Each call to `execute` fetches fresh data from the relevant source,
-    hydrates an ephemeral in-memory SQLiteEngine, and runs the tool's SQL.
+    Sources are fetched, flattened, and loaded into a cached in-memory
+    SQLiteEngine so that connector-authored SQL (which references the
+    flattener's table names — `<source>` plus `<source>_<field>` for
+    nested arrays/objects) resolves against tables that actually exist.
+
+    The cache is bounded by a TTL; once a source's data is older than the
+    TTL the next tool call re-fetches and reloads it. Tests inject a
+    pre-loaded engine via the `engine` kwarg to skip materialization.
     """
 
     def __init__(
@@ -35,11 +57,20 @@ class ToolExecutor:
         config: ConnectorConfig,
         secrets: dict[str, str],
         engine: SQLiteEngine | None = None,
+        materialization_ttl_seconds: float = _DEFAULT_TTL_SECONDS,
     ) -> None:
         self._config = config
         self._secrets = secrets
         self._sources: dict[str, SourceConfig] = {s.id: s for s in config.sources}
-        self._engine = engine  # injected engine for testing / pre-loaded data
+        self._injected_engine = engine
+        self._engine: SQLiteEngine | None = engine
+        # source_id -> monotonic timestamp of last successful materialization
+        self._materialized_at: dict[str, float] = {}
+        self._ttl = max(0.0, materialization_ttl_seconds)
+        # One lock per source_id so concurrent tool calls serialize the
+        # fetch/flatten/load for the same source without blocking unrelated
+        # sources.
+        self._locks: dict[str, asyncio.Lock] = {}
 
     async def execute(
         self,
@@ -63,29 +94,131 @@ class ToolExecutor:
         else:
             raise ExecutorError(f"Tool '{tool.id}' has no sql or filter_groups defined")
 
-        # Use injected engine or fetch from live sources into a fresh engine
-        if self._engine is not None:
-            rows = self._engine.query(sql, params)
+        # Tests/internals can inject a pre-loaded engine — skip materialization
+        # entirely so unit tests don't need network/file fixtures.
+        if self._injected_engine is not None:
+            rows = self._injected_engine.query(sql, params)
             return QueryResult(rows=rows, tool_id=tool.id)
 
-        engine = SQLiteEngine()
-        any_empty = False
+        engine = await self._ensure_materialized(tool, arguments)
 
-        for source_id in _extract_table_names(sql):
-            source = self._sources.get(source_id)
-            if source is None:
-                continue
-            fetched = await self._fetch_source(source, arguments)
-            if not fetched:
-                any_empty = True
-                continue
-            engine.ingest(source_id, fetched)
+        try:
+            rows = engine.query(sql, params)
+        except Exception as exc:
+            from elliot_core.errors import ElliotError
 
-        if any_empty:
-            return QueryResult(rows=[], tool_id=tool.id)
+            if isinstance(exc, ElliotError) and exc.code == "INVALID_SQL":
+                table_names = engine.get_table_names()
+                if not table_names:
+                    raise ElliotError(
+                        "SOURCE_NOT_MATERIALIZED",
+                        (
+                            "No data is loaded for this connector. None of the "
+                            "configured sources produced rows, so the tool's "
+                            "SQL has no tables to query."
+                        ),
+                        detail={"tool_id": tool.id, "sources": list(self._sources.keys())},
+                    ) from exc
+                missing = _missing_tables(sql, table_names)
+                if missing:
+                    raise ElliotError(
+                        "TABLE_NOT_FOUND",
+                        (
+                            f"Tool {tool.id!r} references table(s) "
+                            f"{sorted(missing)!r} that the connector did not "
+                            f"materialize. Available tables: {sorted(table_names)!r}."
+                        ),
+                        detail={
+                            "tool_id": tool.id,
+                            "missing_tables": sorted(missing),
+                            "available_tables": sorted(table_names),
+                        },
+                    ) from exc
+            raise
 
-        rows = engine.query(sql, params)
         return QueryResult(rows=rows, tool_id=tool.id)
+
+    # ── materialization ────────────────────────────────────────────────────
+
+    async def _ensure_materialized(
+        self,
+        tool: ToolDefinition,
+        arguments: dict[str, Any],
+    ) -> SQLiteEngine:
+        """Make sure every source the tool needs is loaded into the engine.
+
+        Returns the cached engine so the caller can run `query()` directly.
+        """
+        if self._engine is None:
+            self._engine = SQLiteEngine()
+
+        needed = self._sources_needed_for(tool)
+        now = time.monotonic()
+
+        for source in needed:
+            last = self._materialized_at.get(source.id)
+            if last is not None and (now - last) < self._ttl:
+                continue
+            await self._materialize_source(source, arguments)
+
+        return self._engine
+
+    def _sources_needed_for(self, tool: ToolDefinition) -> list[SourceConfig]:
+        """Decide which sources to load for this tool.
+
+        We prefer the tool's declared `source_ids` (authoritative metadata
+        written by Studio). If it has none, fall back to materializing
+        every configured source — this keeps tools that omit `source_ids`
+        working, at the cost of one fetch per source on first call.
+        """
+        ids = list(tool.source_ids or [])
+        if not ids:
+            return list(self._sources.values())
+        out: list[SourceConfig] = []
+        for sid in ids:
+            src = self._sources.get(sid)
+            if src is None:
+                continue
+            out.append(src)
+        return out
+
+    async def _materialize_source(
+        self,
+        source: SourceConfig,
+        arguments: dict[str, Any],
+    ) -> None:
+        lock = self._locks.setdefault(source.id, asyncio.Lock())
+        async with lock:
+            # Recheck inside the lock — another coroutine may have just loaded it.
+            last = self._materialized_at.get(source.id)
+            if last is not None and (time.monotonic() - last) < self._ttl:
+                return
+
+            assert self._engine is not None  # set by _ensure_materialized
+            table_name = source.table_name or source.id
+            try:
+                rows = await self._fetch_source(source, arguments)
+            except Exception as exc:
+                log.error(
+                    "source.materialize.fetch_failed",
+                    source_id=source.id,
+                    table=table_name,
+                    error=str(exc),
+                )
+                raise
+
+            flat = flatten(rows, table_name=table_name)
+            self._engine.load_result(flat)
+            self._materialized_at[source.id] = time.monotonic()
+            log.info(
+                "source.materialized",
+                source_id=source.id,
+                table=table_name,
+                row_count=len(rows),
+                child_tables=[t.name for t in flat.related_tables],
+            )
+
+    # ── fetchers ───────────────────────────────────────────────────────────
 
     async def _fetch_source(
         self,
@@ -139,7 +272,6 @@ class ToolExecutor:
         raise ExecutorError(f"REST source {source.id!r} returned unexpected type: {type(data)}")
 
     async def _fetch_db(self, source: SourceConfig) -> list[dict[str, Any]]:
-        import asyncio
         import functools
 
         loop = asyncio.get_running_loop()
@@ -193,6 +325,11 @@ def _extract_table_names(sql: str) -> list[str]:
         re.IGNORECASE,
     )
     return list(dict.fromkeys(m.group(1) or m.group(2) for m in pattern.finditer(sql)))
+
+
+def _missing_tables(sql: str, available: list[str]) -> set[str]:
+    referenced = set(_extract_table_names(sql))
+    return referenced - set(available)
 
 
 def _interpolate(template: str, values: dict[str, Any]) -> str:

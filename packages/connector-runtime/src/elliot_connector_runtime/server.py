@@ -407,13 +407,26 @@ def _register_sample_resource(
 def _register_source_status_resource(mcp: FastMCP, source: Any) -> None:
     source_id = source.id
     source_name = source.name
+    table_name = getattr(source, "table_name", None) or source.id
 
     @mcp.resource(
         f"source://{source_id}/status",
         description=f"Connectivity status for source '{source_name}'.",
     )
     def source_status() -> str:
-        return f'{{"source_id": "{source_id}", "name": "{source_name}", "type": "{source.type}"}}'
+        import json as _json
+
+        return _json.dumps(
+            {
+                "source_id": source_id,
+                "name": source_name,
+                "type": source.type,
+                # `table_name` is what the connector's tool SQL is authored
+                # against — surface it so agents can confirm which table
+                # name matches which configured source.
+                "table_name": table_name,
+            }
+        )
 
     source_status.__name__ = f"status_{source_id}"
 

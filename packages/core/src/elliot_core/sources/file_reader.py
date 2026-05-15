@@ -164,9 +164,48 @@ def _read(path: Path, fmt: str, config: SourceConfig) -> list[dict[str, Any]]:
 
     # JSON
     data = json.loads(path.read_text(encoding=config.encoding))
+    return _unwrap_json(data)
+
+
+def _unwrap_json(data: Any) -> list[dict[str, Any]]:
+    """Find the list-of-records inside an arbitrary JSON document.
+
+    Priority:
+      1. Top-level list — return as-is.
+      2. Well-known envelope keys (data/items/results/records/rows) whose
+         value is a list. These match REST conventions and stay stable
+         regardless of document size.
+      3. Any other top-level key whose value is a non-empty list of dicts.
+         Picks the longest such list — bigger usually means "the records"
+         vs. a sidecar like "errors" or "meta". This is what unblocks
+         agent-built connectors against files like ``getInsights.json``
+         which nest the records under an arbitrary key.
+      4. Fallback: a single-dict document → wrap as ``[data]``. Other
+         shapes (top-level scalar, list of scalars) → ``[]``.
+    """
     if isinstance(data, list):
         return data
-    for key in ("data", "items", "results", "records"):
-        if isinstance(data, dict) and isinstance(data.get(key), list):
-            return data[key]
-    return [data] if isinstance(data, dict) else []
+
+    if isinstance(data, dict):
+        for key in ("data", "items", "results", "records", "rows"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return value
+
+        # Largest list-of-dicts wins. Avoid sidecar lists of scalars
+        # (e.g. ["error1", "error2"]) by requiring dict elements.
+        best: list[dict[str, Any]] | None = None
+        for value in data.values():
+            if (
+                isinstance(value, list)
+                and value
+                and all(isinstance(item, dict) for item in value)
+                and (best is None or len(value) > len(best))
+            ):
+                best = value
+        if best is not None:
+            return best
+
+        return [data]
+
+    return []

@@ -253,3 +253,265 @@ async def test_executor_unknown_source_skipped() -> None:
     executor = ToolExecutor(CONNECTOR, secrets={})
     result = await executor.execute(tool, {"species": "dog"})
     assert result.rows[0]["name"] == "Rex"
+
+
+async def test_executor_flattens_nested_json_source(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """Regression: connector tools authored against flattener-shaped names
+    (e.g. `insights` plus child `insights_facts`) used to fail with
+    `no such table` because the runtime only ingested a single flat table
+    named after `source.id`. The executor must run the flattener so both
+    primary and child tables exist with their authored names.
+    """
+    import json
+
+    data_file = tmp_path / "insights.json"
+    data_file.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "a",
+                    "label": "north",
+                    "facts": [
+                        {"k": "visits", "v": 10},
+                        {"k": "signups", "v": 2},
+                    ],
+                },
+                {
+                    "id": "b",
+                    "label": "south",
+                    "facts": [{"k": "visits", "v": 5}],
+                },
+            ]
+        )
+    )
+
+    connector = ConnectorConfig(
+        name="Insights",
+        slug="insights",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="src-uuid-1234",
+                name="insights",
+                type="file",
+                path=str(data_file),
+                format="json",
+                # Studio sets table_name during discovery — that's what
+                # tool SQL is authored against.
+                table_name="insights",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="overview",
+                name="Overview",
+                description="Top-level rows",
+                category="READ",
+                sql='SELECT * FROM "insights"',
+                source_ids=["src-uuid-1234"],
+            ),
+            ToolDefinition(
+                id="facts",
+                name="Facts",
+                description="Nested facts via child table",
+                category="READ",
+                sql='SELECT * FROM "insights_facts"',
+                source_ids=["src-uuid-1234"],
+            ),
+        ],
+        skills=[],
+    )
+    executor = ToolExecutor(connector, secrets={})
+
+    overview = await executor.execute(connector.tools[0], {})
+    assert {r["label"] for r in overview.rows} == {"north", "south"}
+
+    facts = await executor.execute(connector.tools[1], {})
+    assert len(facts.rows) == 3
+    assert {r["k"] for r in facts.rows} == {"visits", "signups"}
+
+
+async def test_executor_missing_table_raises_actionable_error(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """SQL referencing a table the connector didn't materialize gets a
+    typed error naming the missing tables — not a raw `no such table`."""
+    import json
+
+    from elliot_core.errors import ElliotError
+
+    data_file = tmp_path / "items.json"
+    data_file.write_text(json.dumps([{"id": 1}]))
+
+    connector = ConnectorConfig(
+        name="Bad",
+        slug="bad",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="items",
+                name="items",
+                type="file",
+                path=str(data_file),
+                format="json",
+                table_name="items",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="broken",
+                name="Broken",
+                description="references a table that was never materialized",
+                category="READ",
+                sql='SELECT * FROM "nonexistent_table"',
+                source_ids=["items"],
+            )
+        ],
+        skills=[],
+    )
+
+    executor = ToolExecutor(connector, secrets={})
+    with pytest.raises(ElliotError) as exc:
+        await executor.execute(connector.tools[0], {})
+    assert exc.value.code == "TABLE_NOT_FOUND"
+    assert "nonexistent_table" in exc.value.message
+    assert exc.value.detail is not None
+    assert "nonexistent_table" in exc.value.detail["missing_tables"]
+
+
+async def test_executor_materialization_is_cached(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """Second call against the same source must not re-read the file
+    (a 4.7 MB file shouldn't be flattened on every tool call)."""
+    import json
+
+    data_file = tmp_path / "items.json"
+    data_file.write_text(json.dumps([{"id": 1, "name": "first"}]))
+
+    connector = ConnectorConfig(
+        name="Items",
+        slug="items",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="items",
+                name="items",
+                type="file",
+                path=str(data_file),
+                format="json",
+                table_name="items",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="list",
+                name="List",
+                description="List items",
+                category="READ",
+                sql='SELECT * FROM "items"',
+                source_ids=["items"],
+            )
+        ],
+        skills=[],
+    )
+    executor = ToolExecutor(connector, secrets={})
+
+    first = await executor.execute(connector.tools[0], {})
+    assert first.rows[0]["name"] == "first"
+
+    # Mutate the file. If the executor refetches every call, we'd see "second".
+    data_file.write_text(json.dumps([{"id": 1, "name": "second"}]))
+
+    second = await executor.execute(connector.tools[0], {})
+    assert second.rows[0]["name"] == "first"
+
+
+async def test_executor_materialization_ttl_refresh(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """When TTL is 0 every call re-materializes — used to verify the TTL
+    branch in the cache, and to give operators a way to opt out."""
+    import json
+
+    data_file = tmp_path / "items.json"
+    data_file.write_text(json.dumps([{"id": 1, "name": "v1"}]))
+
+    connector = ConnectorConfig(
+        name="Items",
+        slug="items",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="items",
+                name="items",
+                type="file",
+                path=str(data_file),
+                format="json",
+                table_name="items",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="list",
+                name="List",
+                description="List items",
+                category="READ",
+                sql='SELECT * FROM "items"',
+                source_ids=["items"],
+            )
+        ],
+        skills=[],
+    )
+    executor = ToolExecutor(connector, secrets={}, materialization_ttl_seconds=0)
+
+    first = await executor.execute(connector.tools[0], {})
+    assert first.rows[0]["name"] == "v1"
+
+    data_file.write_text(json.dumps([{"id": 1, "name": "v2"}]))
+
+    second = await executor.execute(connector.tools[0], {})
+    assert second.rows[0]["name"] == "v2"
+
+
+async def test_executor_falls_back_to_all_sources_when_source_ids_empty(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """Tools that don't declare source_ids still materialize every source —
+    keeps older connector definitions working."""
+    import json
+
+    items_file = tmp_path / "items.json"
+    items_file.write_text(json.dumps([{"id": 1, "name": "widget"}]))
+
+    connector = ConnectorConfig(
+        name="Items",
+        slug="items",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="items",
+                name="items",
+                type="file",
+                path=str(items_file),
+                format="json",
+                table_name="items",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="list",
+                name="List items",
+                description="No source_ids — fall back to all sources",
+                category="READ",
+                sql='SELECT * FROM "items"',
+                # NOTE: no source_ids
+            )
+        ],
+        skills=[],
+    )
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(connector.tools[0], {})
+    assert result.rows[0]["name"] == "widget"

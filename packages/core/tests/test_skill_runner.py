@@ -109,7 +109,9 @@ async def test_execute_skill_single_step():
         steps=[SkillStep(alias="step1", tool_id="list_items", params={})],
     )
     result = await execute_skill(skill, {}, registry, executor)
-    assert result.rows == rows
+    # Strip flattener-injected ``_id`` so the assertion stays focused on
+    # the business columns the skill returns.
+    assert [{k: v for k, v in r.items() if not k.startswith("_")} for r in result.rows] == rows
 
 
 @pytest.mark.asyncio
@@ -184,4 +186,4 @@ async def test_execute_skill_multi_step_binding():
         ],
     )
     result = await execute_skill(skill, {}, registry, executor)
-    assert result.rows == rows_b
+    assert [{k: v for k, v in r.items() if not k.startswith("_")} for r in result.rows] == rows_b

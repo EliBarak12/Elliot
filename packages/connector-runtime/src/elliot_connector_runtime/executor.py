@@ -248,40 +248,90 @@ class ToolExecutor:
 
         url = _interpolate(source.url or "", arguments)
         headers = _build_auth_headers(source.auth, self._secrets) if source.auth else {}
+        pagination = source.pagination
+        all_rows: list[dict[str, Any]] = []
+        page = 1
+        offset = 0
+        cursor: str | None = None
+        next_url: str | None = None
+        pages_fetched = 0
 
-        # Agent-supplied `arguments` may reach `_interpolate`, so the resolved
-        # URL is attacker-influenced. Validate before any TCP connect.
-        try:
-            validate_url(url)
-        except SSRFError as exc:
-            raise ExecutorError(f"Refusing to fetch REST source: {exc.message}") from exc
+        async with safe_client(timeout=source.timeout_ms / 1000) as client:
+            while True:
+                if pages_fetched >= pagination.max_pages:
+                    break
 
-        async with safe_client(timeout=30) as client:
-            resp = await client.get(url, headers=headers)
-        resp.raise_for_status()
+                request_url = next_url or url
+                try:
+                    validate_url(request_url)
+                except SSRFError as exc:
+                    raise ExecutorError(f"Refusing to fetch REST source: {exc.message}") from exc
 
-        data = resp.json()
+                params: dict[str, Any] = {}
+                if pagination.strategy == "offset":
+                    params["offset"] = offset
+                    params["limit"] = pagination.page_size
+                elif pagination.strategy == "page":
+                    params["page"] = page
+                elif pagination.strategy == "cursor" and cursor:
+                    params["cursor"] = cursor
 
-        if source.data_path:
-            data = jmespath.search(source.data_path, data)
+                resp = await client.get(request_url, headers=headers, params=params or None)
+                resp.raise_for_status()
+                pages_fetched += 1
 
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict):
-            # When the upstream returns a paginated envelope (``{items: [...],
-            # total, offset, limit}``, ``{data: [...]}``) treat it the same
-            # way the design-time api_fetcher does — unwrap the first array
-            # value under a conventional key. Without this the runtime
-            # materializes the wrapper itself as a single row, the actual
-            # records land in a child table named ``<source>_items``, and
-            # every tool the agent wrote against ``FROM "<source>"`` silently
-            # returns zero or one row.
-            for key in ("data", "items", "results", "records", "rows"):
-                value = data.get(key)
-                if isinstance(value, list):
-                    return value
-            return [data]
-        raise ExecutorError(f"REST source {source.id!r} returned unexpected type: {type(data)}")
+                data = resp.json()
+                if source.data_path:
+                    data = jmespath.search(source.data_path, data)
+
+                # Unwrap a paginated envelope (``{items: [...], total, ...}``)
+                # the same way the design-time api_fetcher does. Without this
+                # the runtime materializes the wrapper as a single row and
+                # the agent's ``FROM "<source>"`` returns nothing.
+                rows: list[dict[str, Any]]
+                if isinstance(data, list):
+                    rows = data
+                elif isinstance(data, dict):
+                    found: list[dict[str, Any]] | None = None
+                    for key in ("data", "items", "results", "records", "rows"):
+                        value = data.get(key)
+                        if isinstance(value, list):
+                            found = value
+                            break
+                    rows = found if found is not None else [data]
+                else:
+                    raise ExecutorError(
+                        f"REST source {source.id!r} returned unexpected type: {type(data)}"
+                    )
+
+                all_rows.extend(rows)
+
+                if pagination.strategy == "none" or not rows:
+                    break
+                if pagination.strategy == "offset":
+                    if len(rows) < pagination.page_size:
+                        break
+                    offset += pagination.page_size
+                elif pagination.strategy == "page":
+                    if len(rows) < pagination.page_size:
+                        break
+                    page += 1
+                elif pagination.strategy == "cursor":
+                    cursor = (data.get("next_cursor") if isinstance(data, dict) else None) or (
+                        data.get(pagination.cursor_field or "cursor")
+                        if isinstance(data, dict)
+                        else None
+                    )
+                    if not cursor:
+                        break
+                elif pagination.strategy == "link_header":
+                    next_url = _parse_link_next(resp.headers.get("link", ""))
+                    if not next_url:
+                        break
+                else:
+                    break
+
+        return all_rows
 
     async def _fetch_db(self, source: SourceConfig) -> list[dict[str, Any]]:
         import functools
@@ -324,6 +374,14 @@ class ToolExecutor:
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
+
+
+def _parse_link_next(link_header: str) -> str | None:
+    """Return the next URL from an RFC 5988 ``Link: <url>; rel="next"`` header."""
+    import re
+
+    m = re.search(r'<([^>]+)>;\s*rel="next"', link_header or "")
+    return m.group(1) if m else None
 
 
 def _extract_table_names(sql: str) -> list[str]:

@@ -70,6 +70,94 @@ def test_csv_large_field_does_not_raise(tmp_path: Path):
     assert len(result.rows[0]["payload"]) == 200_000
 
 
+def test_json_unwrap_arbitrary_key(tmp_path: Path):
+    """Regression: a 4.7 MB connector source file with records nested
+    under an arbitrary key (e.g. `insights`) used to be returned as a
+    single 1-row document. The unwrapper should find the records list
+    even when its key isn't one of the well-known envelope names."""
+    import json as _json
+
+    path = tmp_path / "insights.json"
+    path.write_text(
+        _json.dumps(
+            {
+                "version": "1.0",
+                "insights": [
+                    {"id": "a", "kind": "trend"},
+                    {"id": "b", "kind": "anomaly"},
+                    {"id": "c", "kind": "summary"},
+                ],
+                "meta": {"generated_at": "2026-01-01"},
+            }
+        )
+    )
+
+    result = read_file(_cfg(str(path), "json"))
+    assert len(result.rows) == 3
+    assert {r["id"] for r in result.rows} == {"a", "b", "c"}
+
+
+def test_json_unwrap_prefers_largest_list_of_dicts(tmp_path: Path):
+    """When a document has multiple list values, the largest list of
+    dicts wins — sidecars like `errors: [...]` shouldn't shadow the
+    real records list."""
+    import json as _json
+
+    path = tmp_path / "doc.json"
+    path.write_text(
+        _json.dumps(
+            {
+                "errors": [{"code": "X"}],
+                "things": [{"id": i} for i in range(10)],
+            }
+        )
+    )
+
+    result = read_file(_cfg(str(path), "json"))
+    assert len(result.rows) == 10
+
+
+def test_json_unwrap_well_known_key_beats_largest(tmp_path: Path):
+    """The well-known envelope keys (data/items/...) take priority over
+    the largest-list heuristic, preserving existing behavior."""
+    import json as _json
+
+    path = tmp_path / "doc.json"
+    path.write_text(
+        _json.dumps(
+            {
+                "data": [{"id": 1}],
+                # A larger sibling list — but `data` still wins.
+                "_unused": [{"x": i} for i in range(100)],
+            }
+        )
+    )
+
+    result = read_file(_cfg(str(path), "json"))
+    assert len(result.rows) == 1
+    assert result.rows[0]["id"] == 1
+
+
+def test_json_unwrap_ignores_lists_of_scalars(tmp_path: Path):
+    """A list of primitives (tags, labels) shouldn't be mistaken for the
+    records list — fall through to single-row wrap of the dict."""
+    import json as _json
+
+    path = tmp_path / "doc.json"
+    path.write_text(
+        _json.dumps(
+            {
+                "name": "config",
+                "tags": ["alpha", "beta", "gamma"],
+            }
+        )
+    )
+
+    result = read_file(_cfg(str(path), "json"))
+    assert len(result.rows) == 1
+    assert result.rows[0]["name"] == "config"
+
+
 def test_file_not_allowed_message_names_allowed_roots(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

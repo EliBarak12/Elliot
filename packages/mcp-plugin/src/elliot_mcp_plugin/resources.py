@@ -101,36 +101,59 @@ purposes and surface the message verbatim to the user.
 _INSTALL_MD = """# Installing Elliot in Your Project
 
 Elliot is an MCP server. Your agent connects to it over HTTP and gains access
-to the tools you've built. There are three ways to install.
+to the tools you've built.
 
-## 1. Marketplace install (recommended, one command)
+## Important: the server still needs to be running
 
-For Claude Code:
+Every install path below just wires up the *URL* — `http://localhost:3000/mcp/`.
+None of them brings up the Elliot server itself. You also need ONE of:
+
+- Run `make dev` in a clone of `EliBarak12/Elliot` (boots plugin + runtime + studio).
+- Run `uvx --from elliot-mcp-plugin uvicorn elliot_mcp_plugin.main:app --port 3000`
+  (once the package is published on PyPI).
+- Point at a hosted Elliot endpoint (see "Remote" below) — not yet available.
+
+If the URL is wired but the server isn't running, every Elliot tool call returns
+a connection error. The recovery is always: start the server.
+
+## 1. Marketplace install (Claude Code)
+
 ```
 /plugin marketplace add EliBarak12/elliot
 /plugin install elliot@elliot
 ```
 
-For Codex:
+This copies the Elliot plugin into `~/.claude/plugins/elliot/` — skills, the
+plugin manifest, and the `.mcp.json` that points at `localhost:3000`. Claude
+Code reads `.claude-plugin/marketplace.json` at the cloned repo root and the
+plugin's own `.claude-plugin/plugin.json` to discover skills under `skills/`.
+
+Works against the default branch of the repo — until `main` carries these
+manifests, you need to install from a feature branch via the GitHub source
+form.
+
+## 2. Marketplace install (Codex, plugins shipped Mar 2026)
+
 ```
 codex plugin marketplace add EliBarak12/elliot
 /plugin install elliot
 ```
 
-This wires up the MCP server AND ships the skills bundle — every workflow
-prompt is available immediately via `prompts/list`.
+The Codex plugin format is structurally similar but evolving — treat this path
+as experimental until the Codex plugin spec stabilizes.
 
-## 2. Standalone install (no clone)
+## 3. Standalone install (no clone)
 
 ```
 npx @elliot/connect
 ```
 
-This detects every coding agent on your machine (Claude Code, Cursor, VS
-Code/Copilot, Windsurf, Codex) and writes the right MCP config for each one.
-Skills still travel through the MCP server itself.
+This detects every coding agent on your machine and writes the right MCP
+config for each. Skills still travel through the MCP server itself via
+`prompts/list`. NOT YET PUBLISHED to npm — the logic lives in
+`packages/mcp-plugin/scripts/install.py`.
 
-## 3. One-click IDE install (VS Code, Cursor, Windsurf)
+## 4. One-click IDE install (VS Code, Cursor, Windsurf)
 
 These IDEs accept MCP-install deeplinks. Click the matching link from the
 Elliot README — they pre-fill the config and prompt you to confirm:
@@ -138,7 +161,7 @@ Elliot README — they pre-fill the config and prompt you to confirm:
 - VS Code: `vscode:mcp/install?{"name":"elliot","type":"http","url":"http://localhost:3000/mcp/"}`
 - Cursor:  `cursor:install-mcp?config={"name":"elliot","type":"http","url":"http://localhost:3000/mcp/"}`
 
-## 4. Manual config (always works)
+## 5. Manual config (always works)
 
 Add to your agent's MCP config:
 

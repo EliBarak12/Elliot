@@ -46,35 +46,49 @@ Elliot makes these problems visible and fixable.
 
 ---
 
-## Install (one command)
+## Install
 
-Elliot ships as a plugin bundle: **6 skills + the MCP server + connector templates** all in one. Pick your agent.
+Elliot is an HTTP MCP server plus a plugin bundle (6 skills + connector templates + reference resources). **Every install path below wires up the URL `http://localhost:3000/mcp/` — none of them brings up the server itself.** You still need either a local clone running `make dev` or a hosted Elliot endpoint.
 
-### Claude Code
+### Today: `make dev` (works end to end)
 
 ```
-/plugin marketplace add EliBarak12/elliot
+git clone https://github.com/EliBarak12/Elliot.git && cd Elliot
+make setup
+make dev
+```
+
+`make dev` boots plugin + runtime + studio and runs `elliot connect`, which writes the MCP config for every detected coding agent (Claude Code, Cursor, VS Code/Copilot, Windsurf, Codex). The skills travel through the MCP server itself via `prompts/list` and `resources/list` — every agent sees them.
+
+### Marketplace install (Claude Code)
+
+```
+/plugin marketplace add EliBarak12/Elliot
 /plugin install elliot@elliot
 ```
 
-### Codex (plugins, March 2026+)
+Marketplace manifest lives at `.claude-plugin/marketplace.json` per spec; works against the repo's default branch. **Wires the URL only — you must also have an Elliot server running** (the `make dev` step above, or a hosted endpoint).
+
+### Marketplace install (Codex)
 
 ```
-codex plugin marketplace add EliBarak12/elliot
+codex plugin marketplace add EliBarak12/Elliot
 /plugin install elliot
 ```
 
-### Cursor, VS Code/Copilot, Windsurf, or any MCP-speaking agent
+Experimental — Codex's plugin format (March 2026) is still stabilizing. Same caveat: URL-only, server must be running.
+
+### Cross-agent auto-install (planned, not yet on npm)
 
 ```
 npx @elliot/connect
 ```
 
-Detects every coding agent on your machine and writes the right MCP config for each. Skills travel through the MCP server itself via `prompts/list` and `resources/list` — every agent sees them.
+The logic exists at `packages/mcp-plugin/scripts/install.py`. Will detect every coding agent on the host and write the right MCP config for each. Until the npm wrapper is published, the equivalent today is `uv run elliot connect` from a clone.
 
-### What you get on first connect
+### What the agent gets on first connect
 
-Your agent will call `prompts/get name=getting_started` and learn the five principles, the canonical workflow (`discover-source` → `build-connector` → `lint-connector` → `run-eval` → `deploy`), and the available reference resources (templates, error codes, principles).
+Whatever install path you use, the agent's first action on connect is to call `prompts/get name=getting_started` (the rewritten FastMCP `instructions` string explicitly tells it to). That one prompt teaches the five principles, the canonical workflow (`discover-source` → `build-connector` → `lint-connector` → `run-eval` → `deploy`), and the available reference resources (templates, error-code dictionary, install docs).
 
 ---
 

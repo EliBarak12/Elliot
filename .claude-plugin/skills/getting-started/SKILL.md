@@ -1,14 +1,51 @@
 ---
 name: getting-started
-description: Master onboarding for Elliot. Read this first when you connect to the Elliot MCP server. Explains the mission, the five principles, the canonical workflow, and which Elliot prompts and tools to call for each task.
-when_to_use: Trigger on first connection to Elliot, or when the user says "what is Elliot", "how do I use Elliot", "get started", "what can you do with Elliot", or similar. Also re-read when uncertain which Elliot prompt to invoke next.
+description: Master onboarding for Elliot. Read this first when you connect to Elliot — and ALSO read this when any Elliot tool call fails with a connection error, because the most likely cause is the Elliot server isn't running yet. Explains how to start Elliot, the five principles, the canonical workflow, and which Elliot prompts and tools to call for each task.
+when_to_use: Trigger on first connection to Elliot, when any Elliot tool returns a connection-refused / transport error, or when the user says "what is Elliot", "how do I use Elliot", "get started", "elliot not working", "can't connect to elliot", or similar. Re-read when uncertain which Elliot prompt to invoke next.
 argument-hint: ""
-allowed-tools: mcp__elliot__*
+allowed-tools: Bash mcp__elliot__*
 ---
 
 # Elliot — Getting Started
 
-You are connected to **Elliot**, a platform that turns existing APIs and databases into **agent-ready MCP connectors**. Your job, when invoked, is to help the user design, validate, deploy, and observe agent-ready tool sets built around their data sources.
+You are working with **Elliot**, a platform that turns existing APIs and databases into **agent-ready MCP connectors**. Your job is to help the user design, validate, deploy, and observe agent-ready tool sets built around their data sources.
+
+## ⚠️ PREREQUISITE — is the Elliot server actually running?
+
+Elliot is a local service. The MCP plugin URL (`http://localhost:3000/mcp/`) won't respond unless the user has the Elliot stack running. **Always check this first** — most "Elliot isn't working" problems are just the server not being up.
+
+### Quick check
+
+Try calling `elliot_session_summary`. Three possible outcomes:
+
+| Outcome | What it means | What to do |
+|---|---|---|
+| Returns a result | Server is running ✓ | Skip to the workflow section below |
+| MCP transport error / connection refused | Server isn't running | Walk the user through starting it (next section) |
+| `tools/list` doesn't include any `elliot_*` tools | Plugin isn't installed at all | Tell the user to run `/plugin install elliot@elliot` first |
+
+### If the server isn't running, tell the user
+
+Stop and ask the user to start Elliot. Use this exact message:
+
+> "I can't reach the Elliot server. It needs to be running locally on `http://localhost:3000` before I can use any of its tools. Please open a terminal and run:
+>
+> ```
+> git clone https://github.com/EliBarak12/Elliot.git
+> cd Elliot
+> make setup     # one-time: installs uv + pnpm deps
+> make dev       # starts plugin (3000), runtime (3001), and studio (5173)
+> ```
+>
+> Once it's running, Studio will open automatically in your browser at `http://localhost:5173`. Tell me when you see it and I'll continue."
+
+**Do not retry tool calls in a loop while waiting.** Wait for the user to confirm Elliot is up, then re-run `elliot_session_summary`.
+
+### If the user already has Elliot installed and just needs to start it
+
+If the user says "I have Elliot already" or you see `.elliot/` or a `Makefile` with `dev:` in their cwd, give the short version:
+
+> "Run `make dev` from the Elliot repo to start the stack. Studio will open in your browser when it's ready."
 
 ## The five principles
 

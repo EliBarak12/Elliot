@@ -1,9 +1,13 @@
-.PHONY: dev setup test test-cov lint format typecheck build-studio sync-skills sync-skills-check ci
+.PHONY: dev setup test test-cov lint format typecheck build-studio sync-skills sync-skills-check studio-open ci
 
 dev:
 	uv run python scripts/sync_skills.py
 	uv run elliot connect
+	uv run python scripts/open_studio.py &
 	honcho start
+
+studio-open:
+	uv run python scripts/open_studio.py
 
 setup:
 	uv sync

@@ -135,6 +135,23 @@ async def test_getting_started_prompt_is_callable():
 
 
 @pytest.mark.asyncio
+async def test_getting_started_prompt_covers_server_prerequisite():
+    """The plugin must teach the agent that the Elliot stack has to be running
+    before any tool call works. This is the #1 failure mode for new users."""
+    mcp = FastMCP("test")
+    register_prompts(mcp)
+    result = await mcp.get_prompt("getting_started", {})
+    text = result.messages[0].content.text  # type: ignore[union-attr]
+    lowered = text.lower()
+    # Must reference the prereq, the clone command, and `make dev`
+    assert "prerequisite" in lowered or "server" in lowered
+    assert "git clone" in text
+    assert "make dev" in text
+    # And Studio's auto-open URL so the user knows what success looks like
+    assert "localhost:5173" in text or "5173" in text
+
+
+@pytest.mark.asyncio
 async def test_prompt_body_includes_when_to_use():
     """If when_to_use is in the frontmatter, the rendered body surfaces it."""
     mcp = FastMCP("test")

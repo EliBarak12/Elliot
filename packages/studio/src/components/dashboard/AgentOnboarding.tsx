@@ -21,9 +21,17 @@ type InstallOption = {
 
 const INSTALL_OPTIONS: InstallOption[] = [
   {
+    id: "local-dev",
+    agent: "Local dev (this repo)",
+    blurb:
+      "Recommended today: boots plugin + runtime + studio AND wires every detected agent. Everything below this option still requires the server to be running.",
+    commands: ["make dev"],
+  },
+  {
     id: "claude-code",
-    agent: "Claude Code",
-    blurb: "One marketplace install. Skills, MCP server, and resources all ship together.",
+    agent: "Claude Code marketplace",
+    blurb:
+      "Marketplace install (works once these manifests are on the repo's default branch). Wires the URL only — you still need a running Elliot server.",
     commands: [
       "/plugin marketplace add EliBarak12/elliot",
       "/plugin install elliot@elliot",
@@ -31,8 +39,9 @@ const INSTALL_OPTIONS: InstallOption[] = [
   },
   {
     id: "codex",
-    agent: "Codex",
-    blurb: "Codex plugins (since Mar 2026) install from any Git URL.",
+    agent: "Codex marketplace",
+    blurb:
+      "Experimental: Codex plugins shipped Mar 2026; treat as evolving. Same caveat as Claude Code — URL-only, server must be running.",
     commands: [
       "codex plugin marketplace add EliBarak12/elliot",
       "/plugin install elliot",
@@ -41,14 +50,9 @@ const INSTALL_OPTIONS: InstallOption[] = [
   {
     id: "any-agent",
     agent: "Cursor, VS Code, Windsurf",
-    blurb: "Detects every coding agent on your machine and writes the MCP config for each.",
+    blurb:
+      "Not yet published to npm. Logic lives in packages/mcp-plugin/scripts/install.py; will detect every coding agent and write the right MCP config.",
     commands: ["npx @elliot/connect"],
-  },
-  {
-    id: "local-dev",
-    agent: "Local dev (this repo)",
-    blurb: "Boots the plugin, runtime, and studio together; auto-registers every agent.",
-    commands: ["make dev"],
   },
 ];
 

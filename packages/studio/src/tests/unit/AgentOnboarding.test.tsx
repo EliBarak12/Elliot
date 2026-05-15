@@ -12,13 +12,10 @@ function installClipboardSpy() {
 }
 
 describe("AgentOnboarding", () => {
-  it("shows the marketplace install command for Claude Code by default", () => {
+  it("shows `make dev` as the default install path (the one that actually works today)", () => {
     render(<AgentOnboarding />);
     expect(screen.getByText(/Let your agent do the work/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/\$ \/plugin marketplace add EliBarak12\/elliot/)
-    ).toBeInTheDocument();
-    expect(screen.getByText(/\$ \/plugin install elliot@elliot/)).toBeInTheDocument();
+    expect(screen.getByText(/\$ make dev/)).toBeInTheDocument();
     expect(
       screen.getByText(/I have an API at https:\/\/api.example.com/i)
     ).toBeInTheDocument();
@@ -27,18 +24,27 @@ describe("AgentOnboarding", () => {
   it("offers install commands for every supported agent surface", () => {
     render(<AgentOnboarding />);
     for (const label of [
-      "Claude Code",
-      "Codex",
-      "Cursor, VS Code, Windsurf",
       "Local dev (this repo)",
+      "Claude Code marketplace",
+      "Codex marketplace",
+      "Cursor, VS Code, Windsurf",
     ]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
   });
 
-  it("switches to the Codex install commands when the Codex tab is selected", () => {
+  it("switches to the Claude Code marketplace commands when its tab is selected", () => {
     render(<AgentOnboarding />);
-    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("button", { name: "Claude Code marketplace" }));
+    expect(
+      screen.getByText(/\$ \/plugin marketplace add EliBarak12\/elliot/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/\$ \/plugin install elliot@elliot/)).toBeInTheDocument();
+  });
+
+  it("switches to the Codex install commands when its tab is selected", () => {
+    render(<AgentOnboarding />);
+    fireEvent.click(screen.getByRole("button", { name: "Codex marketplace" }));
     expect(
       screen.getByText(/\$ codex plugin marketplace add EliBarak12\/elliot/)
     ).toBeInTheDocument();
@@ -51,15 +57,10 @@ describe("AgentOnboarding", () => {
     expect(screen.getByText(/\$ npx @elliot\/connect/)).toBeInTheDocument();
   });
 
-  it("still surfaces `make dev` for users who clone the repo", () => {
-    render(<AgentOnboarding />);
-    fireEvent.click(screen.getByRole("button", { name: "Local dev (this repo)" }));
-    expect(screen.getByText(/\$ make dev/)).toBeInTheDocument();
-  });
-
   it("copies a marketplace command to clipboard when its copy button is clicked", async () => {
     const writeText = installClipboardSpy();
     render(<AgentOnboarding />);
+    fireEvent.click(screen.getByRole("button", { name: "Claude Code marketplace" }));
     fireEvent.click(
       screen.getByLabelText(/Copy command: \/plugin marketplace add EliBarak12\/elliot/i)
     );

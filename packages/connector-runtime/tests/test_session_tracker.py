@@ -34,6 +34,25 @@ def test_session_persisted_to_file(tmp_path: Path) -> None:
     assert sessions[0]["total_tool_calls"] == 1
 
 
+def test_agent_identity_persisted_with_session(tmp_path: Path) -> None:
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    identity = {
+        "client": "claude-code",
+        "client_version": "1.42.0",
+        "model": "claude-opus-4-7",
+        "modality": None,
+        "user_agent": "agent-claude-code/1.42.0 claude-opus-4-7",
+    }
+    sid = tracker.start_session(agent_hint="claude-code claude-opus-4-7", agent_identity=identity)
+    tracker.record_tool_call(sid, "ping", {}, 1, [{"ok": 1}], 5.0)
+    tracker.close_session(sid)
+
+    sessions = tracker.tail(10)
+    assert sessions[0]["agent_identity"]["client"] == "claude-code"
+    assert sessions[0]["agent_identity"]["model"] == "claude-opus-4-7"
+    assert sessions[0]["agent_hint"] == "claude-code claude-opus-4-7"
+
+
 def test_tail_empty_when_no_file(tmp_path: Path) -> None:
     tracker = SessionTracker(tmp_path / "sessions.ndjson")
     assert tracker.tail() == []

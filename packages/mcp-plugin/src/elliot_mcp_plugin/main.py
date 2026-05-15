@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from elliot_core.auth_middleware import ApiKeyMiddleware
+from elliot_core.http_middleware import AgentIdentityMiddleware
 from elliot_mcp_plugin.server import create_elliot_server
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -47,6 +48,7 @@ app = FastAPI(lifespan=lifespan)
 # CORS the outermost wrapper, which is required so that browser preflight
 # (OPTIONS) is answered before the auth check runs.
 app.add_middleware(ApiKeyMiddleware)
+app.add_middleware(AgentIdentityMiddleware)
 _studio_origin = os.environ.get("ELLIOT_STUDIO_ORIGIN", "http://localhost:5173")
 app.add_middleware(
     CORSMiddleware,

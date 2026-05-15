@@ -42,6 +42,64 @@ def test_open_session_idempotent(store: ObservationStore) -> None:
     assert len(sessions) == 1
 
 
+def test_open_session_persists_agent_identity(store: ObservationStore) -> None:
+    store.open_session(
+        "ident",
+        agent_hint="claude-code claude-opus-4-7",
+        agent_identity={
+            "client": "claude-code",
+            "client_version": "1.42.0",
+            "model": "claude-opus-4-7",
+            "modality": None,
+            "user_agent": "agent-claude-code/1.42.0 claude-opus-4-7",
+        },
+    )
+    sessions = store.recent_sessions(10)
+    row = next(s for s in sessions if s["session_id"] == "ident")
+    assert row["agent_client"] == "claude-code"
+    assert row["agent_client_version"] == "1.42.0"
+    assert row["agent_model"] == "claude-opus-4-7"
+    assert row["user_agent"].startswith("agent-claude-code/")
+
+
+def test_observation_store_migrates_old_schema(tmp_path: Path) -> None:
+    """A pre-existing agent_sessions table without identity columns is upgraded in place."""
+    from sqlalchemy import create_engine
+    from sqlalchemy import text as sa_text
+
+    db_path = tmp_path / "legacy.db"
+    legacy_engine = create_engine(f"sqlite:///{db_path}")
+    with legacy_engine.begin() as conn:
+        conn.execute(
+            sa_text(
+                """
+                CREATE TABLE agent_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id VARCHAR(32) UNIQUE NOT NULL,
+                    started_at FLOAT NOT NULL,
+                    ended_at FLOAT,
+                    agent_hint VARCHAR(255),
+                    connector_slug VARCHAR(128),
+                    total_tool_calls INTEGER DEFAULT 0,
+                    total_tokens_estimated INTEGER DEFAULT 0,
+                    total_duration_ms FLOAT DEFAULT 0,
+                    error_count INTEGER DEFAULT 0
+                )
+                """
+            )
+        )
+    legacy_engine.dispose()
+
+    store = ObservationStore(f"sqlite:///{db_path}")
+    store.open_session(
+        "post-migration",
+        agent_identity={"client": "cursor", "model": "claude-sonnet-4-5"},
+    )
+    sessions = store.recent_sessions(10)
+    assert sessions[0]["agent_client"] == "cursor"
+    assert sessions[0]["agent_model"] == "claude-sonnet-4-5"
+
+
 def test_close_session_unknown_is_noop(store: ObservationStore) -> None:
     store.close_session("ghost")
     assert store.recent_sessions() == []

@@ -1,0 +1,62 @@
+# Run Elliot from pre-built images — no source checkout or local toolchain
+# (uv, pnpm, Python, Node) required. Only Docker is needed.
+#
+# One command (downloads this file for you, generates .env, starts everything):
+#   curl -LsSf https://raw.githubusercontent.com/EliBarak12/Elliot/main/scripts/install.sh | sh
+#
+# Or, with this file already present:
+#   docker compose -f docker-compose.run.yml up -d
+#
+# Images are published to GHCR by .github/workflows/release.yml on every
+# tagged release. Pin a version with ELLIOT_VERSION (defaults to `latest`).
+name: elliot
+
+services:
+  plugin:
+    image: ghcr.io/elibarak12/elliot-plugin:${ELLIOT_VERSION:-latest}
+    ports:
+      - "127.0.0.1:3000:3000"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./connectors:/app/connectors:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/healthz"]
+      interval: 30s
+      retries: 3
+    restart: unless-stopped
+
+  runtime:
+    image: ghcr.io/elibarak12/elliot-runtime:${ELLIOT_VERSION:-latest}
+    ports:
+      - "127.0.0.1:3001:3001"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./connectors:/app/connectors:ro
+      - elliot-data:/app/.elliot
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      retries: 3
+    restart: unless-stopped
+
+  studio:
+    image: ghcr.io/elibarak12/elliot-studio:${ELLIOT_VERSION:-latest}
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      plugin:
+        condition: service_healthy
+      runtime:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 30s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  elliot-data:

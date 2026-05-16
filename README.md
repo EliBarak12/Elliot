@@ -23,7 +23,17 @@ Elliot is the interface layer that makes your product feel native to AI agents. 
 
 > **AX** is to agents what UX is to users and DX is to developers. Elliot's job is to make AX measurable.
 
-## 60-second quickstart
+## Quickstart
+
+**Just want to use Elliot?** The only prerequisite is [Docker](https://docs.docker.com/get-docker/) — no Python, Node, uv, or pnpm. One command:
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/EliBarak12/Elliot/main/scripts/install.sh | sh
+```
+
+This pulls the pre-built images, generates a local `.env`, starts all three services, and opens Studio at <http://localhost:8080>. Stop it any time with `docker compose -f docker-compose.run.yml down`. If you already have the repo checked out, `make run` does the same thing with the pre-built images.
+
+**Want to develop Elliot?** Build from source instead:
 
 ```bash
 git clone https://github.com/EliBarak12/Elliot.git && cd Elliot
@@ -32,7 +42,7 @@ make dev          # boots plugin (:3000) + runtime (:3001) + studio (:5173)
                   # and writes the MCP config for every detected coding agent
 ```
 
-That's it. Open Studio at <http://localhost:5173>, scaffold a connector, lint it, and your agent can use it in the same session.
+Open Studio at <http://localhost:5173>, scaffold a connector, lint it, and your agent can use it in the same session.
 
 ## Install for your agent
 

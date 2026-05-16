@@ -58,7 +58,7 @@ make setup
 make dev
 ```
 
-`make dev` boots plugin + runtime + studio and runs `elliot connect`, which writes the MCP config for every detected coding agent (Claude Code, Cursor, Codex). The skills travel through the MCP server itself via `prompts/list` and `resources/list` — every agent sees them.
+`make dev` boots plugin + runtime + studio and runs `elliot connect`, which writes the MCP config for every detected coding agent (Claude Code, Cursor, OpenClaw, Codex). The skills travel through the MCP server itself via `prompts/list` and `resources/list` — every agent sees them.
 
 ### Marketplace install (Claude Code)
 

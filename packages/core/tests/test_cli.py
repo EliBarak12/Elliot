@@ -330,6 +330,75 @@ def test_write_codex_toml_preserves_other_sections(tmp_path: Path) -> None:
     assert "[mcp_servers.elliot]" in content
 
 
+# ---------------------------------------------------------------------------
+# connect subcommand — OpenClaw registration
+# ---------------------------------------------------------------------------
+
+
+def test_write_openclaw_json_creates_nested_structure(tmp_path: Path) -> None:
+    from elliot_core.cli import _write_openclaw_json
+
+    config = tmp_path / ".openclaw" / "openclaw.json"
+    changed = _write_openclaw_json(config, "elliot", "http://localhost:3000/mcp/")
+
+    assert changed is True
+    data = json.loads(config.read_text(encoding="utf-8"))
+    entry = data["mcp"]["servers"]["elliot"]
+    assert entry == {"transport": "streamable-http", "url": "http://localhost:3000/mcp/"}
+
+
+def test_write_openclaw_json_idempotent(tmp_path: Path) -> None:
+    from elliot_core.cli import _write_openclaw_json
+
+    config = tmp_path / ".openclaw" / "openclaw.json"
+    _write_openclaw_json(config, "elliot", "http://localhost:3000/mcp/")
+    changed = _write_openclaw_json(config, "elliot", "http://localhost:3000/mcp/")
+
+    assert changed is False
+
+
+def test_write_openclaw_json_preserves_other_servers(tmp_path: Path) -> None:
+    from elliot_core.cli import _write_openclaw_json
+
+    config = tmp_path / ".openclaw" / "openclaw.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        json.dumps({"mcp": {"servers": {"other": {"transport": "stdio"}}}}),
+        encoding="utf-8",
+    )
+
+    _write_openclaw_json(config, "elliot", "http://localhost:3000/mcp/")
+
+    data = json.loads(config.read_text(encoding="utf-8"))
+    assert data["mcp"]["servers"]["other"] == {"transport": "stdio"}
+    assert data["mcp"]["servers"]["elliot"]["url"] == "http://localhost:3000/mcp/"
+
+
+def test_cmd_connect_registers_openclaw_when_dir_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_connect
+
+    home = tmp_path / "home"
+    (home / ".openclaw").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.delenv("ELLIOT_PLUGIN_URL", raising=False)
+
+    _cmd_connect(argparse.Namespace(runtime=False, runtime_only=False))
+
+    openclaw_config = home / ".openclaw" / "openclaw.json"
+    assert openclaw_config.exists()
+    data = json.loads(openclaw_config.read_text(encoding="utf-8"))
+    entry = data["mcp"]["servers"]["elliot"]
+    assert entry["transport"] == "streamable-http"
+    # Trailing slash required so strict MCP clients don't drop the POST body
+    # on a 307 redirect.
+    assert entry["url"] == "http://localhost:3000/mcp/"
+
+
 def test_cmd_connect_registers_codex_when_dir_exists(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

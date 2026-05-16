@@ -187,6 +187,38 @@ def _write_json_merge(path: Path, key: str, entry_key: str, entry_value: object)
     return True
 
 
+def _write_openclaw_json(path: Path, section: str, mcp_url: str) -> bool:
+    """Merge an Elliot MCP server into an OpenClaw ``openclaw.json``.
+
+    OpenClaw nests servers two levels deep — ``mcp.servers.<name>`` — and
+    expects a ``transport`` field; remote HTTP servers use the canonical
+    ``"streamable-http"`` spelling. Returns True if the file changed.
+    """
+    entry: dict[str, str] = {"transport": "streamable-http", "url": mcp_url}
+    data: dict[str, object] = {}
+    if path.exists():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                data = raw
+        except json.JSONDecodeError:
+            pass
+    mcp_block = data.setdefault("mcp", {})
+    if not isinstance(mcp_block, dict):
+        mcp_block = {}
+        data["mcp"] = mcp_block
+    servers = mcp_block.setdefault("servers", {})
+    if not isinstance(servers, dict):
+        servers = {}
+        mcp_block["servers"] = servers
+    if servers.get(section) == entry:
+        return False
+    servers[section] = entry
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return True
+
+
 def _codex_section_re(section: str) -> re.Pattern[str]:
     return re.compile(rf"(?ms)^\[mcp_servers\.{re.escape(section)}\]\n.*?(?=^\[|\Z)")
 
@@ -275,15 +307,6 @@ def _register_for_all_agents(
     )
     results.append(("Claude Code", claude_config, "updated" if changed else "already configured"))
 
-    if shutil.which("code") or (cwd / ".vscode").exists():
-        vscode_config = cwd / ".vscode" / "mcp.json"
-        changed = _write_json_merge(
-            vscode_config, "servers", section_key, {"type": "http", "url": mcp_url}
-        )
-        results.append(
-            ("VS Code / Copilot", vscode_config, "updated" if changed else "already configured")
-        )
-
     if shutil.which("cursor") or (home / ".cursor").exists() or (cwd / ".cursor").exists():
         cursor_config = cwd / ".cursor" / "mcp.json"
         changed = _write_json_merge(
@@ -291,14 +314,11 @@ def _register_for_all_agents(
         )
         results.append(("Cursor", cursor_config, "updated" if changed else "already configured"))
 
-    windsurf_dir = home / ".codeium" / "windsurf"
-    if windsurf_dir.exists():
-        windsurf_config = windsurf_dir / "mcp_config.json"
-        changed = _write_json_merge(
-            windsurf_config, "mcpServers", section_key, {"serverUrl": mcp_url}
-        )
+    if shutil.which("openclaw") or (home / ".openclaw").exists():
+        openclaw_config = home / ".openclaw" / "openclaw.json"
+        changed = _write_openclaw_json(openclaw_config, section_key, mcp_url)
         results.append(
-            ("Windsurf", windsurf_config, "updated" if changed else "already configured")
+            ("OpenClaw", openclaw_config, "updated" if changed else "already configured")
         )
 
     if shutil.which("codex") or (home / ".codex").exists() or (cwd / ".codex").exists():
@@ -353,7 +373,7 @@ def _cmd_connect(args: argparse.Namespace) -> None:
         results = _register_for_all_agents(label, mcp_url, cwd, home)
         if not results:
             print("  No supported agents detected on this machine.")
-            print("  Supported: Claude Code, VS Code/Copilot, Cursor, Windsurf, Codex")
+            print("  Supported: Claude Code, Cursor, OpenClaw, Codex")
             continue
         any_registered = True
         for agent, path, status in results:

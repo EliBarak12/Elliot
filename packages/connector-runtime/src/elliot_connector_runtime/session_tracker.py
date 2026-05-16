@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import time
 import uuid
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
@@ -13,6 +16,11 @@ from typing import Any, Literal
 import structlog
 
 log = structlog.get_logger(__name__)
+
+# A result this large is worth surfacing — agents pay for every token.
+_LARGE_RESULT_TOKENS = 500
+# A call slower than this is worth flagging in the trace.
+_SLOW_CALL_MS = 3000.0
 
 
 @dataclass
@@ -34,6 +42,11 @@ class AgentSession:
     agent_hint: str | None
     agent_identity: dict[str, Any] | None = None
     events: list[SessionEvent] = field(default_factory=list)
+    last_activity: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not self.last_activity:
+            self.last_activity = self.started_at
 
     @property
     def total_tool_calls(self) -> int:
@@ -51,10 +64,93 @@ class AgentSession:
     def error_count(self) -> int:
         return sum(1 for e in self.events if e.error)
 
+    @property
+    def signals(self) -> list[dict[str, Any]]:
+        """Behaviour signals inferred from the tool-call trace alone.
+
+        These let a user see *how* an agent used the connector without any
+        access to the agent's prompt or reasoning — only the calls it made
+        and the results it got back.
+        """
+        out: list[dict[str, Any]] = []
+        calls = [e for e in self.events if e.type == "tool_call"]
+
+        if self.error_count:
+            out.append(
+                {
+                    "type": "errors",
+                    "severity": "high",
+                    "message": f"{self.error_count} call(s) failed",
+                }
+            )
+
+        retries = sum(
+            1
+            for prev, cur in zip(self.events, self.events[1:], strict=False)
+            if prev.error and cur.tool_id is not None and cur.tool_id == prev.tool_id
+        )
+        if retries:
+            out.append(
+                {
+                    "type": "retry",
+                    "severity": "medium",
+                    "message": f"{retries} retry after an error",
+                }
+            )
+
+        large = [e for e in calls if (e.result_token_estimate or 0) > _LARGE_RESULT_TOKENS]
+        if large:
+            out.append(
+                {
+                    "type": "large_result",
+                    "severity": "medium",
+                    "message": f"{len(large)} call(s) returned over {_LARGE_RESULT_TOKENS} tokens",
+                }
+            )
+
+        signatures = Counter(
+            (e.tool_id, json.dumps(e.arguments or {}, sort_keys=True, default=str))
+            for e in calls
+            if e.tool_id is not None
+        )
+        redundant = sum(c - 1 for c in signatures.values() if c > 1)
+        if redundant:
+            out.append(
+                {
+                    "type": "redundant",
+                    "severity": "low",
+                    "message": f"{redundant} repeated call(s) with identical arguments",
+                }
+            )
+
+        slow = [e for e in calls if e.duration_ms > _SLOW_CALL_MS]
+        if slow:
+            out.append(
+                {
+                    "type": "slow",
+                    "severity": "low",
+                    "message": f"{len(slow)} call(s) slower than {_SLOW_CALL_MS / 1000:.0f}s",
+                }
+            )
+
+        return out
+
+    @property
+    def summary(self) -> str:
+        """Plain-language one-liner describing the agent's path through the connector."""
+        calls = [e.tool_id or "tool" for e in self.events if e.type == "tool_call"]
+        if not calls:
+            return "No tool calls recorded yet."
+        if len(calls) <= 8:
+            return " → ".join(calls)
+        counts = Counter(calls)
+        return ", ".join(f"{tid}×{n}" for tid, n in counts.most_common(6))
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "session_id": self.session_id,
             "started_at": self.started_at,
+            "last_activity": self.last_activity,
             "agent_hint": self.agent_hint,
             "agent_identity": self.agent_identity,
             "events": [
@@ -74,6 +170,8 @@ class AgentSession:
             "total_tokens_estimated": self.total_tokens_estimated,
             "total_duration_ms": round(self.total_duration_ms, 2),
             "error_count": self.error_count,
+            "signals": self.signals,
+            "summary": self.summary,
         }
 
 
@@ -86,9 +184,14 @@ def _estimate_tokens(data: Any) -> int:
 
 
 class SessionTracker:
-    """
-    Tracks one agent session per MCP connection.
-    Sessions are flushed to NDJSON on close.
+    """Tracks one agent session per MCP connection.
+
+    A session stays open and accumulates events for the whole lifetime of an
+    agent's MCP connection — it is keyed on the MCP session id, not on a
+    single request — so a multi-step agent run shows as one trace. Sessions
+    are flushed to NDJSON when they close (idle sweep or shutdown).
+
+    Subscribers can receive live session updates via :meth:`subscribe`.
     """
 
     def __init__(self, sessions_path: str | Path) -> None:
@@ -96,6 +199,35 @@ class SessionTracker:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._active: dict[str, AgentSession] = {}
         self._lock = Lock()
+        self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
+
+    # ----------------------------------------------------------- pub/sub
+
+    def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
+        """Register a queue that receives a session dict on every update."""
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=256)
+        with self._lock:
+            self._subscribers.add(queue)
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        with self._lock:
+            self._subscribers.discard(queue)
+
+    def _publish(self, session: AgentSession) -> None:
+        """Fan a session snapshot out to all live subscribers (non-blocking)."""
+        with self._lock:
+            subs = list(self._subscribers)
+        if not subs:
+            return
+        payload = session.to_dict()
+        for queue in subs:
+            # A slow consumer drops updates; the next event carries the full
+            # session state anyway, so nothing is permanently lost.
+            with contextlib.suppress(asyncio.QueueFull):
+                queue.put_nowait(payload)
+
+    # --------------------------------------------------------- lifecycle
 
     def start_session(
         self,
@@ -106,12 +238,13 @@ class SessionTracker:
         """Create a new session. If session_id is given, use it as the key; otherwise generate one."""
         sid = session_id or uuid.uuid4().hex[:8]
         with self._lock:
-            self._active[sid] = AgentSession(
+            session = AgentSession(
                 session_id=sid,
                 started_at=time.time(),
                 agent_hint=agent_hint,
                 agent_identity=agent_identity,
             )
+            self._active[sid] = session
         log.info(
             "session.started",
             session_id=sid,
@@ -119,6 +252,7 @@ class SessionTracker:
             agent_client=(agent_identity or {}).get("client"),
             agent_model=(agent_identity or {}).get("model"),
         )
+        self._publish(session)
         return sid
 
     def get_or_start_session(
@@ -150,6 +284,8 @@ class SessionTracker:
                     duration_ms=duration_ms,
                 )
             )
+            session.last_activity = time.time()
+        self._publish(session)
 
     def record_tool_call(
         self,
@@ -181,6 +317,7 @@ class SessionTracker:
                     error=error,
                 )
             )
+            session.last_activity = time.time()
         log.info(
             "session.tool_call",
             session_id=session_id,
@@ -188,6 +325,7 @@ class SessionTracker:
             result_rows=result_rows,
             error=error,
         )
+        self._publish(session)
 
     def close_session(self, session_id: str) -> AgentSession | None:
         with self._lock:
@@ -203,10 +341,43 @@ class SessionTracker:
             tool_calls=session.total_tool_calls,
             tokens=session.total_tokens_estimated,
         )
+        self._publish(session)
         return session
 
+    def sweep_idle(self, ttl_seconds: float) -> list[str]:
+        """Close sessions with no activity for ``ttl_seconds``. Returns closed ids."""
+        now = time.time()
+        with self._lock:
+            stale = [sid for sid, s in self._active.items() if now - s.last_activity > ttl_seconds]
+        for sid in stale:
+            self.close_session(sid)
+        return stale
+
+    def flush_all(self) -> None:
+        """Close every active session — used on graceful shutdown."""
+        with self._lock:
+            sids = list(self._active.keys())
+        for sid in sids:
+            self.close_session(sid)
+
+    # ------------------------------------------------------------- reads
+
     def tail(self, n: int = 20) -> list[dict[str, Any]]:
-        if not self._path.exists():
-            return []
-        lines = self._path.read_text(encoding="utf-8").splitlines()
-        return [json.loads(line) for line in lines[-n:] if line.strip()]
+        """Return the most recent sessions, merging live and closed ones.
+
+        Active in-memory sessions take precedence over their closed copy on
+        disk so the console reflects an agent's run while it is still going.
+        """
+        merged: dict[str, dict[str, Any]] = {}
+        if self._path.exists():
+            lines = self._path.read_text(encoding="utf-8").splitlines()
+            for line in lines:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                merged[record["session_id"]] = record
+        with self._lock:
+            for session in self._active.values():
+                merged[session.session_id] = session.to_dict()
+        ordered = sorted(merged.values(), key=lambda d: d.get("started_at", 0.0), reverse=True)
+        return ordered[:n]

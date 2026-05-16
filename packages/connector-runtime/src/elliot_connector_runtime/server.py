@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import inspect
+import json
 import os
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -20,9 +23,14 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from elliot_core.agent_identity import AgentIdentity, get_current_agent_identity
+from elliot_core.agent_identity import (
+    AgentIdentity,
+    get_current_agent_identity,
+    merge_client_info,
+    set_current_agent_identity,
+)
 from elliot_core.auth_middleware import ApiKeyMiddleware
 from elliot_core.http_middleware import AgentIdentityMiddleware
 
@@ -98,6 +106,32 @@ def _build_limiter() -> Limiter:
 
     limit = os.environ.get("ELLIOT_RATE_LIMIT", "120/minute")
     return Limiter(key_func=get_remote_address, default_limits=[limit])
+
+
+def _session_idle_ttl() -> float:
+    """Seconds of inactivity after which an agent session is flushed to disk."""
+    raw = os.environ.get("ELLIOT_SESSION_IDLE_TTL", "")
+    try:
+        return max(5.0, float(raw)) if raw else 300.0
+    except ValueError:
+        return 300.0
+
+
+async def _session_idle_sweeper(tracker: SessionTracker) -> None:
+    """Periodically close agent sessions that have gone idle.
+
+    A session stays open while the agent's MCP connection is active; this
+    loop flushes the ones that have stopped sending tool calls so the
+    NDJSON log and observation store reflect completed runs.
+    """
+    ttl = _session_idle_ttl()
+    interval = min(ttl, 30.0)
+    while True:
+        await asyncio.sleep(interval)
+        with contextlib.suppress(Exception):
+            closed = tracker.sweep_idle(ttl)
+            if closed:
+                log.info("session.idle_swept", count=len(closed))
 
 
 def _require_destructive_confirmation() -> bool:
@@ -251,9 +285,8 @@ def _register_tool(
                         duration_ms=duration_ms,
                         error=error,
                     )
-                    # Each MCP request is its own short-lived session — flush
-                    # to NDJSON now so /v1/sessions reflects activity immediately.
-                    tracker.close_session(session_id)
+                    # The session stays open and accumulates every call from
+                    # this MCP connection — the idle sweeper flushes it later.
                 # mirror SessionTracker's internal token estimate so the
                 # observation store agrees with /v1/sessions
                 from .session_tracker import _estimate_tokens
@@ -286,14 +319,36 @@ def _register_tool(
 
         ctx: Context[Any, Any, Any] | None = None
         session_id: str | None = None
+        mcp_session_id: str | None = None
+        client_name: str | None = None
+        client_version: str | None = None
         with contextlib.suppress(Exception):
             ctx = mcp.get_context()
             await ctx.info(f"tool.call.start: {td.id}", logger="elliot.runtime")
         if ctx is not None:
-            # Use the FastMCP request_id as a session correlation id so every
-            # MCP-driven invocation is traceable in the observation store.
+            # request_id is per-call — only a last-resort correlation id.
             with contextlib.suppress(Exception):
                 session_id = ctx.request_id
+            # Prefer the MCP protocol session id (stable for the whole agent
+            # connection) so a multi-step run groups into one trace.
+            with contextlib.suppress(Exception):
+                request = ctx.request_context.request
+                if request is not None:
+                    mcp_session_id = request.headers.get("mcp-session-id")
+            # clientInfo from the MCP `initialize` handshake is the most
+            # reliable signal of which harness is connected.
+            with contextlib.suppress(Exception):
+                client_params = ctx.session.client_params
+                if client_params is not None and client_params.clientInfo is not None:
+                    client_name = client_params.clientInfo.name
+                    client_version = client_params.clientInfo.version
+        if mcp_session_id:
+            session_id = mcp_session_id
+        if client_name:
+            with contextlib.suppress(Exception):
+                set_current_agent_identity(
+                    merge_client_info(get_current_agent_identity(), client_name, client_version)
+                )
 
         if require_confirmation:
             confirmed = bool(kwargs.pop("confirm", False))
@@ -601,8 +656,15 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Any:
+        sweeper = asyncio.create_task(_session_idle_sweeper(tracker))
         async with mcp.session_manager.run():
             yield
+        sweeper.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await sweeper
+        # Flush any still-open agent sessions so the trace survives shutdown.
+        with contextlib.suppress(Exception):
+            tracker.flush_all()
         # Audit H7: cancel any in-flight background tasks so we don't leave
         # them in `running` state after the loop closes.
         with contextlib.suppress(Exception):
@@ -675,6 +737,33 @@ def create_app(
     @app.get("/v1/sessions")
     async def get_sessions(n: int = 20) -> list[dict[str, Any]]:
         return tracker.tail(n)
+
+    @app.get("/v1/sessions/stream")
+    async def stream_sessions(request: Request) -> StreamingResponse:
+        """Server-Sent Events: a snapshot, then a frame per session update."""
+
+        async def _events() -> AsyncIterator[str]:
+            queue = tracker.subscribe()
+            try:
+                snapshot = json.dumps(tracker.tail(20), default=str)
+                yield f"event: snapshot\ndata: {snapshot}\n\n"
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        payload = await asyncio.wait_for(queue.get(), timeout=20.0)
+                    except TimeoutError:
+                        yield ": heartbeat\n\n"
+                        continue
+                    yield f"event: update\ndata: {json.dumps(payload, default=str)}\n\n"
+            finally:
+                tracker.unsubscribe(queue)
+
+        return StreamingResponse(
+            _events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/v1/metrics/token-efficiency")
     async def token_efficiency() -> dict[str, Any]:

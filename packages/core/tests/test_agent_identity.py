@@ -5,10 +5,40 @@ from __future__ import annotations
 from elliot_core.agent_identity import (
     AgentIdentity,
     get_current_agent_identity,
+    merge_client_info,
     parse_agent_identity,
     reset_current_agent_identity,
     set_current_agent_identity,
 )
+
+
+def test_merge_client_info_overrides_client() -> None:
+    base = AgentIdentity(client="mcp", model="claude-opus-4-7")
+    merged = merge_client_info(base, "Claude Code", "1.42.0")
+    assert merged.client == "claude code"
+    assert merged.client_version == "1.42.0"
+    # model came from the header parse and must be preserved
+    assert merged.model == "claude-opus-4-7"
+
+
+def test_merge_client_info_no_name_returns_base() -> None:
+    base = AgentIdentity(client="cursor", model="gpt-5")
+    assert merge_client_info(base, None) is base
+    assert merge_client_info(base, "   ") is base
+
+
+def test_merge_client_info_handles_none_identity() -> None:
+    merged = merge_client_info(None, "codex-mcp-client", "0.108.0")
+    assert merged.client == "codex-mcp-client"
+    assert merged.client_version == "0.108.0"
+    assert merged.model is None
+
+
+def test_merge_client_info_keeps_version_when_not_supplied() -> None:
+    base = AgentIdentity(client="cursor", client_version="1.7.0")
+    merged = merge_client_info(base, "cursor-vscode")
+    assert merged.client == "cursor-vscode"
+    assert merged.client_version == "1.7.0"
 
 
 def test_parse_ax_user_agent_full() -> None:

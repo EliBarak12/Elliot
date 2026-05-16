@@ -94,3 +94,95 @@ def test_estimate_tokens_returns_positive() -> None:
 
 def test_estimate_tokens_fallback() -> None:
     assert _estimate_tokens(object()) >= 1
+
+
+def test_session_accumulates_multiple_calls(tmp_path: Path) -> None:
+    """A session stays open and groups every call from one connection."""
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    sid = tracker.start_session(session_id="conn-1")
+    for i in range(3):
+        tracker.record_tool_call(sid, f"tool_{i}", {}, 1, [{"id": i}], 5.0)
+
+    sessions = tracker.tail(10)
+    assert len(sessions) == 1
+    assert sessions[0]["session_id"] == "conn-1"
+    assert sessions[0]["total_tool_calls"] == 3
+    assert len(sessions[0]["events"]) == 3
+
+
+def test_tail_merges_active_and_closed(tmp_path: Path) -> None:
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    closed = tracker.start_session(session_id="closed-1")
+    tracker.record_tool_call(closed, "ping", {}, 1, [{"ok": 1}], 5.0)
+    tracker.close_session(closed)
+
+    active = tracker.start_session(session_id="active-1")
+    tracker.record_tool_call(active, "ping", {}, 1, [{"ok": 1}], 5.0)
+
+    ids = {s["session_id"] for s in tracker.tail(10)}
+    assert ids == {"closed-1", "active-1"}
+
+
+def test_sweep_idle_flushes_stale_sessions(tmp_path: Path) -> None:
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    sid = tracker.start_session(session_id="stale-1")
+    tracker.record_tool_call(sid, "ping", {}, 1, [{"ok": 1}], 5.0)
+    # Force the session to look idle.
+    tracker._active[sid].last_activity = 0.0
+
+    swept = tracker.sweep_idle(ttl_seconds=60.0)
+    assert swept == ["stale-1"]
+    assert sid not in tracker._active
+    assert tracker.tail(10)[0]["session_id"] == "stale-1"
+
+
+def test_flush_all_closes_open_sessions(tmp_path: Path) -> None:
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    tracker.start_session(session_id="a")
+    tracker.start_session(session_id="b")
+    tracker.flush_all()
+    assert tracker._active == {}
+    assert len(tracker.tail(10)) == 2
+
+
+def test_signals_flag_errors_and_large_results(tmp_path: Path) -> None:
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    sid = tracker.start_session(session_id="s")
+    big = [{"v": "x" * 4000}]
+    tracker.record_tool_call(sid, "fetch", {}, 1, big, 5.0)
+    tracker.record_tool_call(sid, "fetch", {}, 0, [], 5.0, error="SQL error")
+    tracker.record_tool_call(sid, "fetch", {}, 0, [], 5.0, error="SQL error")
+
+    signals = tracker.tail(1)[0]["signals"]
+    kinds = {s["type"] for s in signals}
+    assert "errors" in kinds
+    assert "large_result" in kinds
+    # error followed by the same tool == a retry
+    assert "retry" in kinds
+
+
+def test_summary_describes_tool_path(tmp_path: Path) -> None:
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    sid = tracker.start_session(session_id="s")
+    tracker.record_tool_call(sid, "list_animals", {}, 1, [{"id": 1}], 5.0)
+    tracker.record_tool_call(sid, "get_animal", {}, 1, [{"id": 1}], 5.0)
+
+    summary = tracker.tail(1)[0]["summary"]
+    assert summary == "list_animals → get_animal"
+
+
+def test_subscribe_receives_published_updates(tmp_path: Path) -> None:
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    queue = tracker.subscribe()
+    sid = tracker.start_session(session_id="s")
+    tracker.record_tool_call(sid, "ping", {}, 1, [{"ok": 1}], 5.0)
+
+    payload = queue.get_nowait()
+    assert payload["session_id"] == "s"
+
+    # Drain, then unsubscribe — no further frames should arrive.
+    while not queue.empty():
+        queue.get_nowait()
+    tracker.unsubscribe(queue)
+    tracker.record_tool_call(sid, "ping", {}, 1, [{"ok": 1}], 5.0)
+    assert queue.empty()

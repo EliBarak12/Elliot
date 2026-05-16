@@ -42,6 +42,7 @@ from .observation_store import ObservationStore
 from .protocols.openai import register_openai_routes
 from .session_tracker import SessionTracker
 from .task_store import TaskStore, get_task_store
+from .trace_ingest import IngestPayload
 
 log = structlog.get_logger(__name__)
 
@@ -764,6 +765,69 @@ def create_app(
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @app.post("/v1/trace/ingest")
+    async def ingest_trace(payload: IngestPayload) -> dict[str, Any]:
+        """Receive a normalized trace from a harness hook adapter.
+
+        Claude Code / Codex / Cursor adapters POST the agent's reasoning, the
+        user's prompt and the tool calls here — data MCP traffic cannot see.
+        The trace is merged into the live console feed and the metrics store.
+        """
+        from elliot_core.redaction import redact_audit_arguments
+
+        from .session_tracker import SessionEvent
+
+        slug = getattr(config, "slug", None)
+        session_id = f"{payload.harness}:{payload.session_id}"
+        identity = {
+            "client": payload.harness,
+            "client_version": payload.harness_version,
+            "model": payload.model,
+            "modality": None,
+            "user_agent": None,
+        }
+        events = [
+            SessionEvent(
+                ts=ev.ts or time.time(),
+                type="tool_call",
+                tool_id=ev.tool_id,
+                arguments=redact_audit_arguments(ev.arguments),
+                result_rows=ev.result_rows,
+                result_token_estimate=ev.result_token_estimate or None,
+                duration_ms=ev.duration_ms,
+                error=ev.error,
+                result_preview=ev.result_preview,
+                reasoning=ev.reasoning,
+            )
+            for ev in payload.events
+        ]
+        tracker.append_ingested(
+            session_id,
+            identity,
+            events,
+            user_prompt=payload.user_prompt,
+            final_output=payload.final_output,
+        )
+        with contextlib.suppress(Exception):
+            store.open_session(
+                session_id,
+                agent_hint=payload.harness,
+                connector_slug=slug,
+                agent_identity=identity,
+            )
+            for ev in payload.events:
+                store.write_tool_call(
+                    session_id=session_id,
+                    tool_id=ev.tool_id,
+                    arguments=ev.arguments,
+                    result_row_count=ev.result_rows,
+                    result_token_estimate=ev.result_token_estimate,
+                    duration_ms=ev.duration_ms,
+                    error=ev.error,
+                    connector_slug=slug,
+                )
+        return {"status": "ok", "session_id": session_id, "events": len(events)}
 
     @app.get("/v1/metrics/token-efficiency")
     async def token_efficiency() -> dict[str, Any]:

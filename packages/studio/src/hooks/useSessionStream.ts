@@ -17,6 +17,8 @@ export interface SessionEvent {
   result_token_estimate: number | null;
   duration_ms: number;
   error: string | null;
+  result_preview?: string | null;
+  reasoning?: string | null;
 }
 
 export interface AgentIdentity {
@@ -46,6 +48,10 @@ export interface AgentSession {
   error_count: number;
   signals?: SessionSignal[];
   summary?: string;
+  /** "mcp" — observed from the wire; "hook" — ingested from a harness hook. */
+  source?: string;
+  user_prompt?: string | null;
+  final_output?: string | null;
 }
 
 export const SESSIONS_QUERY_KEY = ["sessions"] as const;

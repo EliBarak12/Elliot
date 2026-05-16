@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from elliot_connector_runtime.session_tracker import SessionTracker, _estimate_tokens
+from elliot_connector_runtime.session_tracker import (
+    SessionEvent,
+    SessionTracker,
+    _estimate_tokens,
+)
 
 
 def test_session_full_lifecycle(tmp_path: Path) -> None:
@@ -169,6 +173,56 @@ def test_summary_describes_tool_path(tmp_path: Path) -> None:
 
     summary = tracker.tail(1)[0]["summary"]
     assert summary == "list_animals → get_animal"
+
+
+def test_append_ingested_creates_hook_session(tmp_path: Path) -> None:
+    """Hook-ingested traces carry reasoning, prompt and final output."""
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    identity = {"client": "claude-code", "client_version": "1.x", "model": "claude-opus-4-7"}
+    events = [
+        SessionEvent(
+            ts=1.0,
+            type="tool_call",
+            tool_id="list_animals",
+            arguments={"species": "dog"},
+            result_rows=2,
+            duration_ms=12.0,
+            reasoning="I should list the animals.",
+        )
+    ]
+    session = tracker.append_ingested(
+        "claude-code:abc",
+        identity,
+        events,
+        user_prompt="show me the dogs",
+        final_output="Here are the dogs.",
+    )
+    assert session.source == "hook"
+    assert session.user_prompt == "show me the dogs"
+    assert session.final_output == "Here are the dogs."
+
+    out = tracker.tail(1)[0]
+    assert out["agent_identity"]["client"] == "claude-code"
+    assert out["events"][0]["reasoning"] == "I should list the animals."
+    assert out["user_prompt"] == "show me the dogs"
+
+
+def test_append_ingested_accumulates_across_calls(tmp_path: Path) -> None:
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    ev = lambda tid: SessionEvent(ts=1.0, type="tool_call", tool_id=tid)  # noqa: E731
+    tracker.append_ingested("codex:run", {"client": "codex"}, [ev("a")])
+    tracker.append_ingested("codex:run", {"client": "codex"}, [ev("b")])
+    out = tracker.tail(1)[0]
+    assert out["total_tool_calls"] == 2
+    assert out["source"] == "hook"
+
+
+def test_result_preview_recorded_for_tool_call(tmp_path: Path) -> None:
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    sid = tracker.start_session(session_id="s")
+    tracker.record_tool_call(sid, "fetch", {}, 1, [{"name": "Rex"}], 5.0)
+    preview = tracker.tail(1)[0]["events"][0]["result_preview"]
+    assert preview is not None and "Rex" in preview
 
 
 def test_subscribe_receives_published_updates(tmp_path: Path) -> None:

@@ -150,6 +150,40 @@ def test_sessions_stream_serves_sse_snapshot(consumer_session: StackEndpoints) -
     assert len(snapshot) == 1
 
 
+def test_hook_ingest_appears_in_console(consumer_session: StackEndpoints) -> None:
+    """A harness hook adapter's POST surfaces as a hook session with reasoning."""
+    from elliot_core.trace.hook_adapter import normalize
+
+    # Exactly what a Claude Code PostToolUse hook hands the adapter.
+    raw = {
+        "hook_event_name": "PostToolUse",
+        "session_id": "claude-run-1",
+        "tool_name": "mcp__elliot__list_active_enterprise_customers",
+        "tool_input": {},
+        "tool_response": '{"rows":[{"id":1,"name":"Acme"}]}',
+    }
+    payload = normalize("claude-code", raw)
+    assert payload is not None
+    payload["events"][0]["reasoning"] = "I need the enterprise customer list to answer this."
+    payload["model"] = "claude-opus-4-7"
+    payload["user_prompt"] = "Who are our active enterprise customers?"
+    payload["final_output"] = "You have one active enterprise customer: Acme."
+
+    resp = httpx.post(f"{RUNTIME_URL}/v1/trace/ingest", json=payload, timeout=10)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "ok"
+
+    sessions = httpx.get(f"{RUNTIME_URL}/v1/sessions", timeout=10).json()
+    hook_sessions = [s for s in sessions if s.get("source") == "hook"]
+    assert len(hook_sessions) == 1, "hook-ingested session did not reach the console feed"
+    hooked = hook_sessions[0]
+    assert hooked["agent_identity"]["client"] == "claude-code"
+    assert hooked["agent_identity"]["model"] == "claude-opus-4-7"
+    assert hooked["user_prompt"] == "Who are our active enterprise customers?"
+    assert hooked["final_output"].startswith("You have one active enterprise customer")
+    assert hooked["events"][0]["reasoning"].startswith("I need the enterprise customer list")
+
+
 @pytest.mark.skipif(sync_playwright is None, reason="playwright is not importable")
 def test_agent_console_screenshot(consumer_session: StackEndpoints) -> None:
     """Render /console in Chromium, assert the session shows, and screenshot it."""
@@ -164,10 +198,17 @@ def test_agent_console_screenshot(consumer_session: StackEndpoints) -> None:
         page = context.new_page()
         try:
             page.goto(f"{studio_url}/console", wait_until="domcontentloaded", timeout=20_000)
-            row = page.get_by_test_id("session-row").first
-            row.wait_for(state="visible", timeout=20_000)
-            row.click()  # expand to reveal the per-step trace
-            page.wait_for_timeout(1_200)
+            rows = page.get_by_test_id("session-row")
+            rows.first.wait_for(state="visible", timeout=20_000)
+            # Expand every session to reveal the per-step trace.
+            for i in range(rows.count()):
+                rows.nth(i).click()
+            page.wait_for_timeout(600)
+            # Expand the first tool-call step to reveal input / output / reasoning.
+            events = page.get_by_test_id("event-row")
+            if events.count() > 0:
+                events.first.click()
+            page.wait_for_timeout(900)
             page.screenshot(path=str(shot), full_page=True)
         finally:
             context.close()

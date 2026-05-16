@@ -33,6 +33,11 @@ class SessionEvent:
     result_token_estimate: int | None = None
     duration_ms: float = 0.0
     error: str | None = None
+    # A short, bounded preview of what the tool returned (the call's output).
+    result_preview: str | None = None
+    # The agent's reasoning around this call — only populated by a harness
+    # hook adapter (Claude Code etc.); never available from MCP traffic.
+    reasoning: str | None = None
 
 
 @dataclass
@@ -43,6 +48,12 @@ class AgentSession:
     agent_identity: dict[str, Any] | None = None
     events: list[SessionEvent] = field(default_factory=list)
     last_activity: float = 0.0
+    # "mcp" — observed from the wire; "hook" — ingested from a harness hook.
+    source: str = "mcp"
+    # The user's prompt and the agent's final answer — only a harness hook
+    # adapter can supply these; MCP traffic never carries them.
+    user_prompt: str | None = None
+    final_output: str | None = None
 
     def __post_init__(self) -> None:
         if not self.last_activity:
@@ -153,6 +164,9 @@ class AgentSession:
             "last_activity": self.last_activity,
             "agent_hint": self.agent_hint,
             "agent_identity": self.agent_identity,
+            "source": self.source,
+            "user_prompt": self.user_prompt,
+            "final_output": self.final_output,
             "events": [
                 {
                     "ts": e.ts,
@@ -163,6 +177,8 @@ class AgentSession:
                     "result_token_estimate": e.result_token_estimate,
                     "duration_ms": round(e.duration_ms, 2),
                     "error": e.error,
+                    "result_preview": e.result_preview,
+                    "reasoning": e.reasoning,
                 }
                 for e in self.events
             ],
@@ -181,6 +197,25 @@ def _estimate_tokens(data: Any) -> int:
         return max(1, len(json.dumps(data, default=str)) // 4)
     except Exception:
         return 0
+
+
+_PREVIEW_MAX_CHARS = 800
+
+
+def _result_preview(data: Any) -> str | None:
+    """A short, bounded preview of a tool's output for the console.
+
+    Only the first few rows are kept and the whole thing is capped — enough
+    for a user to see *what* came back without dumping a full result set.
+    """
+    try:
+        sample = data[:3] if isinstance(data, list) else data
+        text = json.dumps(sample, default=str)
+    except Exception:
+        return None
+    if len(text) > _PREVIEW_MAX_CHARS:
+        return text[:_PREVIEW_MAX_CHARS] + "…"
+    return text
 
 
 class SessionTracker:
@@ -315,6 +350,7 @@ class SessionTracker:
                     result_token_estimate=_estimate_tokens(result_data),
                     duration_ms=duration_ms,
                     error=error,
+                    result_preview=_result_preview(result_data),
                 )
             )
             session.last_activity = time.time()
@@ -326,6 +362,49 @@ class SessionTracker:
             error=error,
         )
         self._publish(session)
+
+    def append_ingested(
+        self,
+        session_id: str,
+        agent_identity: dict[str, Any] | None,
+        events: list[SessionEvent],
+        *,
+        user_prompt: str | None = None,
+        final_output: str | None = None,
+    ) -> AgentSession:
+        """Append hook-sourced events to a session, creating it if new.
+
+        This is how a harness hook adapter (Claude Code, Codex, Cursor) feeds
+        the console — it carries the agent's reasoning, the user's prompt and
+        the agent's final answer, none of which MCP traffic can see.
+        """
+        with self._lock:
+            session = self._active.get(session_id)
+            if session is None:
+                session = AgentSession(
+                    session_id=session_id,
+                    started_at=time.time(),
+                    agent_hint=(agent_identity or {}).get("client"),
+                    agent_identity=agent_identity,
+                    source="hook",
+                )
+                self._active[session_id] = session
+            if agent_identity:
+                session.agent_identity = agent_identity
+            if user_prompt:
+                session.user_prompt = user_prompt
+            if final_output:
+                session.final_output = final_output
+            session.events.extend(events)
+            session.last_activity = time.time()
+        log.info(
+            "session.ingested",
+            session_id=session_id,
+            events=len(events),
+            client=(agent_identity or {}).get("client"),
+        )
+        self._publish(session)
+        return session
 
     def close_session(self, session_id: str) -> AgentSession | None:
         with self._lock:

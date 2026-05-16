@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import json
 import os
+import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -30,6 +31,9 @@ try:
 except Exception:  # pragma: no cover
     sync_playwright = None  # type: ignore[assignment]
 
+from elliot_core.trace.installer import install
+
+from .helpers.claude_agent import claude_is_available, run_claude_agent
 from .helpers.mcp_client import call_tool_json, open_mcp_session
 from .helpers.stack import StackEndpoints, elliot_stack
 from .test_layer1_mcp_protocol import BUSINESS_TOOLS, SOURCE_DEFS
@@ -210,9 +214,65 @@ def test_agent_console_screenshot(consumer_session: StackEndpoints) -> None:
                 events.first.click()
             page.wait_for_timeout(900)
             page.screenshot(path=str(shot), full_page=True)
+
+            # Metrics page — the per-harness breakdown lives here.
+            page.goto(f"{studio_url}/metrics", wait_until="domcontentloaded", timeout=20_000)
+            page.wait_for_timeout(2_500)
+            metrics_shot = artifacts / "metrics.png"
+            page.screenshot(path=str(metrics_shot), full_page=True)
+            print(f"\nMETRICS_SCREENSHOT={metrics_shot}")
         finally:
             context.close()
             browser.close()
 
     assert shot.exists() and shot.stat().st_size > 0
     print(f"\nAGENT_CONSOLE_SCREENSHOT={shot}")
+
+
+@pytest.mark.skipif(not claude_is_available(), reason="claude CLI not installed")
+def test_claude_code_hook_captures_live_run(consumer_session: StackEndpoints) -> None:
+    """Install the Elliot trace hook, run a real headless `claude` consumer
+    against the runtime, and confirm the hook shipped the run to the console.
+
+    This is the live counterpart to the unit-tested adapter — it proves the
+    installer + hook_adapter + /v1/trace/ingest path works with the real
+    Claude Code hook machinery, not just synthetic payloads.
+    """
+    workspace = consumer_session.workspace
+    hooks_file = workspace / "elliot-trace-hooks.json"
+    install("claude-code", settings_path=hooks_file, python=sys.executable)
+
+    before = {
+        s["session_id"]
+        for s in httpx.get(f"{RUNTIME_URL}/v1/sessions", timeout=10).json()
+        if s.get("source") == "hook"
+    }
+
+    os.environ["ELLIOT_RUNTIME_URL"] = RUNTIME_URL
+    try:
+        run = run_claude_agent(
+            "Call the list_active_enterprise_customers tool and tell me how many "
+            "enterprise customers there are.",
+            mcp_url=RUNTIME_MCP_URL,
+            workspace=workspace,
+            role="consumer",
+            server_name="elliot",
+            settings_path=hooks_file,
+            max_budget_usd=0.60,
+            timeout_seconds=240,
+        )
+    finally:
+        os.environ.pop("ELLIOT_RUNTIME_URL", None)
+
+    assert run.succeeded, f"claude consumer run failed: {run.result_text[:300]}"
+
+    sessions = httpx.get(f"{RUNTIME_URL}/v1/sessions", timeout=10).json()
+    new_hook = [
+        s
+        for s in sessions
+        if s.get("source") == "hook"
+        and s["session_id"] not in before
+        and (s.get("agent_identity") or {}).get("client") == "claude-code"
+    ]
+    assert new_hook, "the installed Claude Code hook did not ship the run to /v1/trace/ingest"
+    assert new_hook[0]["total_tool_calls"] >= 1

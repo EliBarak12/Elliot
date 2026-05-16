@@ -852,6 +852,12 @@ def create_app(
         ]
         return {"tools": tools, "sessions_analysed": len(store.recent_sessions(200))}
 
+    @app.get("/v1/metrics/harnesses")
+    async def harness_metrics() -> dict[str, Any]:
+        """Per-harness rollup — how Claude Code / Codex / Cursor / MCP traffic
+        each exercise this connector."""
+        return {"harnesses": store.harness_breakdown()}
+
     @app.post("/v1/observations/prune")
     async def prune_observations() -> dict[str, int]:
         return {"deleted": store.prune()}

@@ -39,6 +39,19 @@ interface TokenEfficiencyResponse {
   tools: TokenEfficiencyRow[];
 }
 
+interface HarnessRow {
+  harness: string;
+  sessions: number;
+  tool_calls: number;
+  errors: number;
+  tokens: number;
+  avg_duration_ms: number;
+}
+
+interface HarnessResponse {
+  harnesses: HarnessRow[];
+}
+
 function tokenRiskVariant(risk: TokenEfficiencyRow["risk"]) {
   if (risk === "high") return "destructive";
   if (risk === "medium") return "warning";
@@ -103,6 +116,13 @@ export default function MetricsPage() {
     refetchInterval: 30_000,
   });
   const efficiencyTools = efficiencyRaw?.tools ?? [];
+
+  const { data: harnessRaw } = useQuery<HarnessResponse>({
+    queryKey: ["harness-metrics"],
+    queryFn: () => httpJson<HarnessResponse>("/v1/metrics/harnesses"),
+    refetchInterval: 30_000,
+  });
+  const harnesses = harnessRaw?.harnesses ?? [];
 
   const handleRefresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["metrics"] });
@@ -250,6 +270,87 @@ export default function MetricsPage() {
             </CardContent>
           </Card>
         </>
+      )}
+
+      {harnesses.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Activity className="h-4 w-4 text-primary" />
+              By agent harness
+            </CardTitle>
+            <CardDescription>
+              How each coding agent — Claude Code, Codex, Cursor, raw MCP — exercises this
+              connector.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="px-0 pb-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border/60">
+                    <th className="text-left py-2 px-5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
+                      Harness
+                    </th>
+                    <th className="text-right py-2 px-5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
+                      Sessions
+                    </th>
+                    <th className="text-right py-2 px-5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
+                      Tool calls
+                    </th>
+                    <th className="text-right py-2 px-5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
+                      Errors
+                    </th>
+                    <th className="text-right py-2 px-5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
+                      Tokens
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {harnesses.map((h) => (
+                    <tr
+                      key={h.harness}
+                      data-testid="harness-row"
+                      className="border-b border-border/40 last:border-0 hover:bg-muted/30"
+                    >
+                      <td className="py-2.5 px-5">
+                        <Badge variant="outline" className="font-mono text-2xs">
+                          {h.harness}
+                        </Badge>
+                      </td>
+                      <td className="text-right py-2.5 px-5 text-xs tabular-nums">
+                        {h.sessions.toLocaleString()}
+                      </td>
+                      <td className="text-right py-2.5 px-5 text-xs tabular-nums">
+                        {h.tool_calls.toLocaleString()}
+                      </td>
+                      <td className="text-right py-2.5 px-5">
+                        <Badge
+                          variant={h.errors > 0 ? "destructive" : "success"}
+                          className="tabular-nums"
+                        >
+                          {h.errors}
+                        </Badge>
+                      </td>
+                      <td
+                        className={cn(
+                          "text-right py-2.5 px-5 text-xs tabular-nums font-medium",
+                          h.tokens > 1000
+                            ? "text-destructive"
+                            : h.tokens > 300
+                              ? "text-warning"
+                              : "text-success"
+                        )}
+                      >
+                        {h.tokens.toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {efficiencyTools.length > 0 && (

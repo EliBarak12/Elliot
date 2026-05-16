@@ -24,6 +24,22 @@ def test_write_and_read_tool_call(store: ObservationStore) -> None:
     assert calls[0]["result_token_estimate"] == 87
 
 
+def test_harness_breakdown_groups_by_agent_client(store: ObservationStore) -> None:
+    store.open_session("s1", agent_identity={"client": "claude-code"})
+    store.write_tool_call("s1", "list", {}, 1, 50, 10.0)
+    store.write_tool_call("s1", "list", {}, 0, 0, 10.0, error="boom")
+    store.open_session("s2", agent_identity={"client": "cursor"})
+    store.write_tool_call("s2", "list", {}, 1, 30, 10.0)
+
+    breakdown = {row["harness"]: row for row in store.harness_breakdown()}
+    assert breakdown["claude-code"]["tool_calls"] == 2
+    assert breakdown["claude-code"]["errors"] == 1
+    assert breakdown["claude-code"]["tokens"] == 50
+    assert breakdown["claude-code"]["sessions"] == 1
+    assert breakdown["cursor"]["tool_calls"] == 1
+    assert breakdown["cursor"]["errors"] == 0
+
+
 def test_session_lifecycle(store: ObservationStore) -> None:
     store.open_session("abc", agent_hint="test-agent")
     store.write_tool_call("abc", "get_pet", {"id": 1}, 1, 22, 12.0)

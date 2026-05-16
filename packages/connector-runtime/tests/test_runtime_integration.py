@@ -456,3 +456,205 @@ def test_prune_endpoint(client: TestClient) -> None:
     resp = client.post("/v1/observations/prune")
     assert resp.status_code == 200
     assert "deleted" in resp.json()
+
+
+def test_agent_identity_middleware_registered(app) -> None:
+    """The AX identity middleware must be wired so tool handlers can attribute
+    calls to the actual client/model rather than a generic 'mcp' bucket.
+    """
+    from elliot_core.http_middleware import AgentIdentityMiddleware
+
+    middleware_types = [m.cls for m in app.user_middleware]
+    assert AgentIdentityMiddleware in middleware_types
+
+
+def test_agent_identity_recorded_via_middleware(tmp_path: Path) -> None:
+    """End-to-end: a request with an AX-format User-Agent populates the parsed
+    identity on the session row written by an MCP tool call.
+    """
+    import asyncio
+
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.observation_store import ObservationStore as _Store
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_connector_runtime.session_tracker import SessionTracker as _Tracker
+    from elliot_core.agent_identity import (
+        AgentIdentity,
+        reset_current_agent_identity,
+        set_current_agent_identity,
+    )
+
+    cfg_path = tmp_path / "pets.connector.json"
+    cfg_path.write_text(json.dumps(MINIMAL_CONNECTOR))
+    sessions_path = tmp_path / "sessions.ndjson"
+    db_url = f"sqlite:///{tmp_path / 'obs.db'}"
+
+    config = ConnectorCache().get(cfg_path)
+    executor = ToolExecutor(config, secrets={})
+    tracker = _Tracker(sessions_path)
+    store = _Store(db_url)
+
+    async def _fake(tool, args):  # type: ignore[no-untyped-def]
+        from elliot_core.types.tool import ToolResult
+
+        return ToolResult(rows=[{"id": 1}], meta={})
+
+    executor.execute = _fake  # type: ignore[assignment]
+
+    mcp = create_runtime_server(config, executor, tracker=tracker, store=store)
+
+    class _Ctx:
+        request_id = "ax-req-001"
+
+        async def info(self, *a, **k):  # type: ignore[no-untyped-def]
+            pass
+
+        async def warning(self, *a, **k):  # type: ignore[no-untyped-def]
+            pass
+
+    mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
+
+    identity = AgentIdentity(
+        client="claude-code",
+        client_version="1.42.0",
+        model="claude-opus-4-7",
+        user_agent="agent-claude-code/1.42.0 claude-opus-4-7",
+    )
+    token = set_current_agent_identity(identity)
+    try:
+        tool = mcp._tool_manager.get_tool("list_animals")
+        assert tool is not None
+        asyncio.run(tool.fn())
+    finally:
+        reset_current_agent_identity(token)
+
+    sessions = store.recent_sessions(5)
+    assert sessions[0]["agent_client"] == "claude-code"
+    assert sessions[0]["agent_model"] == "claude-opus-4-7"
+    assert sessions[0]["agent_hint"].startswith("claude-code/")
+
+
+def test_destructive_tool_requires_confirmation_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With ELLIOT_REQUIRE_DESTRUCTIVE_CONFIRMATION on, a WRITE tool must reject
+    calls that don't pass confirm=true with a CONFIRMATION_REQUIRED error, and
+    must accept calls that do.
+    """
+    import asyncio
+
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+
+    monkeypatch.setenv("ELLIOT_REQUIRE_DESTRUCTIVE_CONFIRMATION", "true")
+
+    write_connector = {
+        **MINIMAL_CONNECTOR,
+        "tools": [
+            {
+                "id": "delete_animal",
+                "name": "Delete animal",
+                "description": "Delete an animal by id",
+                "category": "WRITE",
+                "sql": "DELETE FROM animals WHERE id = :id",
+                "parameters": [
+                    {"name": "id", "type": "integer", "required": True, "description": "Animal id"}
+                ],
+            }
+        ],
+    }
+    cfg_path = tmp_path / "write.connector.json"
+    cfg_path.write_text(json.dumps(write_connector))
+    config = ConnectorCache().get(cfg_path)
+    executor = ToolExecutor(config, secrets={})
+
+    captured_args: dict[str, dict] = {}
+
+    async def _fake(tool, args):  # type: ignore[no-untyped-def]
+        from elliot_core.types.tool import ToolResult
+
+        captured_args["last"] = args
+        return ToolResult(rows=[{"deleted": args.get("id")}], meta={})
+
+    executor.execute = _fake  # type: ignore[assignment]
+
+    mcp = create_runtime_server(config, executor)
+
+    class _Ctx:
+        request_id = "confirm-req"
+
+        async def info(self, *a, **k):  # type: ignore[no-untyped-def]
+            pass
+
+        async def warning(self, *a, **k):  # type: ignore[no-untyped-def]
+            pass
+
+    mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
+
+    tool = mcp._tool_manager.get_tool("delete_animal")
+    assert tool is not None
+
+    # The handler must expose a `confirm` parameter so agents can discover the
+    # gate from the tool schema.
+    import inspect as _inspect
+
+    sig = _inspect.signature(tool.fn)
+    assert "confirm" in sig.parameters
+
+    with pytest.raises(ValueError, match="CONFIRMATION_REQUIRED"):
+        asyncio.run(tool.fn(id=1))
+    assert "last" not in captured_args  # executor was not called
+
+    # Re-call with confirm=true → succeeds and executor sees the original args
+    # (no `confirm` kwarg leaks through).
+    asyncio.run(tool.fn(id=1, confirm=True))
+    assert captured_args["last"] == {"id": 1}
+
+
+def test_read_tool_does_not_require_confirmation_even_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The confirmation gate is scoped to WRITE/ACTION; READ tools stay open."""
+    import asyncio
+
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+
+    monkeypatch.setenv("ELLIOT_REQUIRE_DESTRUCTIVE_CONFIRMATION", "true")
+
+    cfg_path = tmp_path / "pets.connector.json"
+    cfg_path.write_text(json.dumps(MINIMAL_CONNECTOR))
+    config = ConnectorCache().get(cfg_path)
+    executor = ToolExecutor(config, secrets={})
+
+    async def _fake(tool, args):  # type: ignore[no-untyped-def]
+        from elliot_core.types.tool import ToolResult
+
+        return ToolResult(rows=[{"id": 1}], meta={})
+
+    executor.execute = _fake  # type: ignore[assignment]
+
+    mcp = create_runtime_server(config, executor)
+
+    class _Ctx:
+        request_id = "read-req"
+
+        async def info(self, *a, **k):  # type: ignore[no-untyped-def]
+            pass
+
+        async def warning(self, *a, **k):  # type: ignore[no-untyped-def]
+            pass
+
+    mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
+
+    tool = mcp._tool_manager.get_tool("list_animals")
+    assert tool is not None
+    import inspect as _inspect
+
+    sig = _inspect.signature(tool.fn)
+    assert "confirm" not in sig.parameters
+    # No exception
+    asyncio.run(tool.fn())

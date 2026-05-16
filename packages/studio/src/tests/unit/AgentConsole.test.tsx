@@ -100,4 +100,22 @@ describe("AgentConsole", () => {
       await screen.findByText(/No agent sessions yet/i)
     ).toBeInTheDocument();
   });
+
+  it("renders structured agent client and model when present", async () => {
+    const session = {
+      ...SESSION_OK,
+      agent_hint: "claude-code claude-opus-4-7",
+      agent_identity: {
+        client: "claude-code",
+        client_version: "1.42.0",
+        model: "claude-opus-4-7",
+        modality: null,
+        user_agent: "agent-claude-code/1.42.0 claude-opus-4-7",
+      },
+    };
+    renderConsole([session]);
+    await screen.findByTestId("session-row");
+    expect(screen.getByText("claude-code/1.42.0")).toBeInTheDocument();
+    expect(screen.getByText("claude-opus-4-7")).toBeInTheDocument();
+  });
 });

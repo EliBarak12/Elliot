@@ -1,0 +1,39 @@
+name: Feature request
+description: A change in Elliot's behaviour, API, or surface area.
+title: "feat: "
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What can't you do today? Who is it blocking?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What should Elliot do instead? Be concrete — function signatures, CLI flags, env vars, schema additions.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you've tried, other tools that solve this, why those aren't enough.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - core (types, linter, query builder)
+        - mcp-plugin
+        - connector-runtime
+        - studio
+        - templates / connectors
+        - docs
+        - CI / release
+    validations:
+      required: true

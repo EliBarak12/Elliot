@@ -8,6 +8,7 @@ from typing import Any
 
 import structlog
 from sqlalchemy import Column, Float, Integer, String, Text, create_engine, text
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import DeclarativeBase, Session
 
 log = structlog.get_logger(__name__)
@@ -26,6 +27,11 @@ class _AgentSession(_Base):
     started_at = Column(Float, nullable=False)
     ended_at = Column(Float)
     agent_hint = Column(String(255))
+    agent_client = Column(String(64), index=True)
+    agent_client_version = Column(String(64))
+    agent_model = Column(String(128), index=True)
+    agent_modality = Column(String(64))
+    user_agent = Column(String(512))
     connector_slug = Column(String(128))
     total_tool_calls = Column(Integer, default=0)
     total_tokens_estimated = Column(Integer, default=0)
@@ -65,7 +71,34 @@ class ObservationStore:
             connect_args=connect_args,
         )
         _Base.metadata.create_all(self._engine)
+        self._migrate_agent_identity_columns()
         log.info("observation_store.ready", db_url=db_url.split("@")[-1])
+
+    def _migrate_agent_identity_columns(self) -> None:
+        """Add the structured-identity columns to pre-existing databases.
+
+        SQLAlchemy ``create_all`` is idempotent for missing tables but does
+        not retro-fit columns onto a table that already exists, so an Elliot
+        deployment upgraded across this change would otherwise miss the new
+        ``agent_client`` / ``agent_model`` columns and silently lose data.
+        """
+        inspector = sa_inspect(self._engine)
+        if "agent_sessions" not in inspector.get_table_names():
+            return
+        existing = {col["name"] for col in inspector.get_columns("agent_sessions")}
+        additions = [
+            ("agent_client", "VARCHAR(64)"),
+            ("agent_client_version", "VARCHAR(64)"),
+            ("agent_model", "VARCHAR(128)"),
+            ("agent_modality", "VARCHAR(64)"),
+            ("user_agent", "VARCHAR(512)"),
+        ]
+        with self._engine.begin() as conn:
+            for col_name, col_type in additions:
+                if col_name not in existing:
+                    conn.execute(
+                        text(f"ALTER TABLE agent_sessions ADD COLUMN {col_name} {col_type}")
+                    )
 
     # ------------------------------------------------------------------ writes
 
@@ -101,7 +134,9 @@ class ObservationStore:
         session_id: str,
         agent_hint: str | None = None,
         connector_slug: str | None = None,
+        agent_identity: dict[str, Any] | None = None,
     ) -> None:
+        identity = agent_identity or {}
         with Session(self._engine) as db:
             if db.query(_AgentSession).filter_by(session_id=session_id).first() is None:
                 db.add(
@@ -110,6 +145,11 @@ class ObservationStore:
                         started_at=time.time(),
                         agent_hint=agent_hint,
                         connector_slug=connector_slug,
+                        agent_client=identity.get("client"),
+                        agent_client_version=identity.get("client_version"),
+                        agent_model=identity.get("model"),
+                        agent_modality=identity.get("modality"),
+                        user_agent=identity.get("user_agent"),
                     )
                 )
                 db.commit()

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and discussions
+    url: https://github.com/EliBarak12/Elliot/discussions
+    about: How do I connect X? Design questions, ideas, help — start a Discussion instead of an Issue.
+  - name: Documentation
+    url: https://elibarak12.github.io/Elliot/
+    about: Quickstart, concepts, the five principles, and AX principles.

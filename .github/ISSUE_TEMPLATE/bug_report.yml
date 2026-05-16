@@ -1,0 +1,58 @@
+name: Bug report
+description: Something in Elliot is broken or behaves unexpectedly.
+title: "bug: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please fill in as much as you can — a minimal reproducer is worth ten paragraphs of description.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what did you observe?
+      placeholder: |
+        Steps:
+        1. Ran `make dev`
+        2. Called tool `list_animals` from Claude Code
+        Expected: rows returned
+        Observed: VALIDATION_MISSING_PARAMETER on species
+    validations:
+      required: true
+  - type: input
+    id: elliot-version
+    attributes:
+      label: Elliot version / commit
+      description: Output of `git rev-parse --short HEAD` if running from source, or the version string from `elliot --version`.
+      placeholder: "e.g. 0.1.0 or 50c9c8c"
+    validations:
+      required: true
+  - type: dropdown
+    id: agent-client
+    attributes:
+      label: Agent client
+      description: Which MCP client surfaced the bug?
+      options:
+        - Claude Code
+        - Cursor
+        - Codex
+        - Windsurf
+        - VS Code Copilot
+        - Direct curl / other
+        - Not applicable
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: NDJSON snippets from `.elliot/audit.ndjson` or `.elliot/sessions.ndjson`, or Studio screenshots. Redact secrets.
+      render: text
+  - type: input
+    id: os
+    attributes:
+      label: OS / Python / Node
+      placeholder: "macOS 14.5 · Python 3.13.2 · pnpm 10.x"
+    validations:
+      required: true

@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-label="Elliot — the AX platform. Build your connector, make your product agent-ready.">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b0d10"/>
+      <stop offset="100%" stop-color="#14171c"/>
+    </linearGradient>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#14e5df"/>
+      <stop offset="100%" stop-color="#008f8b"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="22%" cy="18%" r="65%">
+      <stop offset="0%" stop-color="#00cec8" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#00cec8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#halo)"/>
+
+  <g stroke="#ffffff" stroke-opacity="0.05" stroke-width="1">
+    <path d="M0 160 H1280 M0 320 H1280 M0 480 H1280"/>
+    <path d="M213 0 V640 M426 0 V640 M640 0 V640 M853 0 V640 M1066 0 V640"/>
+  </g>
+
+  <!-- Mark + wordmark -->
+  <g transform="translate(80,80)">
+    <rect x="0" y="0" width="96" height="96" rx="22" fill="url(#brand)"/>
+    <path d="M24 22h48v10H37v11h29v10H37v11h37v10H24z" fill="#ffffff"/>
+  </g>
+  <text x="200" y="148" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Display',Inter,sans-serif"
+        font-size="76" font-weight="700" fill="#ffffff" letter-spacing="-2.4">Elliot</text>
+
+  <!-- Category chip -->
+  <g transform="translate(200,168)">
+    <rect x="0" y="0" width="232" height="32" rx="16" fill="#ffffff" fill-opacity="0.08" stroke="#00cec8" stroke-opacity="0.5"/>
+    <text x="116" y="22" text-anchor="middle" font-family="ui-monospace,SF Mono,Menlo" font-size="14" fill="#00cec8" letter-spacing="0.6">
+      CONNECTOR · AX PLATFORM
+    </text>
+  </g>
+
+  <!-- Headline -->
+  <text x="80" y="320" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Display',Inter,sans-serif"
+        font-size="58" font-weight="700" fill="#ffffff" letter-spacing="-2">Build your <tspan fill="#00cec8">Connector</tspan>.</text>
+  <text x="80" y="384" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Display',Inter,sans-serif"
+        font-size="58" font-weight="700" fill="#ffffff" letter-spacing="-2">Make your product agent-ready.</text>
+
+  <!-- Subhead -->
+  <text x="80" y="448" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Display',Inter,sans-serif"
+        font-size="24" font-weight="400" fill="#ffffff" fill-opacity="0.72" letter-spacing="-0.3">
+    The AX platform for any API or database. Minimum tokens. Clean errors. Full observability.
+  </text>
+
+  <!-- Agent-client compatibility chips -->
+  <g transform="translate(80,500)" font-family="ui-monospace,SF Mono,Menlo" font-size="15">
+    <g>
+      <rect x="0" y="0" width="138" height="40" rx="20" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.16"/>
+      <text x="69" y="26" text-anchor="middle" fill="#ffffff" fill-opacity="0.92">Claude Code</text>
+    </g>
+    <g transform="translate(150,0)">
+      <rect x="0" y="0" width="92" height="40" rx="20" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.16"/>
+      <text x="46" y="26" text-anchor="middle" fill="#ffffff" fill-opacity="0.92">Cursor</text>
+    </g>
+    <g transform="translate(254,0)">
+      <rect x="0" y="0" width="88" height="40" rx="20" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.16"/>
+      <text x="44" y="26" text-anchor="middle" fill="#ffffff" fill-opacity="0.92">Codex</text>
+    </g>
+    <g transform="translate(354,0)">
+      <rect x="0" y="0" width="112" height="40" rx="20" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.16"/>
+      <text x="56" y="26" text-anchor="middle" fill="#ffffff" fill-opacity="0.92">Windsurf</text>
+    </g>
+    <g transform="translate(478,0)">
+      <rect x="0" y="0" width="148" height="40" rx="20" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.16"/>
+      <text x="74" y="26" text-anchor="middle" fill="#ffffff" fill-opacity="0.92">VS Code Copilot</text>
+    </g>
+  </g>
+
+  <!-- URL chip bottom right -->
+  <g transform="translate(896,576)">
+    <rect x="0" y="0" width="304" height="40" rx="20" fill="#ffffff" fill-opacity="0.08" stroke="#00cec8" stroke-opacity="0.4"/>
+    <circle cx="22" cy="20" r="6" fill="#00cec8"/>
+    <text x="42" y="26" font-family="ui-monospace,SF Mono,Menlo" font-size="15" fill="#ffffff" fill-opacity="0.92">
+      github.com/EliBarak12/Elliot
+    </text>
+  </g>
+</svg>

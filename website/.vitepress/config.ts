@@ -66,6 +66,7 @@ export default defineConfig({
             { text: "Introduction", link: "/docs/introduction" },
             { text: "Quickstart", link: "/docs/quickstart" },
             { text: "The five principles", link: "/docs/five-principles" },
+            { text: "Agent Experience (AX)", link: "/docs/ax-principles" },
           ],
         },
         {

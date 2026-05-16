@@ -105,8 +105,13 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             ``elliot_discover_source`` (quote with double quotes:
             ``FROM "users"``).
           * Flattener child tables are ``{source}_{field}`` — e.g. nested
-            arrays in ``orders.line_items[]`` produce ``orders_line_items``,
-            joinable on ``_parent_id``.
+            arrays in ``orders.line_items[]`` produce ``orders_line_items``.
+          * Every materialized table carries an auto-injected ``_id``
+            (sequential within the table). Child tables additionally carry
+            ``_parent_id`` (the parent row's ``_id``) and ``_index`` (the
+            child's position in the parent array). JOIN child to parent on
+            ``child._parent_id = parent._id`` — this is the only reliable
+            link when the upstream JSON has no natural foreign key.
 
         ``source_ids`` is inferred from the SQL — only the source whose
         tables appear after ``FROM`` / ``JOIN`` will be materialized at

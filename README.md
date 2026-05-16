@@ -57,7 +57,7 @@ Add to your Cursor MCP config:
 ```
 
 </td></tr>
-<tr><th>Codex</th><th>Windsurf / VS Code Copilot</th></tr>
+<tr><th>Codex</th><th>OpenClaw</th></tr>
 <tr><td>
 
 ```
@@ -67,7 +67,7 @@ codex plugin marketplace add EliBarak12/Elliot
 
 </td><td>
 
-Pointed to `http://localhost:3000/mcp/` by `elliot connect`, or by the same JSON snippet as Cursor.
+Pointed to `http://localhost:3000/mcp/` by `elliot connect`, which writes `~/.openclaw/openclaw.json` with the `streamable-http` transport.
 
 </td></tr>
 </table>

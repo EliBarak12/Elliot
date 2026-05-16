@@ -171,7 +171,10 @@ async def test_execute_read_full_returns_rows():
     rows = [{"id": 1, "name": "Widget"}]
     executor = ToolExecutor(_make_config(), fetch_source=_fake_fetch(rows))
     result = await executor.execute("list_items", {})
-    assert result.rows == rows
+    # Flattener now stamps every row with ``_id`` for cross-table joins; the
+    # business columns must still survive intact, so compare the projected
+    # subset rather than strict-equality.
+    assert [{k: v for k, v in r.items() if not k.startswith("_")} for r in result.rows] == rows
     assert result.meta["fetch_mode"] == "full"
 
 
@@ -274,7 +277,12 @@ async def test_execute_read_uses_source_table_name_for_sqlite():
     config = ConnectorConfig(name="t", slug="t", version="1.0.0", sources=[source], tools=[tool])
     executor = ToolExecutor(config, fetch_source=_fake_fetch(rows))
     result = await executor.execute("t", {})
-    assert result.rows == [{"total": 100}]
+    # Aggregation rows don't carry parent ``_id``/``_parent_id`` (the GROUP
+    # BY collapses the source rows), but defensively project just the
+    # business columns the test cares about.
+    assert [{k: v for k, v in r.items() if not k.startswith("_")} for r in result.rows] == [
+        {"total": 100}
+    ]
 
 
 # ── Passthrough mode ──────────────────────────────────────────────────────────

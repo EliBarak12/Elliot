@@ -15,13 +15,42 @@ _MAX_INLINE_KEYS = (
 
 
 def flatten(data: list[Any], table_name: str) -> FlattenResult:
-    """Flatten a list of JSON objects into SQLite-ready tables."""
+    """Flatten a list of JSON objects into SQLite-ready tables.
+
+    Each output row carries an ``_id`` (sequential within its table) and,
+    for child rows produced by a nested ``array-of-objects`` field, a
+    ``_parent_id`` pointing at the parent row's ``_id``. These columns
+    let connector authors write JOINs across the synthetic table tree
+    (``parent JOIN child ON child._parent_id = parent._id``) when the
+    upstream JSON has no natural foreign key — e.g.
+    ``insights[].teaserblocks[]`` where each teaserblock is anonymously
+    nested under its insight.
+    """
     warnings: list[FlattenWarning] = []
     child_tables: dict[str, list[dict[str, Any]]] = {}
+    # Per-table monotonic counter — produces stable, dense ``_id`` values
+    # without depending on SQLite's ``rowid`` (which the runtime cannot
+    # rely on across re-materialisations).
+    counters: dict[str, int] = {table_name: 0}
 
     primary_rows: list[dict[str, Any]] = []
     for item in data:
-        row = _flatten_obj(item, table_name, table_name, 0, frozenset(), child_tables, warnings)
+        counters[table_name] += 1
+        my_id = counters[table_name]
+        row = _flatten_obj(
+            item,
+            table_name,
+            table_name,
+            0,
+            frozenset(),
+            child_tables,
+            warnings,
+            parent_id=None,
+            my_id=my_id,
+            counters=counters,
+        )
+        # ``_id`` is the canonical column name agents write JOINs against.
+        row["_id"] = my_id
         primary_rows.append(row)
 
     primary_table = FlattenedTable(
@@ -56,7 +85,16 @@ def _flatten_obj(
     visited: frozenset[int],
     child_tables: dict[str, list[dict[str, Any]]],
     warnings: list[FlattenWarning],
+    *,
+    parent_id: int | None,
+    my_id: int,
+    counters: dict[str, int],
 ) -> dict[str, Any]:
+    """Flatten a single object. ``my_id`` is this row's ``_id`` value
+    (assigned by the caller before recursing); list-of-objects fields
+    pass it down as ``parent_id`` so each child row can reference its
+    specific parent. Nested-object fields inline into this row, so they
+    don't get their own id/parent_id."""
     if not isinstance(obj, dict):
         return {"value": _scalar(obj)}
 
@@ -72,11 +110,23 @@ def _flatten_obj(
 
     visited = visited | {id(obj)}
     row: dict[str, Any] = {}
+    if parent_id is not None:
+        row["_parent_id"] = parent_id
 
     for key, value in obj.items():
         col = safe_name(key)
         _process_field(
-            col, value, table_name, warning_path, depth, visited, row, child_tables, warnings
+            col,
+            value,
+            table_name,
+            warning_path,
+            depth,
+            visited,
+            row,
+            child_tables,
+            warnings,
+            my_id=my_id,
+            counters=counters,
         )
 
     return row
@@ -92,6 +142,9 @@ def _process_field(
     row: dict[str, Any],
     child_tables: dict[str, list[dict[str, Any]]],
     warnings: list[FlattenWarning],
+    *,
+    my_id: int,
+    counters: dict[str, int],
 ) -> None:
     field_path = f"{warning_path}.{col}"
 
@@ -131,8 +184,21 @@ def _process_field(
             row[col] = "[Circular]"
         else:
             child_table_name = f"{table_name}_{col}"
+            # Nested *object* (not array) — its fields inline into the
+            # current row, so it's not a separate table; pass ``my_id`` as
+            # both my_id and parent_id (any deeper list-of-objects under
+            # this object will still link back to the current row).
             sub = _flatten_obj(
-                value, child_table_name, field_path, depth + 1, visited, child_tables, warnings
+                value,
+                child_table_name,
+                field_path,
+                depth + 1,
+                visited,
+                child_tables,
+                warnings,
+                parent_id=None,
+                my_id=my_id,
+                counters=counters,
             )
             for sub_key, sub_val in sub.items():
                 row[f"{col}_{sub_key}"] = sub_val
@@ -164,8 +230,11 @@ def _process_field(
 
             if child_name not in child_tables:
                 child_tables[child_name] = []
+            counters.setdefault(child_name, 0)
 
             for idx, item in enumerate(items):
+                counters[child_name] += 1
+                child_id = counters[child_name]
                 child_row = _flatten_obj(
                     item,
                     child_name,
@@ -174,8 +243,13 @@ def _process_field(
                     visited,
                     child_tables,
                     warnings,
+                    parent_id=my_id,
+                    my_id=child_id,
+                    counters=counters,
                 )
-                child_tables[child_name].append({"_parent_id": None, "_index": idx, **child_row})
+                child_row["_id"] = child_id
+                child_row.setdefault("_index", idx)
+                child_tables[child_name].append(child_row)
     else:
         try:
             row[col] = json.dumps(value)

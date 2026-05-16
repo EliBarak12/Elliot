@@ -49,9 +49,23 @@ For each tool call `elliot_create_tool`:
 - Refer to source tables by the **logical name** you passed to
   `elliot_discover_source` (and quote with double quotes if it contains
   punctuation): `FROM "users"`, `FROM "purchase_orders"`.
+- **Flattener linkage columns**: every materialized table — primary or
+  child — carries an auto-injected `_id` (sequential within the table)
+  and every child table also carries a `_parent_id` pointing at its
+  parent's `_id`. JOIN through them when the upstream JSON has no
+  natural foreign key:
+  ```sql
+  -- e.g. insights[].teaserblocks[]: one teaserblock_count per insight
+  SELECT i.title, COUNT(t._id) AS teaserblock_count
+  FROM "insights" i
+  LEFT JOIN "insights_teaserblocks" t ON t._parent_id = i._id
+  GROUP BY i._id
+  ```
+  Child tables also carry `_index` (zero-based position within the
+  parent's array) — handy for "first item" lookups.
 - Flattener-produced child tables are named `{source}_{field}` — e.g. an
   `orders` source whose rows contain a `line_items[]` array gives you a
-  child table `orders_line_items` you can JOIN on `_parent_id`.
+  child table `orders_line_items` you can JOIN through `_parent_id`.
 
 Example good description:
 > "Search customers by name or email. Use before create_customer to avoid duplicates. Returns id, name, email, plan. Max 20 results."

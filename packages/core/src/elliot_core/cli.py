@@ -56,6 +56,42 @@ def _cmd_lint(args: argparse.Namespace) -> None:
     sys.exit(1 if errors else 0)
 
 
+def _cmd_scan(args: argparse.Namespace) -> None:
+    """Aggregate lint + quality analysis into a single agent-readiness report."""
+    from elliot_core.eval.quality import analyze_connector_quality
+    from elliot_core.linter import lint_connector
+
+    config = _load_connector(args.path)
+    issues = lint_connector(config)
+    quality = analyze_connector_quality(config)
+
+    errors = [i for i in issues if i.severity == "ERROR"]
+    warns = [i for i in issues if i.severity == "WARN"]
+    infos = [i for i in issues if i.severity == "INFO"]
+
+    print(f"\nElliot Scan — {config.name} ({len(config.tools)} tools)")
+    print("─" * 60)
+    print(f"Quality score: {quality.overall_score}/100")
+    print()
+
+    for issue in issues:
+        icon = {"ERROR": "X", "WARN": "!", "INFO": "i"}[issue.severity]
+        tool = f"[{issue.tool_id}]" if issue.tool_id else "[connector]"
+        print(f"[{icon}] {issue.severity:<5} {tool:<22} {issue.code}")
+        print(f"      {issue.message}")
+        print(f"      Fix: {issue.suggestion}\n")
+
+    print(
+        f"{len(issues)} lint issue(s): {len(errors)} errors, "
+        f"{len(warns)} warnings, {len(infos)} info"
+    )
+    print(
+        "Next: build the connector, then run a Petri-style audit "
+        "(prompt `audit_connector`) to exercise the tools with sub-agents."
+    )
+    sys.exit(1 if errors else 0)
+
+
 def _cmd_eval(args: argparse.Namespace) -> None:
     import asyncio
 
@@ -380,6 +416,11 @@ def main() -> None:
     lint_cmd = sub.add_parser("lint", help="Check a connector file for agent-readiness")
     lint_cmd.add_argument("path", help="Path to .connector.json")
 
+    scan_cmd = sub.add_parser(
+        "scan", help="Aggregate lint + quality analysis into one readiness report"
+    )
+    scan_cmd.add_argument("path", help="Path to .connector.json")
+
     eval_cmd = sub.add_parser("eval", help="Run evaluation cases against a connector")
     eval_cmd.add_argument("path", help="Path to .eval.yaml")
     eval_cmd.add_argument("--connector", help="Override connector .json path")
@@ -414,6 +455,8 @@ def main() -> None:
 
     if args.command == "lint":
         _cmd_lint(args)
+    elif args.command == "scan":
+        _cmd_scan(args)
     elif args.command == "eval":
         _cmd_eval(args)
     elif args.command == "init":

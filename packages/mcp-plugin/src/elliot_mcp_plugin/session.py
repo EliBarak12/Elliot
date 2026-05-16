@@ -7,6 +7,7 @@ from typing import Any
 import structlog
 
 from elliot_core import ConnectorBuilder, SQLiteEngine, ToolRegistry, WorkspaceStore
+from elliot_core.audit.models import AuditTranscript, ProductIntent
 from elliot_core.types.connector import ConnectorConfig, ProductContext
 from elliot_core.types.source import SourceConfig
 from elliot_core.types.tool import SkillDefinition, ToolDefinition
@@ -26,6 +27,9 @@ class ElliotSession:
         self.runtime_log_path: Path | None = None
         self.tool_sql: dict[str, str] = {}
         self.connector: ConnectorConfig | None = None
+        # Onboarding interview answers + Petri-style audit transcripts.
+        self.product_intent: ProductIntent | None = None
+        self.audit_transcripts: list[AuditTranscript] = []
         # mtime of session.json the last time we synced it into memory.
         # Used by `refresh_from_disk` to skip the reload when nothing changed.
         self._last_loaded_mtime: float | None = None
@@ -47,6 +51,11 @@ class ElliotSession:
         for sk in data.get("skills", []):
             self.registry.add_skill(SkillDefinition.model_validate(sk))
         self.tool_sql = data.get("tool_sql", {})
+        if data.get("product_intent"):
+            self.product_intent = ProductIntent.model_validate(data["product_intent"])
+        self.audit_transcripts = [
+            AuditTranscript.model_validate(t) for t in data.get("audit_transcripts", [])
+        ]
         self._track_mtime()
         log.info("session.loaded", sources=len(self.sources), tools=len(self.registry.get_all()))
 
@@ -60,6 +69,10 @@ class ElliotSession:
                 "tools": [t.model_dump() for t in self.registry.get_all()],
                 "skills": [s.model_dump() for s in self.registry.get_all_skills()],
                 "tool_sql": self.tool_sql,
+                "product_intent": (
+                    self.product_intent.model_dump() if self.product_intent else None
+                ),
+                "audit_transcripts": [t.model_dump() for t in self.audit_transcripts],
             }
         )
         # Track our own write so refresh_from_disk treats it as up-to-date and
@@ -104,5 +117,7 @@ class ElliotSession:
         self.tool_sql = {}
         self.product_context = None
         self.connector = None
+        self.product_intent = None
+        self.audit_transcripts = []
         self.load()
         return True

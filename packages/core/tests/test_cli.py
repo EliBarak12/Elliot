@@ -486,3 +486,44 @@ def test_probe_mcp_initialize_returns_false_on_connection_error(
     ok, reason = _probe_mcp_initialize("http://localhost:1/mcp/")
     assert ok is False
     assert reason is not None and "connection refused" in reason
+
+
+# ---------------------------------------------------------------------------
+# _cmd_scan
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_scan_clean_connector_exits_0(tmp_path: Path) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_scan
+
+    p = _write_connector(tmp_path, GOOD_CONNECTOR)
+    args = argparse.Namespace(path=str(p))
+    with pytest.raises(SystemExit) as exc_info:
+        _cmd_scan(args)
+    assert exc_info.value.code == 0
+
+
+def test_cmd_scan_bad_connector_exits_1(tmp_path: Path) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_scan
+
+    p = _write_connector(tmp_path, BAD_CONNECTOR)
+    args = argparse.Namespace(path=str(p))
+    with pytest.raises(SystemExit) as exc_info:
+        _cmd_scan(args)
+    assert exc_info.value.code == 1
+
+
+def test_main_scan_dispatch(tmp_path: Path, monkeypatch) -> None:
+    import sys
+
+    from elliot_core.cli import main
+
+    p = _write_connector(tmp_path, GOOD_CONNECTOR)
+    monkeypatch.setattr(sys, "argv", ["elliot", "scan", str(p)])
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 0

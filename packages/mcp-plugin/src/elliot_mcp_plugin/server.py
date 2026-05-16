@@ -75,9 +75,11 @@ def create_elliot_server(session: Any) -> FastMCP:
     """Create a FastMCP server with all Elliot tool groups, prompts, and resources registered."""
     from elliot_mcp_plugin.prompts import register_prompts
     from elliot_mcp_plugin.resources import register_resources
+    from elliot_mcp_plugin.tools.audit_tools import register_audit_tools
     from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
     from elliot_mcp_plugin.tools.context_tools import register_context_tools
     from elliot_mcp_plugin.tools.eval_tools import register_eval_tools
+    from elliot_mcp_plugin.tools.onboarding_tools import register_onboarding_tools
     from elliot_mcp_plugin.tools.skill_tools import register_skill_tools
     from elliot_mcp_plugin.tools.source_tools import register_source_tools
     from elliot_mcp_plugin.tools.sql_tools import register_sql_tools
@@ -102,9 +104,11 @@ def create_elliot_server(session: Any) -> FastMCP:
         "\n"
         "Available prompts (call `prompts/list` any time):\n"
         "  - getting_started — read first; covers prereqs + workflow\n"
+        "  - onboard_product — interview the user, then build a connector\n"
         "  - discover_source — register a REST API or DB as a queryable source\n"
         "  - build_connector — draft tools with verb-first descriptions\n"
         "  - lint_connector  — run elliot_lint_connector and fix every issue\n"
+        "  - audit_connector — Petri-style parallel sub-agent audit + fix loop\n"
         "  - run_eval        — validate tool quality against expected outputs\n"
         "  - deploy          — lint → validate → eval → save → start runtime\n"
         "\n"
@@ -123,6 +127,8 @@ def create_elliot_server(session: Any) -> FastMCP:
     register_connector_tools(mcp, session)
     register_studio_tools(mcp, session)
     register_eval_tools(mcp, session)
+    register_onboarding_tools(mcp, session)
+    register_audit_tools(mcp, session)
     register_prompts(mcp)
     register_resources(mcp)
     return mcp

@@ -10,7 +10,7 @@ const steps = [
   {
     title: "Build tools",
     body: "Declare name, description, parameters, filters, return fields. Elliot writes the safe, parameterized SQL.",
-    code: "elliot build my.connector.json",
+    code: "# define tools visually in Studio",
   },
   {
     title: "Lint for agent-readiness",
@@ -19,7 +19,7 @@ const steps = [
   },
   {
     title: "Run eval cases",
-    body: "Real prompts, real agents, real token counts. Pass / fail with diffs.",
+    body: "Deterministic tool-call assertions with a token estimate — pass / fail per case, no LLM in the loop.",
     code: "elliot eval my.eval.yaml",
   },
   {

@@ -210,7 +210,12 @@ def _goto(page: Page, url: str) -> None:
 
 
 def test_every_studio_page_renders_seeded_state(seeded_stack: StackEndpoints) -> None:
-    log_dir = seeded_stack.log_dir
+    # Screenshots default to the (ephemeral) workspace log dir; point
+    # ELLIOT_E2E_SHOT_DIR at a persistent path to keep them after teardown.
+    import pathlib
+
+    log_dir = pathlib.Path(os.environ.get("ELLIOT_E2E_SHOT_DIR") or seeded_stack.log_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
 
     # Independently confirm via the runtime API that the consumer load
     # produced data. If this fails the screenshots will be empty no matter

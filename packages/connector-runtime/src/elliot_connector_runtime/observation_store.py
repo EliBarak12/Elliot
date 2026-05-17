@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 import structlog
-from sqlalchemy import Column, Float, Integer, String, Text, create_engine, text
+from sqlalchemy import Column, Float, Integer, String, Text, create_engine, func, text
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import DeclarativeBase, Session
 
@@ -191,6 +191,15 @@ class ObservationStore:
                 q = q.filter(_ToolCall.tool_id == tool_id)
             rows = q.limit(n).all()
         return [_row_to_dict(r) for r in rows]
+
+    def count_tool_calls(self) -> int:
+        """Total tool-call rows — a cheap COUNT(*) for the health probe.
+
+        ``/v1/health`` previously materialized up to 10k rows just to call
+        ``len()`` on them; this does the count in the database.
+        """
+        with Session(self._engine) as db:
+            return db.query(func.count(_ToolCall.id)).scalar() or 0
 
     def token_efficiency(self) -> list[dict[str, Any]]:
         with Session(self._engine) as db:

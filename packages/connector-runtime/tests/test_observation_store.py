@@ -179,3 +179,10 @@ def test_error_recorded_correctly(store: ObservationStore) -> None:
 
 def test_empty_token_efficiency(store: ObservationStore) -> None:
     assert store.token_efficiency() == []
+
+
+def test_count_tool_calls(store: ObservationStore) -> None:
+    assert store.count_tool_calls() == 0
+    store.write_tool_call(None, "tool_a", {}, 1, 10, 5.0)
+    store.write_tool_call(None, "tool_b", {}, 2, 20, 6.0)
+    assert store.count_tool_calls() == 2

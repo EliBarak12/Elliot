@@ -1077,7 +1077,7 @@ def create_app(
         db_status = "ok"
         db_count = 0
         try:
-            db_count = len(store.recent_tool_calls(10000))
+            db_count = store.count_tool_calls()
         except Exception:
             db_status = "error"
             all_ok = False

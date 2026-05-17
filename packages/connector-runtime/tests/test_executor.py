@@ -535,3 +535,14 @@ async def test_executor_falls_back_to_all_sources_when_source_ids_empty(
     executor = ToolExecutor(connector, secrets={})
     result = await executor.execute(connector.tools[0], {})
     assert result.rows[0]["name"] == "widget"
+
+
+def test_executor_error_is_elliot_error() -> None:
+    """ExecutorError must inherit ElliotError so the MCP handler's
+    `except ElliotError` catches it and returns a structured error."""
+    from elliot_core.errors import ElliotError
+
+    err = ExecutorError("something broke")
+    assert isinstance(err, ElliotError)
+    assert err.code == "EXECUTOR_ERROR"
+    assert "something broke" in str(err)

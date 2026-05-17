@@ -527,6 +527,23 @@ def _register_tool(
                         logger="elliot.runtime",
                     )
             raise ValueError(error_content["text"]) from exc
+        except Exception as exc:
+            # CLAUDE.md: every MCP handler has a top-level catch-all. A non-
+            # ElliotError (raw httpx/psycopg2 failure, ValueError, …) must not
+            # escape as a bare traceback — log the stack, observe the failed
+            # call, and hand the agent a structured INTERNAL_ERROR.
+            duration_ms = round((time.monotonic() - t0) * 1000, 1)
+            log.error("tool.call.unhandled", tool_id=td.id, error=str(exc), exc_info=True)
+            _observe(td.id, kwargs, [], duration_ms, str(exc), session_id)
+            safe_err = ElliotError("INTERNAL_ERROR", f"Tool '{td.id}' failed unexpectedly")
+            error_content = to_mcp_error_content(safe_err)
+            if ctx is not None:
+                with contextlib.suppress(Exception):
+                    await ctx.warning(
+                        f"tool.call.error: {td.id} code=INTERNAL_ERROR",
+                        logger="elliot.runtime",
+                    )
+            raise ValueError(error_content["text"]) from exc
 
     _handler.__name__ = td.id
     _handler.__doc__ = td.description

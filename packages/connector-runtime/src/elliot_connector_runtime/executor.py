@@ -11,6 +11,7 @@ from typing import Any
 import jmespath
 import structlog
 
+from elliot_core.errors import ElliotError
 from elliot_core.sqlite.engine import SQLiteEngine
 from elliot_core.sqlite.flattener import flatten
 from elliot_core.tools.query_builder import build_select_sql
@@ -25,8 +26,16 @@ from elliot_core.types import (
 log = structlog.get_logger(__name__)
 
 
-class ExecutorError(Exception):
-    pass
+class ExecutorError(ElliotError):
+    """Tool execution failed in the connector runtime.
+
+    Inherits ElliotError (CLAUDE.md: every Elliot exception must) so the MCP
+    handler's ``except ElliotError`` catches it and returns a structured
+    ``{code, message}`` rather than leaking a raw traceback to the agent.
+    """
+
+    def __init__(self, message: str, detail: Any = None) -> None:
+        super().__init__("EXECUTOR_ERROR", message, detail)
 
 
 # Bug: Studio's `elliot_discover_source` flattens a source into a primary
@@ -120,8 +129,6 @@ class ToolExecutor:
         try:
             rows = engine.query(sql, params)
         except Exception as exc:
-            from elliot_core.errors import ElliotError
-
             if isinstance(exc, ElliotError) and exc.code == "INVALID_SQL":
                 table_names = engine.get_table_names()
                 if not table_names:

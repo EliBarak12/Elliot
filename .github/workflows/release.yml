@@ -31,7 +31,7 @@ jobs:
             context: .
             dockerfile: packages/connector-runtime/Dockerfile
           - name: studio
-            context: packages/studio
+            context: .
             dockerfile: packages/studio/Dockerfile
     steps:
       - uses: actions/checkout@v4.2.2

@@ -102,8 +102,32 @@ def test_coerce_number():
     assert _coerce("3.14", "number") == 3.14
 
 
+def test_coerce_number_invalid():
+    with pytest.raises(ElliotError) as exc_info:
+        _coerce("not-a-number", "number")
+    assert exc_info.value.code == "INVALID_PARAM_TYPE"
+
+
 def test_coerce_boolean():
     assert _coerce(1, "boolean") is True
+
+
+def test_coerce_boolean_passthrough():
+    assert _coerce(True, "boolean") is True
+    assert _coerce(False, "boolean") is False
+
+
+def test_coerce_boolean_string_false():
+    # A bare bool("false") is True — verify the string form is honoured.
+    assert _coerce("false", "boolean") is False
+    assert _coerce("true", "boolean") is True
+    assert _coerce("0", "boolean") is False
+
+
+def test_coerce_boolean_string_invalid():
+    with pytest.raises(ElliotError) as exc_info:
+        _coerce("maybe", "boolean")
+    assert exc_info.value.code == "INVALID_PARAM_TYPE"
 
 
 def test_coerce_string_default():

@@ -85,6 +85,8 @@ class ToolExecutor:
         as query string parameters. Returns the API response without full pagination.
         Optionally applies filter_groups as a post-fetch SQL filter.
         """
+        if not tool.source_ids:
+            raise ElliotError("INVALID_TOOL", f"Tool '{tool.id}' has no source_ids configured")
         source = self._source_map.get(tool.source_ids[0])
         if not source:
             raise ElliotError("SOURCE_NOT_FOUND", f"Source '{tool.source_ids[0]}' not found")
@@ -175,6 +177,10 @@ class ToolExecutor:
     async def _execute_write(self, tool: ToolDefinition, params: dict[str, Any]) -> ToolResult:
         if not tool.api_mapping:
             raise ElliotError("MISSING_API_MAPPING", f"WRITE tool '{tool.id}' has no api_mapping")
+        if not tool.source_ids:
+            raise ElliotError(
+                "INVALID_TOOL", f"WRITE tool '{tool.id}' has no source_ids configured"
+            )
         source = self._source_map.get(tool.source_ids[0])
         if not source:
             raise ElliotError("SOURCE_NOT_FOUND", f"Source '{tool.source_ids[0]}' not found")
@@ -272,8 +278,23 @@ def _coerce(val: Any, typ: str) -> Any:
         except (ValueError, TypeError) as exc:
             raise ElliotError("INVALID_PARAM_TYPE", f"Expected integer, got: {val!r}") from exc
     if typ == "number":
-        return float(val)
+        try:
+            return float(val)
+        except (ValueError, TypeError) as exc:
+            raise ElliotError("INVALID_PARAM_TYPE", f"Expected number, got: {val!r}") from exc
     if typ == "boolean":
+        if isinstance(val, bool):
+            return val
+        # A bare `bool("false")` is True — a silent correctness trap for any
+        # agent passing a boolean param as a JSON string. Recognise the common
+        # string forms explicitly and reject the rest with an actionable error.
+        if isinstance(val, str):
+            lowered = val.strip().lower()
+            if lowered in ("true", "1", "yes", "on"):
+                return True
+            if lowered in ("false", "0", "no", "off", ""):
+                return False
+            raise ElliotError("INVALID_PARAM_TYPE", f"Expected boolean, got: {val!r}")
         return bool(val)
     return str(val)
 

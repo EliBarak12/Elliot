@@ -230,3 +230,19 @@ def test_end_to_end_aggregation_on_real_data():
     assert rows[0]["category"] == "electronics"
     assert rows[0]["total"] == 300
     assert rows[1]["total"] == 50
+
+
+def test_empty_source_ids_raises_structured_error():
+    """A tool with filter_groups but no source_ids must raise ElliotError,
+    not an IndexError, so the agent gets an actionable {code, message}."""
+    import pytest
+
+    from elliot_core.errors import ElliotError
+
+    tool = _make_tool(
+        source_ids=[],
+        return_fields=[ReturnField(field="name")],
+    )
+    with pytest.raises(ElliotError) as exc_info:
+        build_select_sql(tool, {})
+    assert exc_info.value.code == "INVALID_TOOL"

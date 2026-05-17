@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from elliot_core.errors import ElliotError
 from elliot_core.sql import safe_ident
 from elliot_core.types.tool import FilterGroup, ToolDefinition
 
@@ -64,6 +65,12 @@ def build_select_sql(tool: ToolDefinition, params: dict[str, Any]) -> tuple[str,
         select_clause = ", ".join(parts)
 
     # ── FROM ───────────────────────────────────────────────────────────────
+    if not tool.source_ids:
+        raise ElliotError(
+            "INVALID_TOOL",
+            f"Tool '{tool.id}' has filter_groups/return_fields but no source_ids — "
+            "cannot determine which table to query",
+        )
     primary = tool.source_ids[0]
     sql = f"SELECT {select_clause} FROM {safe_ident(primary)}"
 

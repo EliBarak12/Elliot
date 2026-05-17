@@ -72,6 +72,7 @@ def run_claude_agent(
         "WebFetch",
         "WebSearch",
     ),
+    settings_path: Path | None = None,
     max_budget_usd: float = 1.50,
     timeout_seconds: int = 900,
 ) -> AgentRun:
@@ -81,6 +82,9 @@ def run_claude_agent(
     cheat with Bash/Edit. Pass ``server_name="ecommerce"`` (or whatever the
     runtime exposes itself as) when the consumer connects to a runtime —
     the corresponding allowed-tools prefix becomes ``mcp__<name>__``.
+
+    ``settings_path`` loads an extra settings JSON file via ``--settings`` —
+    used to wire in the Elliot trace hook for a live hook-capture test.
     """
     if not server_name:
         raise ValueError("server_name must be set")
@@ -117,9 +121,10 @@ def run_claude_agent(
         "--max-budget-usd",
         str(max_budget_usd),
         "--no-session-persistence",
-        "-p",
-        prompt,
     ]
+    if settings_path is not None:
+        cmd += ["--settings", str(settings_path)]
+    cmd += ["-p", prompt]
 
     env = {**os.environ, "CLAUDE_CODE_SIMPLE": "0"}
 

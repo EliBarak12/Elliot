@@ -42,13 +42,25 @@ const EFFICIENCY_RESPONSE = {
   sessions_analysed: 10,
 };
 
+const HARNESS_RESPONSE = {
+  harnesses: [
+    { harness: "claude-code", sessions: 3, tool_calls: 12, errors: 1, tokens: 540, avg_duration_ms: 40 },
+    { harness: "cursor", sessions: 1, tool_calls: 4, errors: 0, tokens: 90, avg_duration_ms: 22 },
+  ],
+};
+
 function renderPage() {
   vi.stubGlobal(
     "fetch",
-    vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(EFFICIENCY_RESPONSE),
-    })
+    vi.fn().mockImplementation((url: string) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve(
+            String(url).includes("/harnesses") ? HARNESS_RESPONSE : EFFICIENCY_RESPONSE
+          ),
+      })
+    )
   );
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -99,5 +111,14 @@ describe("MetricsPage token efficiency", () => {
     await screen.findByText("Token efficiency");
     const dashes = screen.getAllByText("—");
     expect(dashes.length).toBeGreaterThan(0);
+  });
+
+  it("renders the per-harness breakdown", async () => {
+    renderPage();
+    expect(await screen.findByText("By agent harness")).toBeInTheDocument();
+    expect(screen.getByText("claude-code")).toBeInTheDocument();
+    expect(screen.getByText("cursor")).toBeInTheDocument();
+    const rows = screen.getAllByTestId("harness-row");
+    expect(rows).toHaveLength(2);
   });
 });

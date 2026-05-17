@@ -2,6 +2,13 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ChevronDown, ChevronRight, MonitorDot, RefreshCw } from "lucide-react";
 import { httpJson } from "@/lib/http";
+import {
+  type AgentSession,
+  type SessionEvent,
+  type SessionSignal,
+  SESSIONS_QUERY_KEY,
+  useSessionStream,
+} from "@/hooks/useSessionStream";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,41 +17,16 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
-interface SessionEvent {
-  ts: number;
-  type: "tools_list" | "tool_call";
-  tool_id: string | null;
-  arguments: Record<string, unknown> | null;
-  result_rows: number | null;
-  result_token_estimate: number | null;
-  duration_ms: number;
-  error: string | null;
-}
-
-interface AgentIdentity {
-  client?: string | null;
-  client_version?: string | null;
-  model?: string | null;
-  modality?: string | null;
-  user_agent?: string | null;
-}
-
-interface AgentSession {
-  session_id: string;
-  started_at: number;
-  agent_hint: string | null;
-  agent_identity?: AgentIdentity | null;
-  events: SessionEvent[];
-  total_tool_calls: number;
-  total_tokens_estimated: number;
-  total_duration_ms: number;
-  error_count: number;
-}
-
 function tokenTone(tokens: number): string {
   if (tokens > 1000) return "text-destructive";
   if (tokens > 300) return "text-warning";
   return "text-success";
+}
+
+function signalVariant(severity: string): "destructive" | "warning" | "secondary" {
+  if (severity === "high") return "destructive";
+  if (severity === "medium") return "warning";
+  return "secondary";
 }
 
 function sessionBadge(session: AgentSession) {
@@ -54,37 +36,94 @@ function sessionBadge(session: AgentSession) {
   return { label: "ok", variant: "success" as const };
 }
 
-function EventRow({ event }: { event: SessionEvent }) {
-  const tokens = event.result_token_estimate ?? 0;
+/** A labelled block of free text — user prompt, agent output, reasoning. */
+function TextBlock({ label, text }: { label: string; text: string }) {
   return (
-    <div className="flex items-center gap-2 text-xs py-1 pl-9 pr-3">
-      <Badge variant="outline" className="shrink-0 uppercase">
-        {event.type === "tools_list" ? "list" : "call"}
-      </Badge>
-      <span className="font-mono font-medium text-foreground truncate max-w-[12rem]">
-        {event.tool_id ?? "tools/list"}
-      </span>
-      {event.arguments && Object.keys(event.arguments).length > 0 && (
-        <span className="text-muted-foreground truncate max-w-[12rem] font-mono text-2xs">
-          {JSON.stringify(event.arguments)}
+    <div className="space-y-1">
+      <p className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
+      <p className="text-xs text-foreground whitespace-pre-wrap break-words">{text}</p>
+    </div>
+  );
+}
+
+function EventRow({ event }: { event: SessionEvent }) {
+  const [open, setOpen] = useState(false);
+  const tokens = event.result_token_estimate ?? 0;
+  const hasArgs = event.arguments && Object.keys(event.arguments).length > 0;
+  const hasDetail = Boolean(
+    hasArgs || event.result_preview || event.reasoning || event.error
+  );
+
+  return (
+    <div className="border-t border-border/40 first:border-t-0">
+      <button
+        data-testid="event-row"
+        disabled={!hasDetail}
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          "w-full flex items-center gap-2 text-xs py-1.5 pl-9 pr-3 text-left",
+          hasDetail && "hover:bg-muted/40 transition-colors"
+        )}
+      >
+        <Badge variant="outline" className="shrink-0 uppercase">
+          {event.type === "tools_list" ? "list" : "call"}
+        </Badge>
+        <span className="font-mono font-medium text-foreground truncate max-w-[12rem]">
+          {event.tool_id ?? "tools/list"}
         </span>
+        {hasArgs && (
+          <span className="text-muted-foreground truncate max-w-[12rem] font-mono text-2xs">
+            {JSON.stringify(event.arguments)}
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-3 shrink-0">
+          {event.reasoning && (
+            <Badge variant="secondary" className="text-2xs">
+              reasoning
+            </Badge>
+          )}
+          {event.result_rows != null && (
+            <span className="text-muted-foreground tabular-nums">{event.result_rows} rows</span>
+          )}
+          {tokens > 0 && (
+            <span className={cn("tabular-nums font-medium", tokenTone(tokens))}>{tokens} tok</span>
+          )}
+          <span className="text-muted-foreground tabular-nums w-12 text-right">
+            {event.duration_ms.toFixed(0)}ms
+          </span>
+          {event.error && (
+            <Badge variant="destructive" className="shrink-0">
+              error
+            </Badge>
+          )}
+        </div>
+      </button>
+      {open && hasDetail && (
+        <div className="space-y-3 bg-background/60 px-9 py-3 animate-fade-in-up">
+          {event.reasoning && <TextBlock label="Agent reasoning" text={event.reasoning} />}
+          {hasArgs && (
+            <TextBlock label="Input" text={JSON.stringify(event.arguments, null, 2)} />
+          )}
+          {event.result_preview && (
+            <TextBlock label="Output" text={event.result_preview} />
+          )}
+          {event.error && <TextBlock label="Error" text={event.error} />}
+        </div>
       )}
-      <div className="ml-auto flex items-center gap-3 shrink-0">
-        {event.result_rows != null && (
-          <span className="text-muted-foreground tabular-nums">{event.result_rows} rows</span>
-        )}
-        {tokens > 0 && (
-          <span className={cn("tabular-nums font-medium", tokenTone(tokens))}>{tokens} tok</span>
-        )}
-        <span className="text-muted-foreground tabular-nums w-12 text-right">
-          {event.duration_ms.toFixed(0)}ms
-        </span>
-        {event.error && (
-          <Badge variant="destructive" className="shrink-0">
-            error
-          </Badge>
-        )}
-      </div>
+    </div>
+  );
+}
+
+function SignalRow({ signals }: { signals: SessionSignal[] }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {signals.map((sig) => (
+        <Badge key={sig.type} variant={signalVariant(sig.severity)} className="text-2xs">
+          {sig.message}
+        </Badge>
+      ))}
     </div>
   );
 }
@@ -93,6 +132,7 @@ function SessionRow({ session }: { session: AgentSession }) {
   const [expanded, setExpanded] = useState(false);
   const badge = sessionBadge(session);
   const time = new Date(session.started_at * 1000).toLocaleTimeString();
+  const signals = session.signals ?? [];
 
   return (
     <div className="border-b border-border/60 last:border-0 first:rounded-t-xl last:rounded-b-xl overflow-hidden">
@@ -132,8 +172,18 @@ function SessionRow({ session }: { session: AgentSession }) {
             </span>
           )
         )}
+        {session.source === "hook" && (
+          <Badge variant="secondary" className="text-2xs shrink-0">
+            hook
+          </Badge>
+        )}
         <span className="text-2xs text-muted-foreground tabular-nums">{time}</span>
         <div className="ml-auto flex items-center gap-3 shrink-0">
+          {signals.length > 0 && (
+            <span className="text-2xs text-muted-foreground tabular-nums">
+              {signals.length} signal{signals.length === 1 ? "" : "s"}
+            </span>
+          )}
           <span className="text-xs text-muted-foreground tabular-nums">
             {session.total_tool_calls} calls
           </span>
@@ -153,12 +203,32 @@ function SessionRow({ session }: { session: AgentSession }) {
       </button>
       {expanded && (
         <div className="bg-muted/30 py-1 animate-fade-in-up">
+          {(session.summary || signals.length > 0) && (
+            <div className="px-9 py-2 space-y-1.5 border-b border-border/40">
+              {session.summary && (
+                <p className="text-2xs text-muted-foreground">
+                  <span className="font-medium text-foreground">Path: </span>
+                  <span className="font-mono">{session.summary}</span>
+                </p>
+              )}
+              {signals.length > 0 && <SignalRow signals={signals} />}
+            </div>
+          )}
+          {session.user_prompt && (
+            <div className="px-9 py-2.5 border-b border-border/40">
+              <TextBlock label="User prompt" text={session.user_prompt} />
+            </div>
+          )}
           {session.events.map((event, i) => (
             // ts is high-resolution (float seconds) and unique within a
-            // session; combining with the type+index gives a stable key
-            // that survives reorder/delete operations.
+            // session; combining with the type+index gives a stable key.
             <EventRow key={`${event.ts}-${event.type}-${i}`} event={event} />
           ))}
+          {session.final_output && (
+            <div className="px-9 py-2.5 border-t border-border/40">
+              <TextBlock label="Agent output" text={session.final_output} />
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -166,10 +236,11 @@ function SessionRow({ session }: { session: AgentSession }) {
 }
 
 export default function AgentConsole() {
+  useSessionStream();
   const { data, isLoading, refetch, dataUpdatedAt } = useQuery<AgentSession[]>({
-    queryKey: ["sessions"],
+    queryKey: [...SESSIONS_QUERY_KEY],
     queryFn: () => httpJson<AgentSession[]>("/v1/sessions?n=20"),
-    refetchInterval: 5_000,
+    refetchInterval: 15_000,
   });
 
   const sessions = Array.isArray(data) ? data : [];
@@ -181,7 +252,7 @@ export default function AgentConsole() {
     <div className="space-y-6">
       <PageHeader
         title="Agent Console"
-        description="Live trace of agent sessions — tool calls, tokens, latencies, errors."
+        description="Live trace of agent sessions — prompts, reasoning, tool calls, tokens, errors."
         actions={
           <div className="flex items-center gap-3">
             <Badge variant="success" className="gap-1.5">

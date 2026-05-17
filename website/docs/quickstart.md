@@ -1,8 +1,31 @@
 # Quickstart
 
-Get a connector running and talking to an agent in under five minutes.
+Get Elliot running and talking to an agent in minutes.
 
-## Prerequisites
+## Run Elliot (Docker — recommended)
+
+The fastest way. The only prerequisite is [Docker](https://docs.docker.com/get-docker/) — no Python, Node, `uv`, or `pnpm`, and no source checkout:
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/EliBarak12/Elliot/main/scripts/install.sh | sh
+```
+
+This pulls the pre-built images, generates a local `.env` with a fresh secret key, starts all three services, and opens Studio at <http://localhost:8080>.
+
+```bash
+# stop
+docker compose -f docker-compose.run.yml down
+# view logs
+docker compose -f docker-compose.run.yml logs -f
+```
+
+On the Docker path you build and test connectors visually in Studio. To use the `elliot` CLI (`init`, `lint`, `eval`), run from source instead.
+
+## Run from source
+
+For developing Elliot itself, or to use the `elliot` CLI.
+
+### Prerequisites
 
 - [`uv`](https://docs.astral.sh/uv/) (Python 3.13)
 - [`pnpm`](https://pnpm.io/) (Node 22)
@@ -12,7 +35,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 npm install -g pnpm
 ```
 
-## 1. Clone & install
+### Clone & install
 
 ```bash
 git clone https://github.com/EliBarak12/Elliot.git
@@ -21,7 +44,7 @@ make setup
 cp .env.example .env
 ```
 
-## 2. Boot the stack
+### Boot the stack
 
 ```bash
 make dev
@@ -35,7 +58,7 @@ make dev
 
 Open <http://localhost:5173>.
 
-## 3. Scaffold your first connector
+## Scaffold your first connector
 
 ```bash
 elliot init --template rest-api-key my-api.connector.json
@@ -43,7 +66,7 @@ elliot init --template rest-api-key my-api.connector.json
 
 Open the file. Fill in the source URL, the auth secret name (an env var), and any tools you want exposed. See [Connector spec](./connectors) for the full schema.
 
-## 4. Lint & eval before shipping
+## Lint & eval before shipping
 
 ```bash
 elliot lint my-api.connector.json
@@ -52,7 +75,7 @@ elliot eval my-api.eval.yaml
 
 The linter checks every tool against the [five principles](./five-principles). The eval harness runs real prompts through real agents and reports a pass/fail with token counts.
 
-## 5. Call a tool from an agent
+## Call a tool from an agent
 
 In Claude Code (or any registered MCP client), ask it a question that needs your data. The agent calls `list_animals` (or whatever you defined), Elliot returns a small, contextually-sized response, and Studio shows the call in the audit log.
 
@@ -65,3 +88,4 @@ On first connect the agent automatically calls `prompts/get name=getting_started
 - [Concepts](./concepts) — sources, tools, skills, connectors
 - [The five principles](./five-principles) — the design rules
 - [Architecture](./architecture) — how the three services fit together
+- [Deployment](./deployment) — Docker images, env vars, hosting

@@ -383,12 +383,17 @@ def test_mcp_tool_call_writes_observability(tmp_path: Path) -> None:
         calls = store.recent_tool_calls(10)
         assert len(calls) == 1
         assert calls[0]["tool_id"] == "list_animals"
-        # Session tracker NDJSON written
+        # Session tracker holds the run as one live, still-open session — it
+        # accumulates calls until the idle sweeper or shutdown flushes it.
+        live = tracker.tail(10)
+        assert len(live) == 1
+        assert live[0]["session_id"] == "test-req-123"
+        assert live[0]["total_tool_calls"] == 1
+        # Flushing closes it and writes the NDJSON line.
+        tracker.close_session("test-req-123")
         sess_lines = sessions_path.read_text().strip().splitlines()
         assert len(sess_lines) == 1
-        sess = json.loads(sess_lines[0])
-        assert sess["session_id"] == "test-req-123"
-        assert sess["total_tool_calls"] == 1
+        assert json.loads(sess_lines[0])["session_id"] == "test-req-123"
     finally:
         os.environ.pop("ELLIOT_AUDIT_LOG", None)
         os.environ.pop("ELLIOT_SESSIONS_LOG", None)

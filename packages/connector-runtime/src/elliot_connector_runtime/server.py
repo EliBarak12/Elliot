@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import inspect
+import json
 import os
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -20,9 +23,14 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from elliot_core.agent_identity import AgentIdentity, get_current_agent_identity
+from elliot_core.agent_identity import (
+    AgentIdentity,
+    get_current_agent_identity,
+    merge_client_info,
+    set_current_agent_identity,
+)
 from elliot_core.auth_middleware import ApiKeyMiddleware
 from elliot_core.http_middleware import AgentIdentityMiddleware
 
@@ -34,6 +42,7 @@ from .observation_store import ObservationStore
 from .protocols.openai import register_openai_routes
 from .session_tracker import SessionTracker
 from .task_store import TaskStore, get_task_store
+from .trace_ingest import IngestPayload
 
 log = structlog.get_logger(__name__)
 
@@ -98,6 +107,32 @@ def _build_limiter() -> Limiter:
 
     limit = os.environ.get("ELLIOT_RATE_LIMIT", "120/minute")
     return Limiter(key_func=get_remote_address, default_limits=[limit])
+
+
+def _session_idle_ttl() -> float:
+    """Seconds of inactivity after which an agent session is flushed to disk."""
+    raw = os.environ.get("ELLIOT_SESSION_IDLE_TTL", "")
+    try:
+        return max(5.0, float(raw)) if raw else 300.0
+    except ValueError:
+        return 300.0
+
+
+async def _session_idle_sweeper(tracker: SessionTracker) -> None:
+    """Periodically close agent sessions that have gone idle.
+
+    A session stays open while the agent's MCP connection is active; this
+    loop flushes the ones that have stopped sending tool calls so the
+    NDJSON log and observation store reflect completed runs.
+    """
+    ttl = _session_idle_ttl()
+    interval = min(ttl, 30.0)
+    while True:
+        await asyncio.sleep(interval)
+        with contextlib.suppress(Exception):
+            closed = tracker.sweep_idle(ttl)
+            if closed:
+                log.info("session.idle_swept", count=len(closed))
 
 
 def _require_destructive_confirmation() -> bool:
@@ -251,9 +286,8 @@ def _register_tool(
                         duration_ms=duration_ms,
                         error=error,
                     )
-                    # Each MCP request is its own short-lived session — flush
-                    # to NDJSON now so /v1/sessions reflects activity immediately.
-                    tracker.close_session(session_id)
+                    # The session stays open and accumulates every call from
+                    # this MCP connection — the idle sweeper flushes it later.
                 # mirror SessionTracker's internal token estimate so the
                 # observation store agrees with /v1/sessions
                 from .session_tracker import _estimate_tokens
@@ -286,14 +320,36 @@ def _register_tool(
 
         ctx: Context[Any, Any, Any] | None = None
         session_id: str | None = None
+        mcp_session_id: str | None = None
+        client_name: str | None = None
+        client_version: str | None = None
         with contextlib.suppress(Exception):
             ctx = mcp.get_context()
             await ctx.info(f"tool.call.start: {td.id}", logger="elliot.runtime")
         if ctx is not None:
-            # Use the FastMCP request_id as a session correlation id so every
-            # MCP-driven invocation is traceable in the observation store.
+            # request_id is per-call — only a last-resort correlation id.
             with contextlib.suppress(Exception):
                 session_id = ctx.request_id
+            # Prefer the MCP protocol session id (stable for the whole agent
+            # connection) so a multi-step run groups into one trace.
+            with contextlib.suppress(Exception):
+                request = ctx.request_context.request
+                if request is not None:
+                    mcp_session_id = request.headers.get("mcp-session-id")
+            # clientInfo from the MCP `initialize` handshake is the most
+            # reliable signal of which harness is connected.
+            with contextlib.suppress(Exception):
+                client_params = ctx.session.client_params
+                if client_params is not None and client_params.clientInfo is not None:
+                    client_name = client_params.clientInfo.name
+                    client_version = client_params.clientInfo.version
+        if mcp_session_id:
+            session_id = mcp_session_id
+        if client_name:
+            with contextlib.suppress(Exception):
+                set_current_agent_identity(
+                    merge_client_info(get_current_agent_identity(), client_name, client_version)
+                )
 
         if require_confirmation:
             confirmed = bool(kwargs.pop("confirm", False))
@@ -601,8 +657,15 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Any:
+        sweeper = asyncio.create_task(_session_idle_sweeper(tracker))
         async with mcp.session_manager.run():
             yield
+        sweeper.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await sweeper
+        # Flush any still-open agent sessions so the trace survives shutdown.
+        with contextlib.suppress(Exception):
+            tracker.flush_all()
         # Audit H7: cancel any in-flight background tasks so we don't leave
         # them in `running` state after the loop closes.
         with contextlib.suppress(Exception):
@@ -676,6 +739,96 @@ def create_app(
     async def get_sessions(n: int = 20) -> list[dict[str, Any]]:
         return tracker.tail(n)
 
+    @app.get("/v1/sessions/stream")
+    async def stream_sessions(request: Request) -> StreamingResponse:
+        """Server-Sent Events: a snapshot, then a frame per session update."""
+
+        async def _events() -> AsyncIterator[str]:
+            queue = tracker.subscribe()
+            try:
+                snapshot = json.dumps(tracker.tail(20), default=str)
+                yield f"event: snapshot\ndata: {snapshot}\n\n"
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        payload = await asyncio.wait_for(queue.get(), timeout=20.0)
+                    except TimeoutError:
+                        yield ": heartbeat\n\n"
+                        continue
+                    yield f"event: update\ndata: {json.dumps(payload, default=str)}\n\n"
+            finally:
+                tracker.unsubscribe(queue)
+
+        return StreamingResponse(
+            _events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.post("/v1/trace/ingest")
+    async def ingest_trace(payload: IngestPayload) -> dict[str, Any]:
+        """Receive a normalized trace from a harness hook adapter.
+
+        Claude Code / Codex / Cursor adapters POST the agent's reasoning, the
+        user's prompt and the tool calls here — data MCP traffic cannot see.
+        The trace is merged into the live console feed and the metrics store.
+        """
+        from elliot_core.redaction import redact_audit_arguments
+
+        from .session_tracker import SessionEvent
+
+        slug = getattr(config, "slug", None)
+        session_id = f"{payload.harness}:{payload.session_id}"
+        identity = {
+            "client": payload.harness,
+            "client_version": payload.harness_version,
+            "model": payload.model,
+            "modality": None,
+            "user_agent": None,
+        }
+        events = [
+            SessionEvent(
+                ts=ev.ts or time.time(),
+                type="tool_call",
+                tool_id=ev.tool_id,
+                arguments=redact_audit_arguments(ev.arguments),
+                result_rows=ev.result_rows,
+                result_token_estimate=ev.result_token_estimate or None,
+                duration_ms=ev.duration_ms,
+                error=ev.error,
+                result_preview=ev.result_preview,
+                reasoning=ev.reasoning,
+            )
+            for ev in payload.events
+        ]
+        tracker.append_ingested(
+            session_id,
+            identity,
+            events,
+            user_prompt=payload.user_prompt,
+            final_output=payload.final_output,
+        )
+        with contextlib.suppress(Exception):
+            store.open_session(
+                session_id,
+                agent_hint=payload.harness,
+                connector_slug=slug,
+                agent_identity=identity,
+            )
+            for ev in payload.events:
+                store.write_tool_call(
+                    session_id=session_id,
+                    tool_id=ev.tool_id,
+                    arguments=ev.arguments,
+                    result_row_count=ev.result_rows,
+                    result_token_estimate=ev.result_token_estimate,
+                    duration_ms=ev.duration_ms,
+                    error=ev.error,
+                    connector_slug=slug,
+                )
+        return {"status": "ok", "session_id": session_id, "events": len(events)}
+
     @app.get("/v1/metrics/token-efficiency")
     async def token_efficiency() -> dict[str, Any]:
         rows = store.token_efficiency()
@@ -698,6 +851,12 @@ def create_app(
             for row in rows
         ]
         return {"tools": tools, "sessions_analysed": len(store.recent_sessions(200))}
+
+    @app.get("/v1/metrics/harnesses")
+    async def harness_metrics() -> dict[str, Any]:
+        """Per-harness rollup — how Claude Code / Codex / Cursor / MCP traffic
+        each exercise this connector."""
+        return {"harnesses": store.harness_breakdown()}
 
     @app.post("/v1/observations/prune")
     async def prune_observations() -> dict[str, int]:

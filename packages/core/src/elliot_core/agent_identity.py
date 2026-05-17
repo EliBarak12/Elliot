@@ -25,12 +25,13 @@ from __future__ import annotations
 import contextvars
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 __all__ = [
     "AgentIdentity",
     "parse_agent_identity",
+    "merge_client_info",
     "get_current_agent_identity",
     "set_current_agent_identity",
     "reset_current_agent_identity",
@@ -144,6 +145,28 @@ def parse_agent_identity(headers: Mapping[str, str]) -> AgentIdentity:
         model=model,
         modality=modality,
         user_agent=user_agent,
+    )
+
+
+def merge_client_info(
+    identity: AgentIdentity | None,
+    client_name: str | None,
+    client_version: str | None = None,
+) -> AgentIdentity:
+    """Overlay an MCP ``initialize`` clientInfo onto a header-parsed identity.
+
+    The MCP handshake's ``clientInfo`` is the most reliable signal of which
+    harness is connected (Claude Code, Cursor, Codex, ...), so it takes
+    precedence over the User-Agent parse for the ``client`` field. Model and
+    modality — which MCP does not carry — are preserved from the header parse.
+    """
+    base = identity or AgentIdentity()
+    if not client_name or not client_name.strip():
+        return base
+    return replace(
+        base,
+        client=client_name.strip().lower(),
+        client_version=client_version or base.client_version,
     )
 
 

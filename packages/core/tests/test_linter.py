@@ -152,3 +152,135 @@ def test_secret_in_url_is_error() -> None:
     )
     issues = lint_connector(config)
     assert any(i.code == "SECRET_IN_URL" for i in issues)
+
+
+# ── upgraded best-practice rules ─────────────────────────────────────────────
+
+
+def _tool(tool_id: str, **overrides):  # type: ignore[no-untyped-def]
+    base = {
+        "id": tool_id,
+        "name": tool_id.replace("_", " ").title(),
+        "description": f"Return rows from the {tool_id} table for agents",
+        "category": "READ",
+        "sql": f"SELECT id FROM {tool_id} LIMIT 20",
+        "parameters": [],
+    }
+    base.update(overrides)
+    return base
+
+
+def test_too_many_tools_is_warn() -> None:
+    tools = [_tool(f"list_table_{i}") for i in range(26)]
+    config = ConnectorConfig(name="Big", slug="big", version="1.0.0", tools=tools)
+    issues = lint_connector(config)
+    assert any(i.code == "TOO_MANY_TOOLS" for i in issues)
+
+
+def test_duplicate_tool_id_is_error() -> None:
+    config = ConnectorConfig(
+        name="Dup",
+        slug="dup",
+        version="1.0.0",
+        tools=[_tool("list_items"), _tool("list_items")],
+    )
+    issues = lint_connector(config)
+    assert any(i.code == "DUPLICATE_TOOL_ID" and i.severity == "ERROR" for i in issues)
+
+
+def test_generic_param_name_is_warn() -> None:
+    config = _make_connector(
+        parameters=[
+            {"name": "data", "type": "string", "required": False, "description": "some value"}
+        ]
+    )
+    issues = lint_connector(config)
+    assert any(i.code == "PARAMETER_NAME_GENERIC" for i in issues)
+
+
+def test_enum_candidate_param_is_warn() -> None:
+    config = _make_connector(
+        parameters=[
+            {
+                "name": "order_status",
+                "type": "string",
+                "required": False,
+                "description": "The status, must be active or closed",
+            }
+        ]
+    )
+    issues = lint_connector(config)
+    assert any(i.code == "PARAMETER_SHOULD_BE_ENUM" for i in issues)
+
+
+def test_enum_param_with_enum_set_no_issue() -> None:
+    config = _make_connector(
+        parameters=[
+            {
+                "name": "order_status",
+                "type": "string",
+                "required": False,
+                "description": "The status, must be active or closed",
+                "enum": ["active", "closed"],
+            }
+        ]
+    )
+    issues = lint_connector(config)
+    assert not any(i.code == "PARAMETER_SHOULD_BE_ENUM" for i in issues)
+
+
+def test_missing_pagination_is_warn() -> None:
+    config = ConnectorConfig(
+        name="P",
+        slug="p",
+        version="1.0.0",
+        tools=[_tool("list_things", sql="SELECT id FROM things")],
+    )
+    issues = lint_connector(config)
+    assert any(i.code == "MISSING_PAGINATION" for i in issues)
+
+
+def test_pagination_with_limit_param_no_issue() -> None:
+    config = ConnectorConfig(
+        name="P",
+        slug="p",
+        version="1.0.0",
+        tools=[
+            _tool(
+                "list_things",
+                sql="SELECT id FROM things",
+                parameters=[
+                    {
+                        "name": "limit",
+                        "type": "integer",
+                        "required": False,
+                        "description": "Max rows to return",
+                    }
+                ],
+            )
+        ],
+    )
+    issues = lint_connector(config)
+    assert not any(i.code == "MISSING_PAGINATION" for i in issues)
+
+
+def test_sensitive_field_exposed_is_error() -> None:
+    config = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        tools=[_tool("list_users", sql="SELECT id, ssn FROM users LIMIT 20")],
+    )
+    issues = lint_connector(config, sensitive_fields=["ssn"])
+    assert any(i.code == "SENSITIVE_FIELD_EXPOSED" and i.severity == "ERROR" for i in issues)
+
+
+def test_sensitive_field_not_passed_no_issue() -> None:
+    config = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        tools=[_tool("list_users", sql="SELECT id, ssn FROM users LIMIT 20")],
+    )
+    issues = lint_connector(config)
+    assert not any(i.code == "SENSITIVE_FIELD_EXPOSED" for i in issues)

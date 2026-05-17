@@ -23,7 +23,7 @@ class _Base(DeclarativeBase):
 class _AgentSession(_Base):
     __tablename__ = "agent_sessions"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String(32), unique=True, nullable=False, index=True)
+    session_id = Column(String(128), unique=True, nullable=False, index=True)
     started_at = Column(Float, nullable=False)
     ended_at = Column(Float)
     agent_hint = Column(String(255))
@@ -42,7 +42,7 @@ class _AgentSession(_Base):
 class _ToolCall(_Base):
     __tablename__ = "tool_calls"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String(32), index=True)
+    session_id = Column(String(128), index=True)
     ts = Column(Float, nullable=False, index=True)
     tool_id = Column(String(128), nullable=False, index=True)
     arguments = Column(Text)
@@ -206,6 +206,31 @@ class ObservationStore:
         return [dict(r._mapping) for r in rows]
 
     # --------------------------------------------------------------- retention
+
+    def harness_breakdown(self) -> list[dict[str, Any]]:
+        """Aggregate tool calls by the agent harness that made them.
+
+        Joins ``tool_calls`` to ``agent_sessions`` on ``session_id`` so the
+        Metrics page can compare how Claude Code / Codex / Cursor (and plain
+        MCP traffic) each use the connector.
+        """
+        with Session(self._engine) as db:
+            rows = db.execute(
+                text("""
+                    SELECT
+                        COALESCE(s.agent_client, 'unknown')               AS harness,
+                        COUNT(DISTINCT t.session_id)                       AS sessions,
+                        COUNT(*)                                           AS tool_calls,
+                        SUM(CASE WHEN t.error IS NOT NULL THEN 1 ELSE 0 END) AS errors,
+                        COALESCE(SUM(t.result_token_estimate), 0)          AS tokens,
+                        AVG(t.duration_ms)                                 AS avg_duration_ms
+                    FROM tool_calls t
+                    LEFT JOIN agent_sessions s ON s.session_id = t.session_id
+                    GROUP BY harness
+                    ORDER BY tool_calls DESC
+                """)
+            ).fetchall()
+        return [dict(r._mapping) for r in rows]
 
     def prune(self) -> int:
         cutoff = time.time() - (_RETENTION_DAYS * 86400)

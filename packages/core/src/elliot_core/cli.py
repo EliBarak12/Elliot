@@ -56,6 +56,42 @@ def _cmd_lint(args: argparse.Namespace) -> None:
     sys.exit(1 if errors else 0)
 
 
+def _cmd_scan(args: argparse.Namespace) -> None:
+    """Aggregate lint + quality analysis into a single agent-readiness report."""
+    from elliot_core.eval.quality import analyze_connector_quality
+    from elliot_core.linter import lint_connector
+
+    config = _load_connector(args.path)
+    issues = lint_connector(config)
+    quality = analyze_connector_quality(config)
+
+    errors = [i for i in issues if i.severity == "ERROR"]
+    warns = [i for i in issues if i.severity == "WARN"]
+    infos = [i for i in issues if i.severity == "INFO"]
+
+    print(f"\nElliot Scan — {config.name} ({len(config.tools)} tools)")
+    print("─" * 60)
+    print(f"Quality score: {quality.overall_score}/100")
+    print()
+
+    for issue in issues:
+        icon = {"ERROR": "X", "WARN": "!", "INFO": "i"}[issue.severity]
+        tool = f"[{issue.tool_id}]" if issue.tool_id else "[connector]"
+        print(f"[{icon}] {issue.severity:<5} {tool:<22} {issue.code}")
+        print(f"      {issue.message}")
+        print(f"      Fix: {issue.suggestion}\n")
+
+    print(
+        f"{len(issues)} lint issue(s): {len(errors)} errors, "
+        f"{len(warns)} warnings, {len(infos)} info"
+    )
+    print(
+        "Next: build the connector, then run a Petri-style audit "
+        "(prompt `audit_connector`) to exercise the tools with sub-agents."
+    )
+    sys.exit(1 if errors else 0)
+
+
 def _cmd_eval(args: argparse.Namespace) -> None:
     import asyncio
 
@@ -393,12 +429,39 @@ def _cmd_connect(args: argparse.Namespace) -> None:
     print()
 
 
+def _cmd_trace(args: argparse.Namespace) -> None:
+    """Install/remove the harness hook that streams local agent runs to Elliot."""
+    from elliot_core.trace import SUPPORTED_HARNESSES
+    from elliot_core.trace.installer import default_settings_path, install, uninstall
+
+    harness = args.harness
+    if harness not in SUPPORTED_HARNESSES:
+        print(f"Unknown harness '{harness}'. Choose from: {', '.join(SUPPORTED_HARNESSES)}")
+        sys.exit(1)
+
+    if args.action == "install":
+        path = install(harness)
+        print(f"✓ Elliot trace hook installed for {harness}")
+        print(f"  Config: {path}")
+        print("  Restart the agent — its tool calls, prompt and reasoning will")
+        print("  now appear in the Studio Agent Console while it works locally.")
+    else:
+        path = uninstall(harness)
+        target = path if path.exists() else default_settings_path(harness)
+        print(f"✓ Elliot trace hook removed for {harness} ({target})")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="elliot", description="Elliot developer tools")
     sub = parser.add_subparsers(dest="command")
 
     lint_cmd = sub.add_parser("lint", help="Check a connector file for agent-readiness")
     lint_cmd.add_argument("path", help="Path to .connector.json")
+
+    scan_cmd = sub.add_parser(
+        "scan", help="Aggregate lint + quality analysis into one readiness report"
+    )
+    scan_cmd.add_argument("path", help="Path to .connector.json")
 
     eval_cmd = sub.add_parser("eval", help="Run evaluation cases against a connector")
     eval_cmd.add_argument("path", help="Path to .eval.yaml")
@@ -430,10 +493,26 @@ def main() -> None:
         help="Register only the runtime URL (skip the plugin URL).",
     )
 
+    trace_cmd = sub.add_parser(
+        "trace",
+        help="Install hooks so a local agent's runs show in the Agent Console",
+    )
+    trace_cmd.add_argument(
+        "action", choices=["install", "uninstall"], help="Install or remove the trace hook"
+    )
+    trace_cmd.add_argument(
+        "--harness",
+        required=True,
+        choices=["claude-code", "codex", "cursor"],
+        help="Which coding agent to wire up",
+    )
+
     args = parser.parse_args()
 
     if args.command == "lint":
         _cmd_lint(args)
+    elif args.command == "scan":
+        _cmd_scan(args)
     elif args.command == "eval":
         _cmd_eval(args)
     elif args.command == "init":
@@ -442,6 +521,8 @@ def main() -> None:
         _cmd_status(args)
     elif args.command == "connect":
         _cmd_connect(args)
+    elif args.command == "trace":
+        _cmd_trace(args)
     else:
         parser.print_help()
         sys.exit(1)

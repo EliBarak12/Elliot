@@ -1,10 +1,20 @@
-.PHONY: dev setup test test-cov lint format typecheck build-studio sync-skills sync-skills-check studio-open ci e2e e2e-mcp e2e-agent e2e-ui
+.PHONY: dev setup run stop test test-cov lint format typecheck build-studio sync-skills sync-skills-check studio-open ci e2e e2e-mcp e2e-agent e2e-ui
 
 dev:
 	uv run python scripts/sync_skills.py
 	uv run elliot connect
 	uv run python scripts/open_studio.py &
 	honcho start
+
+# Run Elliot from pre-built images — no Python/Node toolchain needed, only
+# Docker. Studio is served at http://localhost:8080.
+run:
+	docker compose -f docker-compose.run.yml pull
+	docker compose -f docker-compose.run.yml up -d
+	@echo "Elliot is running — Studio: http://localhost:8080"
+
+stop:
+	docker compose -f docker-compose.run.yml down
 
 studio-open:
 	uv run python scripts/open_studio.py

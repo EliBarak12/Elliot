@@ -11,32 +11,52 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-success.svg)](LICENSE)
 [![MCP compatible](https://img.shields.io/badge/MCP-compatible-00cec8)](https://modelcontextprotocol.io)
 [![Python 3.13](https://img.shields.io/badge/Python-3.13-3776ab.svg?logo=python&logoColor=white)](pyproject.toml)
-[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CLAUDE.md#before-every-push--mandatory-checks)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
 
-**[Docs](https://elibarak12.github.io/Elliot/)** · **[Quickstart](https://elibarak12.github.io/Elliot/docs/quickstart)** · **[The five principles](https://elibarak12.github.io/Elliot/docs/five-principles)** · **[Agent Experience (AX)](https://elibarak12.github.io/Elliot/docs/ax-principles)**
+[**Documentation**](https://elibarak12.github.io/Elliot/) · [**Quickstart**](https://elibarak12.github.io/Elliot/docs/quickstart) · [**Concepts**](https://elibarak12.github.io/Elliot/docs/concepts) · [**The five principles**](https://elibarak12.github.io/Elliot/docs/five-principles)
 
 </div>
 
 ---
 
-Elliot is the interface layer that makes your product feel native to AI agents. Design, validate, deploy, and observe agent-ready tools built around your existing APIs, databases, and files — with **minimum tokens, clean error recovery, and full observability** of every session.
+Elliot is an open-source platform for turning the products you already have — REST APIs, SQL databases, files — into tools that AI agents can use *well*. Not just connected, but **fast, safe, and observable**: minimal token usage, structured errors the agent can recover from, and a full trace of every agent session.
 
 > **AX** is to agents what UX is to users and DX is to developers. Elliot's job is to make AX measurable.
 
-## 60-second quickstart
+## Features
+
+- 🧭 **Agent-ready by design** — every tool is linted against five concrete principles before it ships: verb-first descriptions, typed parameters, context-sized results.
+- 🛡️ **Safe by default** — parameterised SQL, env-var secrets, no keys in connector files. Connector files are safe to commit.
+- 🔭 **Every call observable** — tokens, latency, arguments, and errors for every agent call, streamed to an audit log and visible in Studio.
+- ⚙️ **One command to run** — start the whole stack with Docker. No Python, Node, or toolchain to install.
+- 🧩 **Works with every agent** — Claude Code, Cursor, Codex, OpenClaw, VS Code Copilot, Windsurf. Elliot auto-registers with each.
+- 🤖 **Agents build connectors** — `discover → build → lint → eval → deploy`. The platform itself is agentic: agents can build connectors through Elliot.
+
+## Quickstart
+
+**Just want to run Elliot?** The only prerequisite is [Docker](https://docs.docker.com/get-docker/) — no Python, Node, `uv`, or `pnpm`:
 
 ```bash
+curl -LsSf https://raw.githubusercontent.com/EliBarak12/Elliot/main/scripts/install.sh | sh
+```
+
+This pulls the pre-built images, generates a local `.env`, starts all three services, and opens **Studio** at <http://localhost:8080>. Stop it any time with `docker compose -f docker-compose.run.yml down`.
+
+**Want to develop Elliot?** Build from source instead:
+
+```bash
+# Prerequisites: uv (Python 3.13) and pnpm (Node 22)
 git clone https://github.com/EliBarak12/Elliot.git && cd Elliot
 make setup
 make dev          # boots plugin (:3000) + runtime (:3001) + studio (:5173)
                   # and writes the MCP config for every detected coding agent
 ```
 
-That's it. Open Studio at <http://localhost:5173>, scaffold a connector, lint it, and your agent can use it in the same session.
+Then open Studio at <http://localhost:5173>, scaffold a connector, lint it, and your agent can use it in the same session.
 
-## Install for your agent
+## Connect your coding agent
 
-`make dev` runs `elliot connect`, which detects every coding agent on your machine and writes the MCP config for each. If you'd rather wire one client manually:
+`make dev` runs `elliot connect`, which detects every coding agent on your machine and writes its MCP config automatically. To wire a client by hand:
 
 <table>
 <tr><th>Claude Code</th><th>Cursor</th></tr>
@@ -67,35 +87,34 @@ codex plugin marketplace add EliBarak12/Elliot
 
 </td><td>
 
-Pointed to `http://localhost:3000/mcp/` by `elliot connect`, which writes `~/.openclaw/openclaw.json` with the `streamable-http` transport.
+Pointed at `http://localhost:3000/mcp/` by `elliot connect`, which writes `~/.openclaw/openclaw.json` with the `streamable-http` transport.
 
 </td></tr>
 </table>
 
-Every install path wires the MCP URL only — Elliot's server still needs to be running (`make dev` locally, or a hosted endpoint).
+Every install path wires the MCP URL only — Elliot's server still needs to be running (locally, or at a hosted endpoint).
 
 ## Why Elliot
 
-Connecting an API to Claude is easy. Making it work *well* with agents is not. Agents fail when:
+Connecting an API to an agent is easy. Making it work *well* is not. Agents fail when:
 
-- **Tool descriptions are vague** → the agent picks the wrong tool
-- **Results are too large** → context window fills up before the answer
-- **Errors are unstructured** → the agent can't recover or escalate
-- **No observability** → you don't know it's broken until a user complains
+- **Tool descriptions are vague** → the agent picks the wrong tool.
+- **Results are too large** → the context window fills up before the answer does.
+- **Errors are unstructured** → the agent can't recover or escalate.
+- **Nothing is observable** → you don't find out it's broken until a user complains.
 
-Elliot makes these visible and fixable. Every tool ships with a structured schema, a token estimate, an actionable error shape, and a session trace — every call, every agent, with the client and model attributed.
+Elliot makes each of these visible and fixable. Every tool ships with a structured schema, a token estimate, an actionable error shape, and a session trace — every call, every agent, attributed to a client and model.
 
 ## How it works
 
 ```
 1. Connect your data sources
    └ REST APIs, PostgreSQL, MySQL, CSV / JSON files — all in one connector
-   └ Local files: agents call elliot_upload_file then elliot_discover_source
 
 2. Build tools (no SQL required)
-   └ Define name, description, parameters, filter conditions, return fields
-   └ Elliot generates safe parameterised queries
-   └ Or: let an AI agent build the connector for you via the agentic builder
+   └ Define name, description, parameters, filters, and return fields
+   └ Elliot generates safe, parameterised queries
+   └ Or let an agent build the connector for you with the agentic builder
 
 3. Lint for agent-readiness
    └ elliot lint my-domain.connector.json
@@ -104,71 +123,68 @@ Elliot makes these visible and fixable. Every tool ships with a structured schem
    └ elliot eval my-domain.eval.yaml → pass/fail + token estimate
 
 5. Deploy and connect agents
-   └ elliot-mcp-plugin (:3000) — Claude Code / any MCP client
-   └ elliot-connector-runtime (:3001) — live data, session logs
-   └ elliot-studio (:5173) — observe, run, edit
+   └ plugin (:3000) serves tools to any MCP client
+   └ runtime (:3001) executes them against live data
+   └ studio observes, runs, and edits everything
 ```
 
-## What the agent gets on first connect
+On first connect, an agent automatically calls `prompts/get name=getting_started` — a single prompt that teaches it the five principles, the canonical workflow, and the reference resources available (templates, error-code dictionary, install docs).
 
-Whatever install path you use, the agent's first action on connect is to call `prompts/get name=getting_started`. That one prompt teaches the [five principles](https://elibarak12.github.io/Elliot/docs/five-principles), the canonical workflow (`discover-source` → `build-connector` → `lint-connector` → `run-eval` → `deploy`), and the available reference resources (templates, error-code dictionary, install docs).
+## Documentation
 
-## Local dev
+Full documentation lives at **[elibarak12.github.io/Elliot](https://elibarak12.github.io/Elliot/)**.
 
-```bash
-# Prerequisites: uv (Python 3.13), pnpm (Node 22)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-npm install -g pnpm
+- [Quickstart](https://elibarak12.github.io/Elliot/docs/quickstart) — get a connector running in minutes
+- [Concepts](https://elibarak12.github.io/Elliot/docs/concepts) — sources, tools, skills, connectors
+- [The five principles](https://elibarak12.github.io/Elliot/docs/five-principles) — the design rules every connector follows
+- [Connector spec](https://elibarak12.github.io/Elliot/docs/connectors) — the full `.connector.json` schema
+- [Architecture](https://elibarak12.github.io/Elliot/docs/architecture) — how the three services fit together
+- [Deployment](https://elibarak12.github.io/Elliot/docs/deployment) — Docker images, env vars, hosting
 
-git clone https://github.com/EliBarak12/Elliot.git && cd Elliot
-make setup
-cp .env.example .env
-make dev              # or: honcho start (skips auto-register)
+## Project layout
 
-elliot status
-elliot init --template rest-api-key my-api.connector.json
-elliot lint my-api.connector.json
-elliot eval my-api.eval.yaml
-```
+Elliot is a monorepo of four packages:
 
-## Repository structure
+| Package | Name | Stack | Role |
+|---|---|---|---|
+| `packages/core` | `elliot-core` | Python 3.13 | Types, query builder, linter, eval harness, CLI |
+| `packages/mcp-plugin` | `elliot-mcp-plugin` | Python 3.13 · FastMCP | MCP endpoint + agentic builder — port `3000` |
+| `packages/connector-runtime` | `elliot-connector-runtime` | Python 3.13 · FastAPI | Tool execution + session/observation store — port `3001` |
+| `packages/studio` | `elliot-studio` | React 19 · Vite | Visual dashboard — port `5173` (dev) / `8080` (Docker) |
 
-```
-elliot/
-├── packages/
-│   ├── core/              elliot-core          types, query builder, linter, eval
-│   ├── mcp-plugin/        elliot-mcp-plugin    MCP + FastAPI :3000
-│   ├── connector-runtime/ elliot-connector-runtime  runtime :3001 + session tracker
-│   └── studio/            elliot-studio        React 19 + Vite :5173
-├── connectors/        your .connector.json files
-├── templates/         starter connectors
-├── Procfile           honcho dev runner
-├── docker-compose.yml production
-└── .env.example       all env vars documented
-```
+Connector files live in `connectors/`, starter templates in `templates/`, and every environment variable is documented in [`.env.example`](.env.example).
 
-## Tech stack
+## Roadmap
 
-| Layer | Language | Key libraries |
-|---|---|---|
-| Core library | Python 3.13 | `pydantic`, `sqlite3`, `httpx`, `sqlalchemy` |
-| MCP plugin | Python 3.13 | `mcp` (FastMCP), `fastapi`, `uvicorn`, `structlog` |
-| Connector runtime | Python 3.13 | `mcp` (FastMCP), `fastapi`, `uvicorn`, `slowapi`, `pymysql` |
-| Studio UI | TypeScript | React 19, Vite, shadcn/ui, TanStack Router/Query/Table, Zustand v5 |
-| Package managers | `uv` (Python) · `pnpm` (Node 22) | |
+Elliot's goal is to be usable by everyone, not just developers. Progress is tracked in [`docs/USER_ONBOARDING.md`](docs/USER_ONBOARDING.md).
 
-## Key ports
-
-| Service | Port | Purpose |
-|---|---|---|
-| `elliot-mcp-plugin` | 3000 | MCP endpoint for agents + agentic builder tools |
-| `elliot-connector-runtime` | 3001 | Tool execution, session tracking, observation store |
-| `elliot-studio` | 5173 | Visual dashboard — sessions, tools, metrics, editor |
+- ✅ **Run from source** — `make dev` for contributors
+- ✅ **One-command Docker** — run with only Docker, no toolchain
+- 🔜 **Guided first-run** — an onboarding wizard inside Studio
+- 🧭 **Desktop app** — a double-click app, no Docker, no terminal
+- ☁️ **Hosted cloud** — a connector registry and a managed runtime, no install at all
 
 ## Contributing
 
-PRs welcome. Good first issues are labelled [`good first issue`](https://github.com/EliBarak12/Elliot/issues?q=is%3Aopen+label%3A%22good+first+issue%22). Before pushing, run the [mandatory checks](CLAUDE.md#before-every-push--mandatory-checks). New connectors are especially valuable — see the [connector request template](.github/ISSUE_TEMPLATE/connector_request.yml).
+Contributions are welcome — code, connectors, docs, and bug reports alike.
+
+- Browse [good first issues](https://github.com/EliBarak12/Elliot/issues?q=is%3Aopen+label%3A%22good+first+issue%22) to get started.
+- New connectors are especially valuable — see the [connector request template](.github/ISSUE_TEMPLATE/connector_request.yml).
+- Before opening a PR, run the mandatory checks below. All six must pass.
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy packages/core/src packages/mcp-plugin/src packages/connector-runtime/src
+uv run pytest --tb=short
+pnpm --filter @elliot/studio run typecheck
+pnpm --filter @elliot/studio test --run
+```
+
+## Community & support
+
+Found a bug, have a feature request, or want to propose a connector? Open an issue on the [issue tracker](https://github.com/EliBarak12/Elliot/issues) — we read every one.
 
 ## License
 
-[MIT](LICENSE)
+Elliot is released under the [MIT License](LICENSE).

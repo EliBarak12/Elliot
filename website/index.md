@@ -33,7 +33,7 @@ features:
     details: Tokens, latency, args, errors — every agent call streamed to an NDJSON audit log and visible in Studio.
   - icon: ⚙️
     title: One command to run
-    details: make dev brings up the connector runtime and Studio together. No glue services, no bespoke wrappers.
+    details: One Docker command brings up the plugin, runtime, and Studio together — no Python, Node, or toolchain to install.
   - icon: 🧩
     title: Works with every agent
     details: Claude Code, Cursor, Codex, Windsurf, VS Code Copilot — Elliot auto-registers your connector with each one.

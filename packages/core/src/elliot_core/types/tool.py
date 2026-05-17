@@ -60,6 +60,9 @@ class ResponseShape(BaseModel):
 class QueryResult(BaseModel):
     rows: list[dict[str, Any]]
     tool_id: str
+    # True when the executor truncated the result at ELLIOT_MAX_RESULT_ROWS;
+    # callers surface this to the agent so it knows the set is incomplete.
+    truncated: bool = False
 
 
 class ToolDefinition(BaseModel):

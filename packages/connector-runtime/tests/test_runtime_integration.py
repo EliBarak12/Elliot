@@ -116,6 +116,59 @@ def test_body_size_middleware_rejects_oversize(
     assert body["error"]["code"] == "BODY_TOO_LARGE"
 
 
+def test_body_size_middleware_rejects_chunked_oversize(
+    connector_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chunked upload (no Content-Length) above the cap must still be 413'd.
+
+    The middleware counts bytes off the receive stream and aborts once the
+    running total exceeds ELLIOT_MAX_REQUEST_BODY_BYTES. /v1/trace/ingest is a
+    POST that parses its body, so the counting wrapper actually runs.
+    """
+    monkeypatch.setenv("ELLIOT_MAX_REQUEST_BODY_BYTES", "1024")
+    app = create_app(connector_path=str(connector_file), secrets={})
+    client = TestClient(app)
+
+    def _chunks():
+        # Each chunk is small; the total exceeds the 1 KiB cap. Passing a
+        # generator makes httpx send a chunked request with no Content-Length.
+        for _ in range(8):
+            yield b"x" * 512
+
+    resp = client.post(
+        "/v1/trace/ingest",
+        headers={"Content-Type": "application/json"},
+        content=_chunks(),
+    )
+    assert resp.status_code == 413
+    body = resp.json()
+    assert body["error"]["code"] == "BODY_TOO_LARGE"
+
+
+def test_body_size_middleware_allows_chunked_under_limit(
+    connector_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chunked request under the cap passes through to the route untouched."""
+    monkeypatch.setenv("ELLIOT_MAX_REQUEST_BODY_BYTES", "1048576")
+    app = create_app(connector_path=str(connector_file), secrets={})
+    client = TestClient(app)
+
+    payload = b'{"harness":"test","session_id":"s1","events":[]}'
+
+    def _chunks():
+        yield payload
+
+    # A small chunked POST to the ingest endpoint must succeed (200), proving
+    # the body cap did not fire on an under-limit chunked request.
+    resp = client.post(
+        "/v1/trace/ingest",
+        headers={"Content-Type": "application/json"},
+        content=_chunks(),
+    )
+    assert resp.status_code != 413
+    assert resp.status_code == 200
+
+
 def test_audit_record_and_tail(tmp_path: Path) -> None:
     log = AuditLog(tmp_path / "audit.ndjson")
     log.record("tool_x", {"a": 1}, result_row_count=5, duration_ms=12.3)

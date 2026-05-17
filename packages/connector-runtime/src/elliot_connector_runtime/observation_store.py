@@ -113,13 +113,18 @@ class ObservationStore:
         error: str | None = None,
         connector_slug: str | None = None,
     ) -> None:
+        # Redact secret-bearing argument fields before persisting — same
+        # policy as AuditLog.record and SessionTracker.record_tool_call, so
+        # the observation DB never holds raw API keys / tokens.
+        from elliot_core.redaction import redact_audit_arguments
+
         with Session(self._engine) as db:
             db.add(
                 _ToolCall(
                     session_id=session_id,
                     ts=time.time(),
                     tool_id=tool_id,
-                    arguments=json.dumps(arguments, default=str),
+                    arguments=json.dumps(redact_audit_arguments(arguments), default=str),
                     result_row_count=result_row_count,
                     result_token_estimate=result_token_estimate,
                     duration_ms=round(duration_ms, 2),

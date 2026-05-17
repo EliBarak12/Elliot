@@ -10,7 +10,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from elliot_core.auth_middleware import ApiKeyMiddleware
+from elliot_core.auth_middleware import ApiKeyMiddleware, enforce_auth_configured
 from elliot_core.http_middleware import AgentIdentityMiddleware
 from elliot_mcp_plugin.server import create_elliot_server
 from elliot_mcp_plugin.session import ElliotSession
@@ -27,16 +27,10 @@ _mcp_app = mcp.streamable_http_app()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    if not os.environ.get("ELLIOT_API_KEY"):
-        log.warning(
-            "auth.disabled",
-            service="mcp-plugin",
-            message=(
-                "ELLIOT_API_KEY is not set: the plugin is accepting unauthenticated "
-                "requests. This is acceptable for localhost-only development; set "
-                "ELLIOT_API_KEY before exposing the service on a non-loopback bind."
-            ),
-        )
+    # Fail-closed: raise (refuse to serve) if ELLIOT_API_KEY is unset while
+    # ELLIOT_ENV is production/staging; otherwise log a warning. The helper
+    # itself decides which.
+    enforce_auth_configured("mcp-plugin")
     async with mcp.session_manager.run():
         yield
     session.save()

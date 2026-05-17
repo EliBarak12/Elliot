@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import time
 from typing import Any
@@ -36,6 +37,20 @@ class ExecutorError(Exception):
 # flattener. This module now mirrors the discover path: each source is
 # fetched, flattened, and loaded into a long-lived per-executor engine.
 _DEFAULT_TTL_SECONDS = 300
+
+# Hard cap on rows materialized into a single tool result. A tool whose SQL
+# omits a LIMIT could otherwise return an entire table and OOM the worker /
+# blow the agent's context window. Configurable via ELLIOT_MAX_RESULT_ROWS.
+_DEFAULT_MAX_RESULT_ROWS = 10_000
+
+
+def max_result_rows() -> int:
+    """Hard cap on rows returned per tool call (env ELLIOT_MAX_RESULT_ROWS)."""
+    raw = os.environ.get("ELLIOT_MAX_RESULT_ROWS", "")
+    try:
+        return max(1, int(raw)) if raw else _DEFAULT_MAX_RESULT_ROWS
+    except ValueError:
+        return _DEFAULT_MAX_RESULT_ROWS
 
 
 class ToolExecutor:
@@ -98,7 +113,7 @@ class ToolExecutor:
         # entirely so unit tests don't need network/file fixtures.
         if self._injected_engine is not None:
             rows = self._injected_engine.query(sql, params)
-            return QueryResult(rows=rows, tool_id=tool.id)
+            return self._capped_result(tool.id, rows)
 
         engine = await self._ensure_materialized(tool, arguments)
 
@@ -136,7 +151,20 @@ class ToolExecutor:
                     ) from exc
             raise
 
-        return QueryResult(rows=rows, tool_id=tool.id)
+        return self._capped_result(tool.id, rows)
+
+    def _capped_result(self, tool_id: str, rows: list[dict[str, Any]]) -> QueryResult:
+        """Apply the hard row cap, flagging truncation when it bites."""
+        cap = max_result_rows()
+        if len(rows) > cap:
+            log.warning(
+                "tool.result.truncated",
+                tool_id=tool_id,
+                returned=cap,
+                total=len(rows),
+            )
+            return QueryResult(rows=rows[:cap], tool_id=tool_id, truncated=True)
+        return QueryResult(rows=rows, tool_id=tool_id)
 
     # ── materialization ────────────────────────────────────────────────────
 

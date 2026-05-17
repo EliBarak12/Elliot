@@ -18,6 +18,7 @@ from elliot_core.paths import PathEscape, safe_join
 from elliot_core.sources.api_fetcher import fetch_endpoint
 from elliot_core.sources.db_connector import query_database
 from elliot_core.sources.file_reader import read_file
+from elliot_core.sql import safe_ident
 from elliot_core.sqlite.flattener import flatten
 from elliot_core.types.source import SourceConfig
 from elliot_mcp_plugin.session import ElliotSession
@@ -293,7 +294,9 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
     def elliot_preview_source(table_name: str, limit: int = 10) -> dict:  # type: ignore[type-arg]
         """Return the first N rows from a loaded source table."""
         try:
-            rows = session.engine.query(f'SELECT * FROM "{table_name}" LIMIT :n', {"n": limit})
+            rows = session.engine.query(
+                f"SELECT * FROM {safe_ident(table_name)} LIMIT :n", {"n": limit}
+            )
             schema = session.engine.get_table_schema(table_name)
             return {"rows": rows, "row_count": len(rows), "schema": schema}
         except ElliotError as exc:
@@ -346,8 +349,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             if src is None:
                 return {"error": f"Source not found: {source_id}"}
             if src.table_name:
-                session.engine._conn.execute(f'DROP TABLE IF EXISTS "{src.table_name}"')
-                session.engine._conn.commit()
+                session.engine.drop_table(src.table_name)
             session.save()
             log.info("source.removed", source_id=source_id, table=src.table_name)
             return {"status": "removed", "source_id": source_id, "table": src.table_name}

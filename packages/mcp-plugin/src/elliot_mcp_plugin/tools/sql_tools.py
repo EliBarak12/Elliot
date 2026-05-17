@@ -6,6 +6,7 @@ import structlog
 from mcp.server.fastmcp import FastMCP
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.sql import safe_ident
 from elliot_core.sqlite.query_runner import run_tool_query, validate_tool_sql
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -50,7 +51,8 @@ def register_sql_tools(mcp: FastMCP, session: ElliotSession) -> None:
         """Return N random rows from a table."""
         try:
             rows = session.engine.query(
-                f'SELECT * FROM "{table_name}" ORDER BY RANDOM() LIMIT :n', {"n": limit}
+                f"SELECT * FROM {safe_ident(table_name)} ORDER BY RANDOM() LIMIT :n",
+                {"n": limit},
             )
             return {"rows": rows}
         except ElliotError as exc:

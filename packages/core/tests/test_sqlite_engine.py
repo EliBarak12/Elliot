@@ -181,3 +181,23 @@ def test_load_result_rolls_back_when_child_table_fails(
     tables = engine.get_table_names()
     assert "projects" not in tables
     assert not any("tags" in t for t in tables)
+
+
+def test_drop_table_removes_table(engine: SQLiteEngine):
+    engine.load_result(flatten([{"x": 1}], "items"))
+    assert "items" in engine.get_table_names()
+    engine.drop_table("items")
+    assert "items" not in engine.get_table_names()
+
+
+def test_drop_table_missing_is_noop(engine: SQLiteEngine):
+    # DROP TABLE IF EXISTS — dropping an absent table must not raise.
+    engine.drop_table("never_created")
+
+
+def test_drop_table_rejects_bad_identifier(engine: SQLiteEngine):
+    from elliot_core.errors import ElliotError
+
+    with pytest.raises(ElliotError) as exc_info:
+        engine.drop_table('items"; DROP TABLE users; --')
+    assert exc_info.value.code == "INVALID_IDENTIFIER"

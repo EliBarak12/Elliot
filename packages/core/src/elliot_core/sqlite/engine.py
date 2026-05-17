@@ -165,6 +165,12 @@ class SQLiteEngine:
         row["top_values"] = [r[0] for r in top]
         return row
 
+    def drop_table(self, table_name: str) -> None:
+        """Drop a table if it exists. ``table_name`` is validated via safe_ident."""
+        quoted_table = safe_ident(table_name)
+        self._conn.execute(f"DROP TABLE IF EXISTS {quoted_table}")
+        self._conn.commit()
+
     def close(self) -> None:
         self._conn.close()
 

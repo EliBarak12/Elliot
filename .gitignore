@@ -51,3 +51,6 @@ packages/studio/.vite/
 .vscode/extensions.json
 
 .elliot/secrets.enc
+
+# E2E run artifacts (screenshots, captured logs)
+tests/e2e/artifacts/

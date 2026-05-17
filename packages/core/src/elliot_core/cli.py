@@ -429,6 +429,28 @@ def _cmd_connect(args: argparse.Namespace) -> None:
     print()
 
 
+def _cmd_trace(args: argparse.Namespace) -> None:
+    """Install/remove the harness hook that streams local agent runs to Elliot."""
+    from elliot_core.trace import SUPPORTED_HARNESSES
+    from elliot_core.trace.installer import default_settings_path, install, uninstall
+
+    harness = args.harness
+    if harness not in SUPPORTED_HARNESSES:
+        print(f"Unknown harness '{harness}'. Choose from: {', '.join(SUPPORTED_HARNESSES)}")
+        sys.exit(1)
+
+    if args.action == "install":
+        path = install(harness)
+        print(f"✓ Elliot trace hook installed for {harness}")
+        print(f"  Config: {path}")
+        print("  Restart the agent — its tool calls, prompt and reasoning will")
+        print("  now appear in the Studio Agent Console while it works locally.")
+    else:
+        path = uninstall(harness)
+        target = path if path.exists() else default_settings_path(harness)
+        print(f"✓ Elliot trace hook removed for {harness} ({target})")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="elliot", description="Elliot developer tools")
     sub = parser.add_subparsers(dest="command")
@@ -471,6 +493,20 @@ def main() -> None:
         help="Register only the runtime URL (skip the plugin URL).",
     )
 
+    trace_cmd = sub.add_parser(
+        "trace",
+        help="Install hooks so a local agent's runs show in the Agent Console",
+    )
+    trace_cmd.add_argument(
+        "action", choices=["install", "uninstall"], help="Install or remove the trace hook"
+    )
+    trace_cmd.add_argument(
+        "--harness",
+        required=True,
+        choices=["claude-code", "codex", "cursor"],
+        help="Which coding agent to wire up",
+    )
+
     args = parser.parse_args()
 
     if args.command == "lint":
@@ -485,6 +521,8 @@ def main() -> None:
         _cmd_status(args)
     elif args.command == "connect":
         _cmd_connect(args)
+    elif args.command == "trace":
+        _cmd_trace(args)
     else:
         parser.print_help()
         sys.exit(1)

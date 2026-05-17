@@ -101,6 +101,53 @@ describe("AgentConsole", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders hook-session prompt, reasoning and agent output", async () => {
+    const hookSession = {
+      session_id: "claude-code:run-1",
+      started_at: 1700000200,
+      agent_hint: "claude-code",
+      source: "hook",
+      user_prompt: "Who are our enterprise customers?",
+      final_output: "You have one: Acme.",
+      agent_identity: {
+        client: "claude-code",
+        client_version: "1.x",
+        model: "claude-opus-4-7",
+        modality: null,
+        user_agent: null,
+      },
+      events: [
+        {
+          ts: 1700000201,
+          type: "tool_call",
+          tool_id: "list_customers",
+          arguments: {},
+          result_rows: 1,
+          result_token_estimate: 20,
+          duration_ms: 30,
+          error: null,
+          result_preview: '{"rows":[{"name":"Acme"}]}',
+          reasoning: "I need the customer list to answer.",
+        },
+      ],
+      total_tool_calls: 1,
+      total_tokens_estimated: 20,
+      total_duration_ms: 30,
+      error_count: 0,
+    };
+    renderConsole([hookSession]);
+    const row = await screen.findByTestId("session-row");
+    fireEvent.click(row);
+    expect(screen.getByText("User prompt")).toBeInTheDocument();
+    expect(screen.getByText(/Who are our enterprise customers/)).toBeInTheDocument();
+    expect(screen.getByText("Agent output")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("event-row"));
+    expect(screen.getByText("Agent reasoning")).toBeInTheDocument();
+    expect(screen.getByText(/I need the customer list/)).toBeInTheDocument();
+    expect(screen.getByText(/"name":"Acme"/)).toBeInTheDocument();
+  });
+
   it("renders structured agent client and model when present", async () => {
     const session = {
       ...SESSION_OK,

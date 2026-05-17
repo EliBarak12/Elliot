@@ -17,7 +17,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
 import { AgentOnboarding } from "@/components/dashboard/AgentOnboarding";
 import { useSessionState } from "@/hooks/useSessionState";
-import { callTool } from "@/lib/mcp-client";
+import { httpJson } from "@/lib/http";
 import { cn } from "@/lib/utils";
 
 interface SessionState {
@@ -39,9 +39,12 @@ export default function Dashboard() {
   const { data: sessionRaw } = useSessionState();
   const session = sessionRaw as SessionState | undefined;
 
+  // Recent activity is *tool invocations*, which execute on the runtime — so
+  // read the runtime's audit log, not the plugin's build-action log. Falls
+  // back to an empty list when the runtime is not up yet.
   const { data: auditRaw } = useQuery({
-    queryKey: ["audit"],
-    queryFn: () => callTool("studio_get_audit_log", { limit: 10 }),
+    queryKey: ["recent-tool-calls"],
+    queryFn: () => httpJson<AuditEntry[]>("/v1/audit?n=10").catch(() => [] as AuditEntry[]),
     refetchInterval: 10_000,
   });
   const auditEntries = Array.isArray(auditRaw) ? (auditRaw as AuditEntry[]) : [];

@@ -6,15 +6,9 @@ RUN corepack enable && corepack prepare pnpm@9 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY . .
-# NOTE: VITE_API_KEY is baked into the bundle and is therefore PUBLIC. It's a
-# deployment-scoped token, not a per-user secret. Never pass a high-trust
-# backend secret here.
-ARG VITE_PLUGIN_URL=http://localhost:3000
-ARG VITE_RUNTIME_URL=http://localhost:3001
-ARG VITE_API_KEY=
-ENV VITE_PLUGIN_URL=$VITE_PLUGIN_URL \
-    VITE_RUNTIME_URL=$VITE_RUNTIME_URL \
-    VITE_API_KEY=$VITE_API_KEY
+# No VITE_* build args: the browser bundle talks only to same-origin /api/*
+# paths. Backend origins + the API key are supplied at *runtime* to nginx
+# (see the runtime stage) and never baked into the JS.
 RUN pnpm --filter @elliot/studio run build
 
 FROM nginx:alpine AS runtime
@@ -25,18 +19,18 @@ RUN apk add --no-cache curl \
 COPY --from=build --chown=app:app /app/packages/studio/dist /usr/share/nginx/html
 # nginx.conf is a *.template: the stock nginx entrypoint runs envsubst over
 # /etc/nginx/templates/*.template at container start, writing the rendered
-# config to /etc/nginx/conf.d/. 10-elliot-csp.sh (runs first) assembles the
-# CSP connect-src from ELLIOT_PLUGIN_ORIGIN / ELLIOT_RUNTIME_ORIGIN.
+# config to /etc/nginx/conf.d/.
 COPY --chown=root:root packages/studio/nginx.conf.template /etc/nginx/templates/default.conf.template
-COPY --chown=root:root packages/studio/docker-entrypoint.d/10-elliot-csp.sh /docker-entrypoint.d/10-elliot-csp.sh
-RUN chmod +x /docker-entrypoint.d/10-elliot-csp.sh
 # Only substitute Elliot-owned vars so nginx runtime vars ($uri, $1, ...) in the
 # template are left untouched by envsubst.
 ENV NGINX_ENVSUBST_FILTER="ELLIOT_"
-# Backend origins baked into the CSP — override per deployment. Defaults match
-# the dev localhost services so an unconfigured container still works locally.
+# Runtime config templated into the nginx conf. Override per deployment.
+# ELLIOT_PLUGIN_ORIGIN / ELLIOT_RUNTIME_ORIGIN are the reverse-proxy targets;
+# ELLIOT_API_KEY is injected as X-Elliot-Key on every proxied request (empty =
+# unauthenticated, for local dev). Defaults match the dev localhost services.
 ENV ELLIOT_PLUGIN_ORIGIN=http://localhost:3000 \
     ELLIOT_RUNTIME_ORIGIN=http://localhost:3001 \
+    ELLIOT_API_KEY="" \
     ELLIOT_HSTS=""
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=5s \

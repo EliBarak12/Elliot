@@ -5,13 +5,9 @@ server {
     index index.html;
 
     # ── Security headers (audit H8) ────────────────────────────────────────
-    # The CSP connect-src origins are templated at container start by nginx's
-    # built-in envsubst step (docker-entrypoint.d/20-envsubst-on-templates.sh).
-    # ${ELLIOT_CSP_CONNECT_SRC} is assembled by 10-elliot-csp.sh from
-    # ELLIOT_PLUGIN_ORIGIN / ELLIOT_RUNTIME_ORIGIN, which default to localhost
-    # for dev — override them per deployment so CSP does not block backend
-    # calls on non-localhost hosts.
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ${ELLIOT_CSP_CONNECT_SRC}; frame-ancestors 'none'; base-uri 'self'; form-action 'self';" always;
+    # All backend traffic is proxied same-origin under /api/ (see below), so
+    # connect-src only needs 'self' — no cross-origin backend hosts to allow.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';" always;
     add_header X-Frame-Options "DENY" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
@@ -26,6 +22,35 @@ server {
         access_log off;
         return 200 "ok\n";
         add_header Content-Type text/plain;
+    }
+
+    # ── Reverse proxy to the backends ──────────────────────────────────────
+    # The browser only ever calls these same-origin paths; the API key is
+    # injected here, server-side, so it never ships in the JS bundle. The
+    # plugin/runtime origins are templated from ELLIOT_PLUGIN_ORIGIN /
+    # ELLIOT_RUNTIME_ORIGIN at container start (envsubst). The trailing slash
+    # on proxy_pass strips the /api/<svc> prefix before forwarding.
+    location /api/plugin/ {
+        proxy_pass ${ELLIOT_PLUGIN_ORIGIN}/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Elliot-Key "${ELLIOT_API_KEY}";
+        proxy_set_header Connection "";
+        # MCP uses streamable HTTP (POST + SSE) — don't buffer, allow long-lived
+        # streams.
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+    }
+
+    location /api/runtime/ {
+        proxy_pass ${ELLIOT_RUNTIME_ORIGIN}/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Elliot-Key "${ELLIOT_API_KEY}";
+        proxy_set_header Connection "";
+        # /v1/sessions/stream is Server-Sent Events — no buffering.
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
     }
 
     # Vite emits content-hashed filenames under /assets/ — safe to cache forever.

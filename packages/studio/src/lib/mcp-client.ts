@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { toast } from "sonner";
-import { PLUGIN_URL, authHeadersForMcp } from "./http";
+import { PLUGIN_URL } from "./http";
 
 const SESSION_KEY = "elliot_mcp_session_id";
 const RETRY_BACKOFF_MS = [500, 1500, 4000] as const;
@@ -13,12 +13,18 @@ let _initPromise: Promise<Client> | null = null;
 let _retryTimer: ReturnType<typeof setTimeout> | null = null;
 
 function _connectAttempt(sessionId: string | undefined): Promise<Client> {
-  const transport = new StreamableHTTPClientTransport(new URL(`${PLUGIN_URL}/mcp/`), {
-    sessionId,
-    requestInit: {
-      headers: { "x-client-name": "elliot-studio", ...authHeadersForMcp() },
-    },
-  });
+  // PLUGIN_URL is the same-origin path `/api/plugin`; resolve it against the
+  // current origin so the MCP SDK gets an absolute URL. The Studio proxy
+  // forwards `/api/plugin/mcp/` to the plugin and injects the API key.
+  const transport = new StreamableHTTPClientTransport(
+    new URL(`${PLUGIN_URL}/mcp/`, window.location.origin),
+    {
+      sessionId,
+      requestInit: {
+        headers: { "x-client-name": "elliot-studio" },
+      },
+    }
+  );
   const client = new Client({ name: "elliot-studio", version: "0.1.0" });
   return client.connect(transport).then(() => {
     if (transport.sessionId) {
@@ -72,9 +78,9 @@ function _surfaceConnectError(err: unknown): void {
 
   if (_connectionErrorShown) return;
   _connectionErrorShown = true;
-  toast.error("Cannot connect to Elliot plugin on :3000.", {
+  toast.error("Cannot connect to the Elliot plugin.", {
     duration: 30_000,
-    description: "Is the plugin running? Retrying automatically.",
+    description: "Is the plugin running behind the Studio proxy? Retrying automatically.",
     action: {
       label: "Retry now",
       onClick: () => {

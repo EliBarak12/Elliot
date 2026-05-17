@@ -37,6 +37,13 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     env_file: .env
+    environment:
+      # In the compose network the backends are reachable by service name,
+      # not localhost. These override the .env defaults so the studio nginx
+      # reverse-proxy forwards /api/* to the right containers. ELLIOT_API_KEY
+      # still comes from .env and is injected by the proxy server-side.
+      ELLIOT_PLUGIN_ORIGIN: http://plugin:3000
+      ELLIOT_RUNTIME_ORIGIN: http://runtime:3001
     depends_on:
       plugin:
         condition: service_healthy

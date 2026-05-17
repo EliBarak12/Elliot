@@ -2,6 +2,7 @@ import { h } from "vue";
 import type { Theme } from "vitepress";
 import DefaultTheme from "vitepress/theme";
 
+import HomeShowcase from "./components/HomeShowcase.vue";
 import HomePrinciples from "./components/HomePrinciples.vue";
 import HomeWorkflow from "./components/HomeWorkflow.vue";
 import HomeArchitecture from "./components/HomeArchitecture.vue";
@@ -15,6 +16,7 @@ const theme: Theme = {
   Layout() {
     return h(DefaultTheme.Layout, null, {
       "home-features-after": () => [
+        h(HomeShowcase),
         h(HomePrinciples),
         h(HomeWorkflow),
         h(HomeArchitecture),

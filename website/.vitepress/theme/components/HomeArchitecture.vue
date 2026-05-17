@@ -65,17 +65,15 @@ onMounted(() => {
                   font-family="ui-monospace, SF Mono, Menlo"
                   font-size="11" letter-spacing="2"
                   fill="var(--vp-c-brand-1)" font-weight="700">AGENT</text>
-            <text x="130" y="160" text-anchor="middle"
+            <text x="130" y="164" text-anchor="middle"
                   font-size="14" font-weight="600"
                   fill="var(--vp-c-text-1)">Claude Code</text>
-            <text x="130" y="186" text-anchor="middle"
+            <text x="130" y="190" text-anchor="middle"
                   font-size="13" fill="var(--vp-c-text-2)">Cursor</text>
-            <text x="130" y="208" text-anchor="middle"
+            <text x="130" y="216" text-anchor="middle"
+                  font-size="13" fill="var(--vp-c-text-2)">OpenClaw</text>
+            <text x="130" y="242" text-anchor="middle"
                   font-size="13" fill="var(--vp-c-text-2)">Codex</text>
-            <text x="130" y="230" text-anchor="middle"
-                  font-size="13" fill="var(--vp-c-text-2)">VS Code Copilot</text>
-            <text x="130" y="252" text-anchor="middle"
-                  font-size="13" fill="var(--vp-c-text-2)">Windsurf</text>
             <text x="130" y="290" text-anchor="middle"
                   font-size="11" font-family="ui-monospace"
                   fill="var(--elliot-text-muted)">any MCP client</text>

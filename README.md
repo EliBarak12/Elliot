@@ -86,12 +86,10 @@ Then open Studio at <http://localhost:5173>, scaffold a connector, lint it, and 
 A walkthrough of Elliot Studio — the visual dashboard that observes, runs, and edits everything an agent builds.
 
 <div align="center">
-
-https://github.com/EliBarak12/Elliot/raw/main/docs/screenshots/elliot-demo.webm
-
+  <img src="docs/screenshots/elliot-demo.gif" alt="Elliot Studio — a walkthrough of every page" width="840" />
 </div>
 
-> If the video does not play inline, [watch the walkthrough here](docs/screenshots/elliot-demo.webm).
+> The loop above cycles through every Studio page. For the full-quality screencast, [watch the video walkthrough](docs/screenshots/elliot-demo.webm).
 
 Studio in detail:
 

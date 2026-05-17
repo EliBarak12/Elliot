@@ -232,6 +232,31 @@ def test_every_studio_page_renders_seeded_state(seeded_stack: StackEndpoints) ->
 
     with sync_playwright() as pw:  # type: ignore[union-attr]
         browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+
+        # Optional: record a screencast walkthrough of every Studio page (for
+        # the README demo). Gated by ELLIOT_E2E_VIDEO_DIR so a normal test run
+        # is unaffected. Playwright writes the .webm when the context closes.
+        video_dir = os.environ.get("ELLIOT_E2E_VIDEO_DIR")
+        if video_dir:
+            pathlib.Path(video_dir).mkdir(parents=True, exist_ok=True)
+            vctx = browser.new_context(
+                viewport={"width": 1280, "height": 800},
+                record_video_dir=video_dir,
+                record_video_size={"width": 1280, "height": 800},
+            )
+            vpage = vctx.new_page()
+            vpage.goto(f"{seeded_stack.studio_url}/", wait_until="domcontentloaded")
+            vpage.wait_for_timeout(3_000)
+            for _label, _path in PAGES[1:]:
+                _goto(vpage, f"{seeded_stack.studio_url}{_path}")
+                vpage.wait_for_timeout(2_600)
+            video = vpage.video
+            vctx.close()
+            if video is not None:
+                pathlib.Path(video_dir, "elliot-demo.webm").write_bytes(
+                    pathlib.Path(video.path()).read_bytes()
+                )
+
         context = browser.new_context(viewport={"width": 1366, "height": 900})
         page = context.new_page()
         try:

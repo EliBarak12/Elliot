@@ -4,12 +4,48 @@ import hmac
 import os
 from collections.abc import Awaitable, Callable
 
+import structlog
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+log = structlog.get_logger(__name__)
+
 _BYPASS_PATHS = {"/healthz", "/health", "/"}
+# Environments where missing auth configuration is a hard failure.
+_PROTECTED_ENVS = {"production", "staging"}
+
+
+def enforce_auth_configured(service_name: str) -> None:
+    """Fail fast if API-key auth is unconfigured in a protected environment.
+
+    Services call this at startup. When ``ELLIOT_ENV`` is ``production`` or
+    ``staging`` (case-insensitive) and ``ELLIOT_API_KEY`` is empty/unset, the
+    middleware would silently pass every request through — auth failing open.
+    In that case this raises :class:`RuntimeError`. In dev/test/blank
+    environments it only logs a structlog warning so local workflows are not
+    blocked.
+
+    Args:
+        service_name: Human-readable name of the calling service, for logs.
+    """
+    api_key = os.environ.get("ELLIOT_API_KEY", "").strip()
+    env = os.environ.get("ELLIOT_ENV", "").strip().lower()
+    if api_key:
+        return
+    if env in _PROTECTED_ENVS:
+        raise RuntimeError(
+            f"{service_name}: ELLIOT_API_KEY is not set but ELLIOT_ENV='{env}'. "
+            "Refusing to start with authentication disabled in a "
+            f"{env} environment. Set ELLIOT_API_KEY."
+        )
+    log.warning(
+        "auth.unconfigured",
+        service=service_name,
+        env=env or "(unset)",
+        detail="ELLIOT_API_KEY is not set; API requests will NOT be authenticated",
+    )
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):

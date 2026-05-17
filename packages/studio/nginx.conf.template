@@ -1,0 +1,46 @@
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # ── Security headers (audit H8) ────────────────────────────────────────
+    # The CSP connect-src origins are templated at container start by nginx's
+    # built-in envsubst step (docker-entrypoint.d/20-envsubst-on-templates.sh).
+    # ${ELLIOT_CSP_CONNECT_SRC} is assembled by 10-elliot-csp.sh from
+    # ELLIOT_PLUGIN_ORIGIN / ELLIOT_RUNTIME_ORIGIN, which default to localhost
+    # for dev — override them per deployment so CSP does not block backend
+    # calls on non-localhost hosts.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ${ELLIOT_CSP_CONNECT_SRC}; frame-ancestors 'none'; base-uri 'self'; form-action 'self';" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    # HSTS — only meaningful over HTTPS. Disabled by default (empty value); set
+    # ELLIOT_HSTS to e.g. "max-age=31536000; includeSubDomains" when this is
+    # served behind TLS. nginx omits add_header lines whose value is empty.
+    add_header Strict-Transport-Security "${ELLIOT_HSTS}" always;
+
+    # Container-local health endpoint used by HEALTHCHECK.
+    location = /healthz {
+        access_log off;
+        return 200 "ok\n";
+        add_header Content-Type text/plain;
+    }
+
+    # Vite emits content-hashed filenames under /assets/ — safe to cache forever.
+    location /assets/ {
+        try_files $uri =404;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    # index.html is the unhashed entrypoint — always revalidate so a new deploy
+    # is picked up immediately.
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

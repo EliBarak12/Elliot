@@ -19,6 +19,18 @@ _OP_MAP: dict[str, str] = {
 }
 
 
+def _escape_like(val: Any) -> str:
+    """Escape LIKE wildcards so user input is matched literally.
+
+    Without this, an agent passing ``%`` or ``_`` as a ``contains`` value
+    would match every row. Backslash must be escaped first (it is the ESCAPE
+    character), then ``%`` and ``_``. The generated clause appends
+    ``ESCAPE '\\'`` so these escapes are honored.
+    """
+    s = str(val)
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def build_select_sql(tool: ToolDefinition, params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     """
     Convert tool filter_groups / return_fields / having / order_by / limit
@@ -117,8 +129,8 @@ def _build_group_parts(
                 if val is None:
                     continue  # optional param not provided — skip condition
                 if cond.operator == "contains":
-                    bound[key_base] = f"%{val}%"
-                    group_parts.append(f"{quoted_col} LIKE :{key_base}")
+                    bound[key_base] = f"%{_escape_like(val)}%"
+                    group_parts.append(f"{quoted_col} LIKE :{key_base} ESCAPE '\\'")
                 elif cond.operator == "in_list":
                     vals = val if isinstance(val, list) else str(val).split(",")
                     phs = ", ".join(f":{key_base}_{i}" for i in range(len(vals)))

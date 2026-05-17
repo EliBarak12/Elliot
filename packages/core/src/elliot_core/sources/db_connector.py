@@ -64,7 +64,10 @@ def _run_query(config: SourceConfig, sql: str, secrets: dict[str, str]) -> list[
 
     connect_args: dict[str, Any] = {}
     if config.type == "postgres":
-        connect_args["options"] = "-c statement_timeout=30000"
+        # Enforce read-only at the connection level: any write or DDL the
+        # validator missed will be rejected by Postgres itself. MySQL has no
+        # session-level read-only equivalent, so it relies on validate_tool_sql.
+        connect_args["options"] = "-c statement_timeout=30000 -c default_transaction_read_only=on"
 
     try:
         engine = create_engine(dsn, connect_args=connect_args, pool_pre_ping=True)

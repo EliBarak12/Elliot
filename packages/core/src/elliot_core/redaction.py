@@ -19,35 +19,75 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-# Common secret-bearing parameter names (case-insensitive). Anything matching
-# is replaced with the placeholder. The list is intentionally short — false
-# negatives are better than mistakenly redacting non-secret fields like
-# "key" in a key-value tool argument.
+# Exact secret-bearing parameter names (case-insensitive). Matched in full.
 _SENSITIVE_KEYS = frozenset(
     {
         "api_key",
         "apikey",
+        "api_token",
+        "x-api-key",
+        "x-api-token",
         "access_token",
         "accesstoken",
+        "refresh_token",
+        "refreshtoken",
         "auth_token",
         "authtoken",
         "authorization",
         "bearer",
         "client_secret",
         "clientsecret",
+        "client_id",
         "password",
+        "passwd",
         "pwd",
+        "db_password",
+        "database_password",
         "secret",
         "secret_key",
         "secretkey",
         "session_token",
         "sessiontoken",
         "token",
-        "x-api-key",
+        "private_key",
+        "privatekey",
+        "credential",
+        "credentials",
+        "cookie",
+        "set-cookie",
     }
+)
+# Substrings: any key CONTAINING one of these (case-insensitive) is redacted.
+# This catches naming variants like ``stripe_secret``, ``user_password``,
+# ``oauth_access_token``, ``x-api-token`` without enumerating every name.
+_SENSITIVE_SUBSTRINGS = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "credential",
+    "auth",
+    "private_key",
+    "privatekey",
 )
 _REDACTED = "***"
 _MAX_VALUE_LEN = 256
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    """Return True if ``key`` names a secret-bearing field.
+
+    Matching is case-insensitive: exact membership in ``_SENSITIVE_KEYS`` or a
+    substring hit against ``_SENSITIVE_SUBSTRINGS``.
+    """
+    if not isinstance(key, str):
+        return False
+    lowered = key.lower()
+    if lowered in _SENSITIVE_KEYS:
+        return True
+    return any(sub in lowered for sub in _SENSITIVE_SUBSTRINGS)
 
 
 def redact_url(url: str | None) -> str:
@@ -75,7 +115,7 @@ def _redact_query(qs: str) -> str:
     for pair in qs.split("&"):
         if "=" in pair:
             k, _, v = pair.partition("=")
-            if k.lower() in _SENSITIVE_KEYS:
+            if _is_sensitive_key(k):
                 out_parts.append(f"{k}={_REDACTED}")
             else:
                 out_parts.append(pair)
@@ -95,12 +135,7 @@ def redact_value(value: Any) -> Any:
         return value if len(value) <= _MAX_VALUE_LEN else value[:_MAX_VALUE_LEN] + "…[truncated]"
     if isinstance(value, dict):
         return {
-            k: (
-                _REDACTED
-                if isinstance(k, str) and k.lower() in _SENSITIVE_KEYS
-                else redact_value(v)
-            )
-            for k, v in value.items()
+            k: (_REDACTED if _is_sensitive_key(k) else redact_value(v)) for k, v in value.items()
         }
     if isinstance(value, list):
         return [redact_value(item) for item in value]

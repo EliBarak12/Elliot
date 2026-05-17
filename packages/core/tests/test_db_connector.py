@@ -173,6 +173,36 @@ class TestQueryDatabase:
 
         assert result.rows[0]["order_id"] == 99
 
+    def test_postgres_uses_read_only_connect_args(self) -> None:
+        """Postgres connections must enforce a read-only transaction so any
+        write/DDL the validator missed is rejected by the server itself."""
+        from elliot_core.sources.db_connector import query_database
+
+        source = _pg_source(url="postgresql://localhost/test", table="users")
+        engine = _make_engine_mock([])
+
+        with patch(_PATCH_ENGINE, return_value=engine) as ce:
+            query_database(source, {})
+
+        connect_args = ce.call_args.kwargs["connect_args"]
+        options = connect_args["options"]
+        assert "default_transaction_read_only=on" in options
+        assert "statement_timeout=30000" in options
+
+    def test_mysql_uses_no_pg_connect_args(self) -> None:
+        """MySQL has no session read-only equivalent; it must not get the
+        Postgres-only options string."""
+        from elliot_core.sources.db_connector import query_database
+
+        source = _mysql_source(url="mysql+pymysql://root:pass@localhost/test")
+        engine = _make_engine_mock([])
+
+        with patch(_PATCH_ENGINE, return_value=engine) as ce:
+            query_database(source, {})
+
+        connect_args = ce.call_args.kwargs["connect_args"]
+        assert "options" not in connect_args
+
     def test_fetch_result_has_fetched_at(self) -> None:
         from elliot_core.sources.db_connector import query_database
 

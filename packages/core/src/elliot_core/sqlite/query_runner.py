@@ -13,6 +13,20 @@ DDL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Dangerous SQL functions / constructs that allow file access, network access,
+# command execution, or writes — even inside an otherwise read-only SELECT.
+# Covers Postgres (COPY, pg_read_file, lo_import/export, dblink, pg_sleep),
+# MySQL/MariaDB (INTO OUTFILE/DUMPFILE, LOAD_FILE, sys_exec), SQLite
+# (load_extension, readfile/writefile), and SQL Server (xp_cmdshell).
+_DANGEROUS_PATTERN = re.compile(
+    r"\b(COPY|pg_read_file|pg_read_binary_file|pg_ls_dir|lo_import|lo_export|"
+    r"dblink|pg_sleep|load_extension|readfile|writefile|LOAD_FILE|sys_exec|"
+    r"xp_cmdshell)\b"
+    r"|INTO\s+OUTFILE"
+    r"|INTO\s+DUMPFILE",
+    re.IGNORECASE,
+)
+
 _LINE_COMMENT = re.compile(r"--[^\n]*")
 _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 
@@ -47,6 +61,9 @@ def validate_tool_sql(sql: str) -> tuple[bool, str]:
     m = DDL_PATTERN.search(no_comments)
     if m:
         return False, f"Forbidden keyword: {m.group()}"
+    d = _DANGEROUS_PATTERN.search(no_comments)
+    if d:
+        return False, f"Forbidden construct: {d.group().strip()}"
     if not no_comments.upper().lstrip().startswith(("SELECT", "WITH")):
         return False, "SQL must start with SELECT or WITH"
     jinja = _JINJA_PARAM_TEMPLATE.search(no_comments)

@@ -7,7 +7,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from elliot_core.auth_middleware import ApiKeyMiddleware
+from elliot_core.auth_middleware import ApiKeyMiddleware, enforce_auth_configured
 from elliot_core.error_middleware import register_error_handlers
 from elliot_core.errors import ElliotError
 from elliot_core.http_middleware import RequestLoggingMiddleware
@@ -116,6 +116,50 @@ def test_auth_middleware_bypasses_options(monkeypatch: pytest.MonkeyPatch):
     # FastAPI without OPTIONS handler returns 405; the key check should NOT
     # produce 401. Either 200/204 (with handler) or 405 is acceptable.
     assert resp.status_code != 401
+
+
+# ── enforce_auth_configured ───────────────────────────────────────────────────
+
+
+def test_enforce_auth_raises_in_production(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("ELLIOT_API_KEY", raising=False)
+    monkeypatch.setenv("ELLIOT_ENV", "production")
+    with pytest.raises(RuntimeError, match="ELLIOT_API_KEY"):
+        enforce_auth_configured("test-service")
+
+
+def test_enforce_auth_raises_in_staging_case_insensitive(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("ELLIOT_API_KEY", raising=False)
+    monkeypatch.setenv("ELLIOT_ENV", "STAGING")
+    with pytest.raises(RuntimeError, match="staging"):
+        enforce_auth_configured("test-service")
+
+
+def test_enforce_auth_warns_in_dev(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("ELLIOT_API_KEY", raising=False)
+    monkeypatch.setenv("ELLIOT_ENV", "dev")
+    # Must not raise — dev only logs a warning.
+    enforce_auth_configured("test-service")
+
+
+def test_enforce_auth_warns_when_env_blank(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("ELLIOT_API_KEY", raising=False)
+    monkeypatch.delenv("ELLIOT_ENV", raising=False)
+    enforce_auth_configured("test-service")
+
+
+def test_enforce_auth_passes_when_key_set_in_production(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ELLIOT_API_KEY", "a-real-key")
+    monkeypatch.setenv("ELLIOT_ENV", "production")
+    # Key is configured — no raise even in production.
+    enforce_auth_configured("test-service")
+
+
+def test_enforce_auth_treats_whitespace_key_as_unset(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ELLIOT_API_KEY", "   ")
+    monkeypatch.setenv("ELLIOT_ENV", "production")
+    with pytest.raises(RuntimeError):
+        enforce_auth_configured("test-service")
 
 
 # ── error_middleware ──────────────────────────────────────────────────────────

@@ -3,6 +3,7 @@ import { Toaster } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
+import { ErrorBoundary } from "./ErrorBoundary";
 
 export function AppShell() {
   return (
@@ -13,7 +14,9 @@ export function AppShell() {
           <Header />
           <main className="flex-1 overflow-y-auto scrollbar-thin">
             <div className="mx-auto max-w-7xl px-8 py-8 animate-fade-in">
-              <Outlet />
+              <ErrorBoundary>
+                <Outlet />
+              </ErrorBoundary>
             </div>
           </main>
         </div>

@@ -19,8 +19,9 @@ export function useSkills() {
       return Array.isArray(raw?.skills) ? raw.skills : [];
     },
     // Live-refresh so skills the agent creates appear in the UI without a
-    // page reload.
-    refetchInterval: 4000,
+    // page reload. 30s keeps backend load sane at scale; window-focus refetch
+    // gives an immediate update when the user returns to the tab.
+    refetchInterval: 30_000,
     refetchOnWindowFocus: true,
   });
 }

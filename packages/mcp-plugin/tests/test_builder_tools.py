@@ -138,6 +138,18 @@ def test_save_draft_writes_file(tmp_path: Path) -> None:
     assert did not in _drafts
 
 
+def test_save_draft_normalizes_plain_filename(tmp_path: Path) -> None:
+    """A bare name or a .json name must become <name>.connector.json — not
+    get its trailing characters chewed off by rstrip."""
+    r = create_draft(json.dumps(PROPOSED))
+    save_draft(r["draft_id"], "sessions", str(tmp_path))
+    assert (tmp_path / "sessions.connector.json").exists()
+
+    r2 = create_draft(json.dumps(PROPOSED))
+    save_draft(r2["draft_id"], "orders.json", str(tmp_path))
+    assert (tmp_path / "orders.connector.json").exists()
+
+
 def test_discard_draft_removes_it() -> None:
     r = create_draft(json.dumps(PROPOSED))
     did = r["draft_id"]

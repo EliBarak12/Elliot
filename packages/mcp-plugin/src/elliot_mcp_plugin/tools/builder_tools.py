@@ -154,7 +154,10 @@ def save_draft(draft_id: str, filename: str, connectors_dir: str) -> dict[str, A
     if not draft:
         return {"error": f"No draft with id {draft_id!r}"}
     if not filename.endswith(".connector.json"):
-        filename = filename.rstrip(".json") + ".connector.json"
+        # removesuffix, not rstrip: rstrip(".json") strips any trailing
+        # run of the characters {. j s o n}, so "orders.json" became
+        # "orde.connector.json" and "sessions" became "sessi.connector.json".
+        filename = filename.removesuffix(".json") + ".connector.json"
     # Audit finding C4: previously `Path(connectors_dir) / filename` accepted
     # `..` / absolute paths, allowing an agent to overwrite ~/.ssh/authorized_keys,
     # .env, scripts in $PATH, etc. safe_join asserts the resolved file lives

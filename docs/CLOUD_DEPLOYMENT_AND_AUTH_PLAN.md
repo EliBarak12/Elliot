@@ -57,8 +57,9 @@ Grounded in the actual code. Each row is something the cloud plan must change.
 | **Identity** | None. `ApiKeyMiddleware` checks one `ELLIOT_API_KEY` for all callers. | No users, orgs, roles, or per-caller identity. |
 | **Authorization** | Binary: have the key or not. | No RBAC, no connector ownership, no scoped access. |
 | **Studio auth** | `VITE_API_KEY` baked into the browser bundle — explicitly "not a per-user secret" (`studio/src/lib/http.ts:5-8`). | Anyone loading Studio reads the deployment key. Unusable for multi-user. |
-| **MCP auth** | Agents connect with a bare URL; no token passed by the MCP client. | MCP clients must authenticate; URL alone cannot identify a tenant or user. |
-| **Connector storage** | `*.connector.json` files in `ELLIOT_CONNECTORS_DIR`, loaded from disk (`loader.py`), 30s path-keyed cache. | No DB, no ownership, no versioning, no visibility rules. |
+| **MCP auth** | Two MCP surfaces — the **builder** (`mcp-plugin`, agentic connector authoring) and the **runtime** (`connector-runtime`, published tools) — both accept a bare URL with no token from the MCP client. | **Both** MCP endpoints must authenticate the connecting agent; a URL alone cannot identify a tenant, user, or workspace. The builder MCP especially: an agent connected there can create/edit/delete connectors. |
+| **Trace ingest** | `/v1/trace/ingest` (added on `main`) accepts harness traces — agent **reasoning**, **user prompts**, **final output** — with no auth. `/v1/sessions/stream` (SSE) is also open. | These carry sensitive run data; they must be authenticated and tenant-scoped, and the local trace hook adapter must ship a per-user token. |
+| **Connector storage** | `*.connector.json` files in `ELLIOT_CONNECTORS_DIR`, loaded from disk (`loader.py`), 30s path-keyed cache. Builder drafts live in local `.elliot/session.json`. | No DB, no ownership, no versioning, no visibility rules. The agentic builder's mutations must persist to a per-user **cloud workspace**, not local disk. |
 | **Upstream credentials** | One value per source, resolved from process env at *connector load time* (`secrets.py`, `executor._build_auth_headers`). | One credential for everyone. Cannot serve per-end-user data. `AuthConfig.type` lists `oauth2` but there is **no OAuth implementation**. |
 | **Runtime model** | One process loads one connector (or one dir) into one `ToolExecutor` with one `secrets` dict (`server.py:create_app`). | Process-wide singletons. No tenant routing. |
 | **Materialization cache** | Upstream rows flattened into a **process-wide in-memory SQLite** engine, cached 300s, shared by all callers (`executor.py:38-220`). | **Cross-user data leak** the moment two users share a runtime. |
@@ -206,27 +207,45 @@ Either way, Elliot treats the IdP as the source of truth for *human* login
 
 ### 5.3 MCP & programmatic authentication
 
-This is what lets a *consumer's agent* prove who it is to Elliot.
+Elliot stays **agentic** in the cloud: a user connects their own coding agent
+(Claude Code / Cursor / Codex) and builds the connector *with* that agent, and
+a consumer connects an agent to *run* a published connector. Both of those are
+MCP connections, so **both Elliot MCP surfaces must authenticate the agent**:
+
+- **Builder MCP** (`mcp-plugin`) — the agentic connector-authoring surface. An
+  agent connected here can discover sources and create/edit/delete tools, so
+  the connection must be authenticated and scoped to **one user's cloud
+  workspace** (Layer-A identity). See the technical plan for how the agent's
+  mutations persist server-side.
+- **Runtime MCP** (`connector-runtime`) — a published connector's tools. The
+  connection is authenticated and scoped to a specific **install** (Layer-B
+  identity).
+- **Trace ingest** (`/v1/trace/ingest`, `/v1/sessions/stream`) — the local
+  trace-hook HTTP path. Also authenticated and tenant-scoped (see 5.4).
 
 The MCP specification's Authorization profile makes an MCP server an **OAuth
-2.1 protected resource**. Elliot's runtime `/mcp` endpoint adopts it:
+2.1 protected resource**. *Every* Elliot MCP endpoint — builder and runtime —
+adopts it:
 
 - Implement **Protected Resource Metadata** (RFC 9728) at
   `/.well-known/oauth-protected-resource` so MCP clients discover the
   authorization server automatically.
 - Support **Dynamic Client Registration** (RFC 7591) so agents that have
   never seen this Elliot tenant can register themselves.
-- Require **Resource Indicators** (RFC 8707): a token minted for connector X's
-  runtime URL is *only* valid there — it cannot be replayed against connector
-  Y. This closes the token-reuse hole.
-- Modern clients (Claude Code) can do the full browser-based OAuth flow.
+- Require **Resource Indicators** (RFC 8707): a token minted for one endpoint
+  (a workspace's builder, or connector X's runtime) is *only* valid there — it
+  cannot be replayed against another workspace or connector Y. This closes the
+  token-reuse hole.
+- Modern clients (Claude Code) can do the full browser-based OAuth flow; on
+  first connect the agent is sent through Elliot login + consent.
 
 For clients/CI that cannot do interactive OAuth, support **Personal Access
 Tokens (PATs)**: long-lived, user-minted, *scoped* tokens
-(`tenant`, `connector`, `role`), revocable, shown once, stored only as a hash.
-A PAT is presented as `Authorization: Bearer <pat>`.
+(`tenant`, `workspace`/`connector`, `role`), revocable, shown once, stored only
+as a hash. A PAT is presented as `Authorization: Bearer <pat>`.
 
-`ApiKeyMiddleware` is replaced by an `AuthnMiddleware` that, in priority order:
+`ApiKeyMiddleware` is replaced by an `AuthnMiddleware` — wired into **both**
+the `mcp-plugin` and `connector-runtime` apps — that, in priority order:
 
 1. Validates an OAuth 2.1 access token (JWT: verify signature, `iss`, `aud`
    = this resource, `exp`, scopes) → resolves Layer-B identity.
@@ -237,6 +256,27 @@ A PAT is presented as `Authorization: Bearer <pat>`.
 The resolved identity (`tenant_id`, `user_id`, `connector_id`, scopes) is bound
 to a request-scoped contextvar — exactly the pattern `AgentIdentityMiddleware`
 already uses for observability, extended to carry authorization.
+
+### 5.4 Trace-hook authentication
+
+`main` added `/v1/trace/ingest`: a harness hook adapter
+(`elliot_core/trace/installer.py`) wired into the user's local agent config
+POSTs each run's tool calls **plus the agent's reasoning, the user's prompt,
+and the final answer** to the runtime. Today this endpoint is unauthenticated
+and the hook targets `http://localhost`.
+
+In cloud this is sensitive data crossing the public internet, so:
+
+- `/v1/trace/ingest` and `/v1/sessions/stream` go behind `AuthnMiddleware`
+  like every other route — no bypass.
+- `elliot trace install` is issued a **scoped trace-ingest PAT** and writes it
+  into the hook command (or a referenced credential file, not inline in a
+  world-readable config), and re-points the hook URL at the hosted runtime.
+- The token is scoped to `trace:write` for one `(tenant, connector)` only, so
+  a leaked hook token cannot read data or call tools.
+- The ingested trace is tagged with the token's `tenant_id` / `connector_id`,
+  never trusting the `harness` / `session_id` fields in the payload body for
+  tenancy.
 
 ---
 
@@ -679,10 +719,18 @@ A checklist for implementation, mapped to the current code.
 - `observation_store.py`: add `tenant_id`, `connector_id`, `consumer_subject`
   columns + indexes + RLS; provide a migration.
 - `task_store.py`: back it with Redis.
+- `server.py`: wire `AuthnMiddleware` onto the trace routes; tag ingested
+  traces with the token's `(tenant, connector)`, not the payload body
+  (Section 5.4).
 
 **`packages/mcp-plugin`**
-- Builder becomes authenticated + tenant-scoped; `ElliotSession` /
-  `session.json` moves from local disk to per-user server-side storage.
+- Wire `AuthnMiddleware` onto the **builder** app — the agentic build surface
+  must authenticate every MCP connection (Section 5.3); a bare URL is rejected.
+- `ElliotSession` / `session.json` moves from local disk to a per-user,
+  per-workspace server-side draft store so an agent's mutations land in the
+  user's cloud workspace.
+- `elliot trace install` (`elliot_core/trace/installer.py`): write a scoped
+  trace PAT into the hook and re-point the hook URL at the hosted runtime.
 
 **`packages/studio`**
 - `lib/http.ts`: drop `VITE_API_KEY`; add OIDC login + live access token.
@@ -708,7 +756,7 @@ Each phase is independently shippable and leaves Elliot working.
 |---|---|---|
 | **0 — Foundations** | Postgres + Redis; move connectors & observations off local disk into the DB (still single-tenant); Terraform skeleton. | Stateless services; nothing user-visible. |
 | **1 — Accounts & control plane** | Elliot API; OIDC IdP; orgs/users/RBAC; Studio OIDC login (drop `VITE_API_KEY`). | Real human identity (Layer A/B). |
-| **2 — MCP OAuth & tenancy** | `AuthnMiddleware` (OAuth 2.1 + PAT); `tenant_id` + RLS everywhere; per-request connector/executor resolution; **fix the materialization-cache leak**. | Multiple tenants safely share the runtime. |
+| **2 — MCP OAuth & tenancy** | `AuthnMiddleware` (OAuth 2.1 + PAT) on **both** the builder and runtime MCP endpoints (and the trace routes); builder draft moves server-side so agentic building works in the cloud app; `tenant_id` + RLS everywhere; per-request connector/executor resolution; **fix the materialization-cache leak**. | Agents authenticate to build *and* to consume; multiple tenants safely share the runtime. |
 | **3 — Registry & distribution** | Connector publish/version/visibility; registry; per-connector hosted MCP URLs + install snippets. | Publishers distribute connectors; consumers install hosted connectors. |
 | **4 — Per-user upstream auth** | `auth.binding`; credential vault; `per_user` mode; `UPSTREAM_CREDENTIAL_REQUIRED` actionable error; `:elliot_caller` for `static` row-scoping. | Each consumer gets *their own* upstream data via their own credential. |
 | **5 — Delegated OAuth** | OAuth Broker; `oauth2_delegated` mode; Token Exchange (RFC 8693) where available. | Full hands-off delegated access for OAuth upstreams. |

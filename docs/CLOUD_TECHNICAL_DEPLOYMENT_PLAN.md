@@ -84,27 +84,86 @@ Metrics, Agent Console, Evaluation) as the **Build** and **Observe** surfaces �
 they are reused, not rebuilt, but re-pointed from localhost to the hosted,
 authenticated APIs (`studio/src/lib/http.ts` rework, per the auth plan).
 
+### 3.3 Agentic building — connect your agent to the cloud
+
+Elliot is agentic by design ("the platform itself is agentic" — principle 5),
+and the cloud version **keeps that as the primary build path**. The user does
+not hand-build connectors in forms; they connect their own coding agent and
+build *with* it — the difference from today is only that every change now
+lands in their **cloud workspace** instead of local disk.
+
+How it works:
+
+1. In the app's **Build** surface the user clicks "Connect your agent". The
+   app shows a copy-paste MCP client snippet pointing at their **personal,
+   authenticated builder MCP URL**:
+
+   ```json
+   { "mcpServers": { "elliot": {
+       "url": "https://build.elliot.dev/t/<tenant>/w/<workspace>/mcp/",
+       "authorization": "oauth"
+   }}}
+   ```
+
+2. The agent (Claude Code / Cursor / Codex) connects. The builder MCP endpoint
+   is an **OAuth 2.1 protected resource** (auth plan §5.3) — on first connect
+   the agent runs the OAuth flow and the user logs in + consents. A bare URL
+   is rejected; the connection is bound to that one user's workspace.
+
+3. The agent calls the existing `mcp-plugin` tool groups
+   (`discover_source`, `build_connector`, `create_tool`, `lint_connector`,
+   `run_eval`, the `audit` and `onboarding` tools added on `main`, …) exactly
+   as it does locally today — the agentic UX is unchanged.
+
+4. **Every mutation persists into the cloud workspace.** Today `ElliotSession`
+   writes `.elliot/session.json` on disk; in cloud the session state is a
+   **server-side draft** in `connector_drafts`, keyed by `(tenant, user,
+   workspace)`. The agent's `discover_source` / `create_tool` calls update
+   that row transactionally.
+
+5. The change is **immediately visible in the app**: the Build surface
+   subscribes to the draft, so the user watches the connector take shape in
+   the visual editor while their agent works — and can hand-edit in the same
+   draft. Agent and human edit one shared server-side document.
+
+So the three "Create" entry paths in §4.1 (agentic, visual, import) are not
+separate silos — they all read and write the **same authenticated cloud
+draft**. The agent builds; the app shows it; both are auth-scoped to the user.
+
+Two consequences for the build, called out so they are not missed:
+
+- The **builder MCP needs auth** — it is not just the runtime MCP. An
+  unauthenticated builder endpoint would let anyone create connectors in
+  anyone's workspace. `AuthnMiddleware` is wired into `mcp-plugin`, not only
+  `connector-runtime`.
+- `ElliotSession` / `session.json` must move off local disk to the
+  `connector_drafts` store before the builder can be multi-user.
+
 ---
 
 ## 4. Connector Lifecycle — Detailed
 
 ### 4.1 Create
 
-Three entry paths, all producing the same `ConnectorConfig`
+Entry paths, all reading/writing the **same authenticated cloud draft** (§3.3)
+and producing the same `ConnectorConfig`
 (`packages/core/src/elliot_core/types/connector.py`):
 
+- **Agentic builder (primary)** — the user's own agent, connected to the
+  authenticated builder MCP URL, drives the `mcp-plugin` tool groups
+  (`discover_source` → `build_connector` → `lint` → `eval` → `deploy`, plus
+  the `audit` and `onboarding` tool groups added on `main`). See §3.3 for the
+  connect flow and the auth requirement.
 - **Visual editor** — the existing connector-editor UI (task 072): forms for
   sources, tools (filter/return model), parameters, skills. Live lint panel.
-- **Agentic builder** — the existing `mcp-plugin` tool groups
-  (`discover_source` → `build_connector` → `lint` → `eval` → `deploy`). In
-  cloud the builder is authenticated and tenant-scoped; an agent (the user's
-  Claude Code) connects to *their* builder workspace over an authenticated MCP
-  URL.
-- **OpenAPI import** — `openapi_analyzer.py` turns a spec into a
-  `ProposedConnector` the user then refines.
+  Edits the same draft the agent does.
+- **Spec import** — `openapi_analyzer.py` (OpenAPI) and `postman_analyzer.py`
+  (Postman collections, added on `main`) turn a spec into a `ProposedConnector`
+  the user/agent then refines.
 
-The draft connector lives server-side (replacing local `.elliot/session.json`)
-keyed by `(tenant, user)`, autosaved.
+The draft connector lives server-side in `connector_drafts`, keyed by
+`(tenant, user, workspace)`, autosaved — replacing local `.elliot/session.json`
+(`mcp-plugin/.../session.py`), which is single-machine and not multi-user.
 
 ### 4.2 Validate
 
@@ -117,6 +176,7 @@ moved server-side:
 | Schema validate | `ConnectorConfig.model_validate` | valid |
 | Secret hygiene | `secrets.check_secrets` + `SECRET_LITERAL` lint rule | no literal secrets in the file |
 | Eval | `elliot eval` / `eval_runner.py` | all cases pass (if a suite exists) |
+| Connector audit | `elliot_core/audit` (judge + seeds, added on `main`) | Petri-style audit findings within org-configured tolerance |
 | Quality score | `quality_analyzer` | score ≥ org-configured threshold (default 80) |
 
 The result is a **validation report** stored with the candidate version, shown
@@ -193,8 +253,23 @@ and the parsed agent identity (`client`, `client_version`, `model`,
 already aggregates avg/max tokens per tool and emits suggestions
 (`_suggest()`).
 
-The cloud work is **not** to invent metrics — it is to make this data
-**multi-tenant, durable, queryable, and per-version**.
+`main` extended this further, and the cloud plan inherits it:
+
+- **Multi-step session grouping** — calls now group into one session by the
+  stable MCP `mcp-session-id` (not the per-call `request_id`), with an idle
+  sweeper flushing completed runs and `/v1/sessions/stream` (SSE) feeding the
+  live Agent Console.
+- **Trace ingest** — `/v1/trace/ingest` accepts harness traces that MCP
+  traffic cannot see: the agent's **reasoning**, the **user prompt**, and the
+  **final output**, shipped by the local hook adapter.
+- **Per-harness rollup** — `/v1/metrics/harnesses` / `store.harness_breakdown()`
+  shows how Claude Code vs Cursor vs Codex vs raw MCP traffic each exercise a
+  connector.
+
+The cloud work is **not** to invent metrics — it is to make all of this data
+**multi-tenant, durable, queryable, per-version, and authenticated**
+(the trace-ingest and SSE endpoints get the same auth as every other route —
+auth plan §5.4).
 
 ### 5.2 The metrics pipeline
 
@@ -302,11 +377,18 @@ GET    /v1/usage                         metered usage for billing
 
 ### 7.2 Data plane
 
-- **Builder**: MCP over HTTPS at `/t/{tenant}/builder/mcp/` (authenticated;
-  the existing 8 tool groups).
-- **Runtime**: MCP over HTTPS at `/t/{tenant}/c/{connector}/mcp/`, plus the
-  OpenAI-compatible `/v1/chat/completions`. Health: `/health`, `/v1/health`.
-- OAuth discovery: `/.well-known/oauth-protected-resource` (auth plan §5.3).
+- **Builder MCP**: per-user, per-workspace, OAuth-protected MCP over HTTPS at
+  `/t/{tenant}/w/{workspace}/mcp/` — the agentic build surface (§3.3). All the
+  existing `mcp-plugin` tool groups; every mutation writes the server-side
+  draft. **Authenticated — no bare-URL access.**
+- **Runtime MCP**: per-install, OAuth-protected MCP over HTTPS at
+  `/t/{tenant}/c/{connector}/mcp/`, plus the OpenAI-compatible
+  `/v1/chat/completions`. Health: `/health`, `/v1/health`.
+- **Trace ingest**: `POST /v1/trace/ingest` and `GET /v1/sessions/stream` —
+  authenticated with a scoped trace PAT (auth plan §5.4); the local hook
+  adapter is re-pointed here from localhost.
+- OAuth discovery: `/.well-known/oauth-protected-resource` on every MCP
+  endpoint (auth plan §5.3).
 
 ---
 
@@ -541,7 +623,8 @@ the auth plan's Phases 0–3; M4–M6 deliver the lifecycle.
 |---|---|---|
 | **M0 Foundations** | Postgres/Redis/object store/KMS; Terraform; CD skeleton; connectors + observations off local disk | infra ready |
 | **M1 Accounts** | Elliot API; OIDC login; orgs/RBAC; app re-pointed off `VITE_API_KEY` | sign in, workspaces |
-| **M2 Tenancy & runtime** | per-request connector/credential resolution; `tenant_id` + RLS; **materialization-cache fix**; observations to Redis→Postgres | safe shared runtime |
+| **M1.5 Authenticated agentic builder** | `AuthnMiddleware` on `mcp-plugin`; per-user builder MCP URL; `ElliotSession` → server-side `connector_drafts` | **connect your agent to the cloud and build** (§3.3) |
+| **M2 Tenancy & runtime** | per-request connector/credential resolution; `tenant_id` + RLS; **materialization-cache fix**; observations to Redis→Postgres; auth on `/v1/trace/ingest` | safe shared runtime |
 | **M3 Lifecycle core** | drafts, validate gates, immutable versions, channels, rollback | **create → validate → publish → improve** |
 | **M4 Distribution** | registry, visibility, installs, hosted MCP URLs + install snippets | **distribute** |
 | **M5 Observability** | metrics pipeline, ingest/rollup workers, Observe surface per-tool/per-version, suggestions, A/B, alerts | **observe → improve loop** |
@@ -560,8 +643,12 @@ The platform is "done" for the requested scope when:
 
 - A new user can sign up, create an org, and build a connector entirely in the
   app — no `make dev`, no local install.
-- Publishing is blocked unless lint, schema, secret-hygiene, eval, and quality
-  gates pass; the report is visible.
+- The user can connect their own coding agent to a personal, **authenticated**
+  builder MCP URL and build the connector agentically; an unauthenticated or
+  wrong-workspace connection is rejected; every agent mutation appears live in
+  the app's Build surface and persists to the server-side draft.
+- Publishing is blocked unless lint, schema, secret-hygiene, eval, audit, and
+  quality gates pass; the report is visible.
 - A published connector is installable by another tenant via a copy-paste MCP
   snippet, and its tools work in a real agent.
 - Every tool call by a consumer's agent appears in the publisher's **Observe**

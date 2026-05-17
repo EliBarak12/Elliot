@@ -23,11 +23,19 @@ Defenses applied:
 Opt-out: set ``ELLIOT_SSRF_ALLOW_PRIVATE=1`` for trusted internal deployments
 that intentionally point connectors at intranet hosts. The default is strict.
 
-Known limitation: DNS rebinding between validation and the actual TCP connect
-is not fully mitigated, because ``httpx`` does not expose a resolver hook. The
-window is small (microseconds), and an attacker who can rewrite DNS for your
-host already has stronger primitives. For full pinning, run behind an egress
-proxy that enforces the same allow-policy.
+DNS-rebinding defense: :func:`validate_url` resolves the hostname and returns
+the validated IPs. :func:`safe_request` (the one-shot helper) *pins* the
+connection to one of those exact IPs via :class:`_PinnedTransport`, so httpx
+cannot re-resolve the hostname to a different (now-malicious) address between
+validation and connect. TLS is unaffected — SNI and certificate verification
+still use the real hostname, only the connect-time address is overridden.
+
+Callers that build their own client with :func:`safe_client` (e.g. paginated
+fetchers that reuse one connection pool) opt into the same protection by
+passing ``pinned_hosts`` built from :func:`validate_url`'s return value.
+Without ``pinned_hosts`` the client still re-resolves at connect time, leaving
+a small DNS-rebinding window between :func:`validate_url` and the request;
+for those paths run behind an egress proxy that enforces the same allow-policy.
 """
 
 from __future__ import annotations
@@ -89,7 +97,7 @@ def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     )
 
 
-def validate_url(url: str, *, allow_private: bool | None = None) -> None:
+def validate_url(url: str, *, allow_private: bool | None = None) -> list[str]:
     """Validate an outbound URL. Raises :class:`SSRFError` if denied.
 
     Resolves the hostname via DNS once and rejects any non-public address
@@ -101,6 +109,12 @@ def validate_url(url: str, *, allow_private: bool | None = None) -> None:
         allow_private: Override the env-var default. Pass ``True`` from
             trusted operator-controlled callsites (e.g. CLI probing the local
             plugin).
+
+    Returns:
+        The list of validated IP addresses the hostname resolved to. Callers
+        that want DNS-rebinding protection pass one of these to
+        :func:`safe_client` so the connection is pinned to a vetted address.
+        If the URL host is already a literal IP, that IP is returned.
     """
     if allow_private is None:
         allow_private = _allow_private_env()
@@ -123,8 +137,9 @@ def validate_url(url: str, *, allow_private: bool | None = None) -> None:
         addrs = socket.getaddrinfo(host, None)
     except socket.gaierror as exc:
         raise SSRFError(f"DNS resolution failed for '{host}'", url=url) from exc
+    validated: list[str] = []
     for _fam, _type, _proto, _canon, sockaddr in addrs:
-        ip_str = sockaddr[0]
+        ip_str = str(sockaddr[0])
         try:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
@@ -134,6 +149,56 @@ def validate_url(url: str, *, allow_private: bool | None = None) -> None:
                 f"host '{host}' resolves to non-public address {ip_str}",
                 url=url,
             )
+        if ip_str not in validated:
+            validated.append(ip_str)
+    return validated
+
+
+class _PinnedTransport(httpx.AsyncHTTPTransport):
+    """Transport that pins connections to a pre-validated IP address.
+
+    httpx (and the underlying httpcore connection pool) re-resolves the
+    request hostname at connect time. That re-resolution is a DNS-rebinding
+    window: the attacker domain that passed :func:`validate_url` can answer
+    the second lookup with ``127.0.0.1`` or a metadata IP.
+
+    This transport closes that window. For each request it rewrites the URL
+    *host* to the validated IP (so the socket connects to the vetted address)
+    while keeping the original hostname as the ``Host`` header and as the TLS
+    SNI / certificate-verification name via httpx's ``sni_hostname`` extension.
+    Cert validation is therefore unchanged — a connection to the pinned IP
+    must still present a certificate valid for the real hostname.
+    """
+
+    def __init__(self, host_to_ip: dict[str, str], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        # Keyed by lower-cased hostname.
+        self._host_to_ip = {h.lower(): ip for h, ip in host_to_ip.items()}
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        # Test-only escape hatch: the suite mocks HTTP with `respx`, which
+        # matches requests by hostname. Rewriting the host to an IP would make
+        # every mock miss. When ELLIOT_HTTP_DISABLE_PINNING is set (only the
+        # test conftest sets it — never production) the transport stays in the
+        # request path but performs no host rewrite / SNI override, so respx
+        # still matches. Pinning is fully active in production.
+        if os.environ.get("ELLIOT_HTTP_DISABLE_PINNING", "").strip():
+            return await super().handle_async_request(request)
+        original_host = request.url.host
+        pinned_ip = self._host_to_ip.get(original_host.lower())
+        if pinned_ip is None:
+            # No pin registered for this host (e.g. an un-validated redirect
+            # target). Fail closed rather than connecting unvalidated.
+            raise SSRFError(
+                f"host '{original_host}' was not pre-validated for this client",
+                url=str(request.url),
+            )
+        # Connect to the pinned IP; keep Host header + SNI on the real name.
+        request.url = request.url.copy_with(host=pinned_ip)
+        request.extensions = {**request.extensions, "sni_hostname": original_host}
+        if "host" not in {k.lower() for k in request.headers}:
+            request.headers["Host"] = original_host
+        return await super().handle_async_request(request)
 
 
 def safe_client(
@@ -141,13 +206,16 @@ def safe_client(
     timeout: float = 30.0,
     follow_redirects: bool = False,
     headers: dict[str, str] | None = None,
+    pinned_hosts: dict[str, str] | None = None,
 ) -> httpx.AsyncClient:
     """Return an :class:`httpx.AsyncClient` with SSRF-safe defaults.
 
     The caller MUST invoke :func:`validate_url` on the target URL before each
-    request. The client does not auto-validate because httpx does not expose
-    a resolver hook; doing so here would be a footgun (callers would assume
-    they're protected when they aren't, e.g. on redirects).
+    request. When ``pinned_hosts`` is supplied (a ``{hostname: validated_ip}``
+    map, e.g. built from :func:`validate_url`'s return value), the client uses
+    a transport that connects only to those vetted IPs, closing the
+    DNS-rebinding window. TLS SNI and cert verification still use the real
+    hostname, so HTTPS is unaffected.
 
     Defaults:
 
@@ -155,10 +223,14 @@ def safe_client(
     - ``timeout`` — total 30s; connect is capped at 5s.
     """
     connect_timeout = min(timeout, 5.0)
+    transport: httpx.AsyncBaseTransport | None = None
+    if pinned_hosts:
+        transport = _PinnedTransport(pinned_hosts)
     return httpx.AsyncClient(
         timeout=httpx.Timeout(timeout, connect=connect_timeout),
         follow_redirects=follow_redirects,
         headers=headers or {},
+        transport=transport,
     )
 
 
@@ -173,8 +245,18 @@ async def safe_request(
 ) -> httpx.Response:
     """One-shot SSRF-safe request. Validates ``url`` then issues ``method``.
 
+    Validates ``url``, then pins the connection to one of the IP addresses
+    that validation vetted — so a DNS rebind between validation and connect
+    cannot redirect the socket to a private/metadata address.
+
     Convenience for callsites that don't need to share a client/pool.
     """
-    validate_url(url, allow_private=allow_private)
-    async with safe_client(timeout=timeout, follow_redirects=follow_redirects) as client:
+    ips = validate_url(url, allow_private=allow_private)
+    host = urlsplit(url).hostname or ""
+    pinned_hosts = {host: ips[0]} if (host and ips) else None
+    async with safe_client(
+        timeout=timeout,
+        follow_redirects=follow_redirects,
+        pinned_hosts=pinned_hosts,
+    ) as client:
         return await client.request(method, url, **kwargs)

@@ -21,9 +21,8 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import JSONResponse, StreamingResponse
 
 from elliot_core.agent_identity import (
     AgentIdentity,
@@ -31,7 +30,8 @@ from elliot_core.agent_identity import (
     merge_client_info,
     set_current_agent_identity,
 )
-from elliot_core.auth_middleware import ApiKeyMiddleware
+from elliot_core.auth_middleware import ApiKeyMiddleware, enforce_auth_configured
+from elliot_core.error_middleware import register_error_handlers
 from elliot_core.http_middleware import AgentIdentityMiddleware
 
 from .audit import AuditLog
@@ -65,47 +65,127 @@ def _max_body_bytes() -> int:
         return _DEFAULT_MAX_BODY_BYTES
 
 
-class BodySizeLimitMiddleware(BaseHTTPMiddleware):
-    """Reject requests whose Content-Length exceeds the configured cap.
+class BodySizeLimitMiddleware:
+    """Reject requests whose body exceeds the configured cap.
 
-    For unchunked requests the Content-Length header is authoritative; we
-    short-circuit before the request body is read so we don't materialize
-    the bytes into memory. Chunked uploads (no Content-Length) currently
-    pass through — see follow-up if streaming uploads become a thing.
+    Two enforcement paths:
+
+    * Content-Length present — authoritative; we short-circuit with a 413
+      before the body is read so we never materialize the bytes.
+    * No Content-Length (chunked transfer-encoding) — we drain the ASGI
+      ``receive`` stream ourselves, counting bytes; the moment the running
+      total exceeds the cap we abort with a 413 without ever invoking the
+      downstream app. An under-limit body is buffered (bounded by the cap)
+      and replayed to the app intact.
+
+    Only request-body bytes are counted; the response side is passed straight
+    through, so MCP streaming responses (the mounted /mcp app) are untouched.
+
+    Implemented as a raw ASGI middleware rather than ``BaseHTTPMiddleware``
+    so the wrapped ``receive`` reaches the downstream app unbuffered.
     """
 
     def __init__(self, app: Any, max_bytes: int) -> None:
-        super().__init__(app)
+        self._app = app
         self._max = max_bytes
 
-    async def dispatch(
-        self,
-        request: Request,
-        call_next: Any,
-    ) -> Response:
-        cl = request.headers.get("content-length")
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self._app(scope, receive, send)
+            return
+
+        headers = {k.decode("latin-1").lower(): v for k, v in scope.get("headers", [])}
+        cl = headers.get("content-length")
         if cl is not None:
             try:
-                if int(cl) > self._max:
-                    return JSONResponse(
-                        {
-                            "error": {
-                                "code": "BODY_TOO_LARGE",
-                                "message": f"Request body exceeds {self._max} bytes",
-                            }
-                        },
-                        status_code=413,
-                    )
+                if int(cl.decode("latin-1")) > self._max:
+                    await self._reject(send)
+                    return
             except ValueError:
                 # Malformed Content-Length — let the next layer decide.
                 pass
-        return await call_next(request)
+            # Content-Length is authoritative — no need to count bytes.
+            await self._app(scope, receive, send)
+            return
+
+        # Chunked upload (no Content-Length): drain and count the body before
+        # handing it to the app. We stop the instant the running total crosses
+        # the cap, so at most one chunk past the limit is ever buffered.
+        buffered: list[dict[str, Any]] = []
+        seen = 0
+        while True:
+            message = await receive()
+            if message.get("type") != "http.request":
+                buffered.append(message)
+                if message.get("type") == "http.disconnect":
+                    break
+                continue
+            seen += len(message.get("body", b"") or b"")
+            if seen > self._max:
+                # Over the cap: reject now — the downstream app is never
+                # invoked, so no partial body reaches a route handler.
+                await self._reject(send)
+                return
+            buffered.append(message)
+            if not message.get("more_body", False):
+                break
+
+        # Under the cap — replay the buffered messages to the app verbatim.
+        replay = iter(buffered)
+
+        async def _replaying_receive() -> Any:
+            try:
+                return next(replay)
+            except StopIteration:
+                # Body exhausted — mirror Starlette and report disconnect.
+                return await receive()
+
+        await self._app(scope, _replaying_receive, send)
+
+    async def _reject(self, send: Any) -> None:
+        response = JSONResponse(
+            {
+                "error": {
+                    "code": "BODY_TOO_LARGE",
+                    "message": f"Request body exceeds {self._max} bytes",
+                }
+            },
+            status_code=413,
+        )
+        await response(
+            {"type": "http"},
+            self._empty_receive,
+            send,
+        )
+
+    @staticmethod
+    async def _empty_receive() -> dict[str, Any]:
+        return {"type": "http.disconnect"}
 
 
 def _build_limiter() -> Limiter:
-    import os
-
     limit = os.environ.get("ELLIOT_RATE_LIMIT", "120/minute")
+    # ELLIOT_RATE_LIMIT_STORAGE_URI: a shared backend (e.g. redis://host:6379,
+    # memcached://host:11211) for the rate-limit counters. When set, the cap
+    # is enforced consistently across every uvicorn worker / replica. When
+    # unset slowapi falls back to per-process in-memory storage, which means
+    # the limit only holds within a single worker — see the warning below.
+    storage_uri = os.environ.get("ELLIOT_RATE_LIMIT_STORAGE_URI", "").strip()
+    if storage_uri:
+        log.info("rate_limit.storage", backend=storage_uri.split("://")[0])
+        return Limiter(
+            key_func=get_remote_address,
+            default_limits=[limit],
+            storage_uri=storage_uri,
+        )
+    log.warning(
+        "rate_limit.in_memory",
+        detail=(
+            "ELLIOT_RATE_LIMIT_STORAGE_URI is not set: rate-limit counters are "
+            "per-process and do NOT hold across multiple uvicorn workers or "
+            "instances. Set a redis:// or memcached:// URI in production."
+        ),
+    )
     return Limiter(key_func=get_remote_address, default_limits=[limit])
 
 
@@ -118,12 +198,17 @@ def _session_idle_ttl() -> float:
         return 300.0
 
 
-async def _session_idle_sweeper(tracker: SessionTracker) -> None:
+async def _session_idle_sweeper(
+    tracker: SessionTracker,
+    store: ObservationStore | None = None,
+) -> None:
     """Periodically close agent sessions that have gone idle.
 
     A session stays open while the agent's MCP connection is active; this
     loop flushes the ones that have stopped sending tool calls so the
-    NDJSON log and observation store reflect completed runs.
+    NDJSON log and observation store reflect completed runs. The same swept
+    session ids are closed in the observation store so its per-session
+    rollup (tool counts, tokens, duration) is finalised too.
     """
     ttl = _session_idle_ttl()
     interval = min(ttl, 30.0)
@@ -133,6 +218,10 @@ async def _session_idle_sweeper(tracker: SessionTracker) -> None:
             closed = tracker.sweep_idle(ttl)
             if closed:
                 log.info("session.idle_swept", count=len(closed))
+                if store is not None:
+                    for sid in closed:
+                        with contextlib.suppress(Exception):
+                            store.close_session(sid)
 
 
 def _require_destructive_confirmation() -> bool:
@@ -159,6 +248,22 @@ def _agent_hint_from_identity(identity: AgentIdentity | None) -> str:
         return "mcp"
     label = identity.display()
     return label if label and label != "unknown" else "mcp"
+
+
+def _result_truncated(result: Any) -> bool:
+    """Whether the executor capped this result at ELLIOT_MAX_RESULT_ROWS.
+
+    ``QueryResult`` carries a top-level ``truncated`` flag; the legacy
+    ``ToolResult`` keeps it inside ``meta``. Read whichever is present so the
+    truncation marker survives regardless of the result type.
+    """
+    flag = getattr(result, "truncated", None)
+    if flag is not None:
+        return bool(flag)
+    meta = getattr(result, "meta", None)
+    if isinstance(meta, dict):
+        return bool(meta.get("truncated", False))
+    return False
 
 
 def _suggest(tool_id: str, avg_tokens: float, max_tokens: float) -> str | None:
@@ -311,7 +416,11 @@ def _register_tool(
                         error=error,
                         connector_slug=connector_slug,
                     )
-                    store.close_session(session_id)
+                    # Do NOT close the session here: it stays open and
+                    # accumulates every call from this MCP connection. The
+                    # idle sweeper / shutdown closes it (mirroring the
+                    # SessionTracker lifecycle), so the observation-store
+                    # rollup reflects a completed run, not a single call.
 
     async def _handler(**kwargs: Any) -> dict[str, Any]:
         import time
@@ -372,7 +481,13 @@ def _register_tool(
 
             async def _work() -> dict[str, Any]:
                 result = await executor.execute(td, kwargs)
-                return {"rows": result.rows, "count": len(result.rows)}
+                payload: dict[str, Any] = {
+                    "rows": result.rows,
+                    "count": len(result.rows),
+                }
+                if _result_truncated(result):
+                    payload["truncated"] = True
+                return payload
 
             task_id = task_store.submit(td.id, _work())
             return {
@@ -395,7 +510,12 @@ def _register_tool(
                         f"tool.call.complete: {td.id} rows={len(result.rows)} duration_ms={duration_ms}",
                         logger="elliot.runtime",
                     )
-            return {"rows": result.rows, "count": len(result.rows)}
+            payload = {"rows": result.rows, "count": len(result.rows)}
+            if _result_truncated(result):
+                # Marker so the agent knows the result set was capped at
+                # ELLIOT_MAX_RESULT_ROWS and is not the complete answer.
+                payload["truncated"] = True
+            return payload
         except ElliotError as exc:
             duration_ms = round((time.monotonic() - t0) * 1000, 1)
             _observe(td.id, kwargs, [], duration_ms, str(exc), session_id)
@@ -473,6 +593,32 @@ def _register_task_tool(mcp: FastMCP, task_store: TaskStore) -> None:
         return record.to_dict()
 
 
+_REDACTED = "***"
+# Nested mapping keys that may hold a secret value under an arbitrary,
+# author-chosen sub-key. We mask the whole block rather than relying on a
+# sub-key name check.
+_SECRET_BLOCK_KEYS = ("auth", "headers", "config_snapshot", "credentials")
+
+
+def _redact_secret_blocks(node: Any) -> None:
+    """Recursively mask whole ``auth`` / ``headers`` / ``credentials`` blocks.
+
+    ``resolve_secrets`` may have substituted literal secret values into a
+    source's auth block or custom request headers. Header/field names are
+    author-chosen (``X-Internal-Key``, ``X-Tenant``) so a key-name blocklist
+    cannot catch them — mask the whole sub-mapping structurally instead.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(key, str) and key.lower() in _SECRET_BLOCK_KEYS and value is not None:
+                node[key] = _REDACTED
+            else:
+                _redact_secret_blocks(value)
+    elif isinstance(node, list):
+        for item in node:
+            _redact_secret_blocks(item)
+
+
 def _register_resources(mcp: FastMCP, cfg: Any, executor: ToolExecutor, json: Any) -> None:
     """Register MCP Resources: connector schema, per-tool sample rows, source status."""
     from elliot_core.types import ConnectorConfig
@@ -485,15 +631,26 @@ def _register_resources(mcp: FastMCP, cfg: Any, executor: ToolExecutor, json: An
 
         The in-memory ``ConnectorConfig`` has had ``resolve_secrets`` applied
         to it during loader hydration, so source URLs / auth headers may
-        contain literal secret values. We mask known-secret fields and
-        redact URL userinfo / token-bearing query params before serializing.
+        contain literal secret values. Redaction is layered:
+
+        1. ``redact_value`` masks any key whose name looks secret-bearing
+           (substring match — catches ``private_key``, ``db_password``, …).
+        2. The entire ``auth`` block of every source is masked structurally —
+           a connector author can name an auth field anything, so a key-name
+           check alone is not enough.
+        3. Any ``headers`` mapping is masked structurally — custom header
+           names (``X-Internal-Key``, ``X-Tenant``) won't match a blocklist.
+        4. URL userinfo / token-bearing query params are stripped.
         """
         from elliot_core.redaction import redact_url, redact_value
 
         snapshot = redact_value(c.model_dump())
         for source in snapshot.get("sources", []) or []:
-            if isinstance(source, dict) and source.get("url"):
+            if not isinstance(source, dict):
+                continue
+            if source.get("url"):
                 source["url"] = redact_url(source.get("url"))
+            _redact_secret_blocks(source)
         return json.dumps(snapshot, indent=2, default=str)
 
     for tool_def in c.tools:
@@ -657,7 +814,10 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Any:
-        sweeper = asyncio.create_task(_session_idle_sweeper(tracker))
+        # Fail-closed: raise if ELLIOT_API_KEY is unset in production/staging,
+        # otherwise log a warning. The helper decides which.
+        enforce_auth_configured("connector-runtime")
+        sweeper = asyncio.create_task(_session_idle_sweeper(tracker, store))
         async with mcp.session_manager.run():
             yield
         sweeper.cancel()
@@ -680,16 +840,10 @@ def create_app(
     app = FastAPI(lifespan=lifespan, redirect_slashes=False)
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
-    if not os.environ.get("ELLIOT_API_KEY"):
-        log.warning(
-            "auth.disabled",
-            service="connector-runtime",
-            message=(
-                "ELLIOT_API_KEY is not set: the runtime is accepting unauthenticated "
-                "requests. This is acceptable for localhost-only development; set "
-                "ELLIOT_API_KEY before exposing the service on a non-loopback bind."
-            ),
-        )
+    # Wire ElliotError + generic exception handlers so raw exceptions and DB
+    # errors are returned as structured {error:{code,message}} JSON instead of
+    # leaking a default Starlette 500 with a stack trace.
+    register_error_handlers(app)
     # Order matters: Starlette inserts each add_middleware at index 0, so the
     # LAST call wraps the others. Final stack (outermost first):
     #   CORS  →  BodySizeLimit  →  SlowAPI  →  ApiKey  →  app
@@ -930,17 +1084,23 @@ def create_app(
 
 async def _ping_source(source: Any) -> None:
     """Lightweight reachability check for a source."""
+    from urllib.parse import urlsplit
+
     from elliot_core.http import SSRFError, safe_client, validate_url
 
     if source.type == "rest":
         url = source.url or ""
         try:
-            validate_url(url)
+            ips = validate_url(url)
         except SSRFError as exc:
             # /v1/health must not be usable as an SSRF probe — surface the
             # block to the caller without making the HEAD request.
             raise RuntimeError(f"SSRF_BLOCKED: {exc.message}") from exc
-        async with safe_client(timeout=3) as client:
+        # Pin the connection to the validated IP so a DNS rebind between
+        # validate_url and the HEAD request can't redirect to a private host.
+        host = urlsplit(url).hostname or ""
+        pinned_hosts = {host: ips[0]} if (host and ips) else None
+        async with safe_client(timeout=3, pinned_hosts=pinned_hosts) as client:
             await client.head(url)
     # DB and file sources: skip ping — they're checked when tools execute
 

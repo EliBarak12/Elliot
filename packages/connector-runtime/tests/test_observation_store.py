@@ -24,6 +24,30 @@ def test_write_and_read_tool_call(store: ObservationStore) -> None:
     assert calls[0]["result_token_estimate"] == 87
 
 
+def test_write_tool_call_redacts_secret_arguments(store: ObservationStore) -> None:
+    """Secret-bearing argument fields must be masked before they hit the DB.
+
+    The observation store must apply the same redaction policy as the audit
+    log / session tracker so the DB never persists raw API keys or tokens.
+    """
+    import json
+
+    store.write_tool_call(
+        None,
+        "call_api",
+        {"api_key": "super-secret-value", "limit": 10},
+        1,
+        20,
+        5.0,
+    )
+    calls = store.recent_tool_calls(10)
+    assert len(calls) == 1
+    persisted = json.loads(calls[0]["arguments"])
+    assert persisted["api_key"] == "***"
+    assert persisted["limit"] == 10
+    assert "super-secret-value" not in calls[0]["arguments"]
+
+
 def test_harness_breakdown_groups_by_agent_client(store: ObservationStore) -> None:
     store.open_session("s1", agent_identity={"client": "claude-code"})
     store.write_tool_call("s1", "list", {}, 1, 50, 10.0)

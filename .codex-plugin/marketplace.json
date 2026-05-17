@@ -2,8 +2,8 @@
   "name": "elliot",
   "version": "1.0.0",
   "description": "Elliot for Codex: turn any API or database into agent-ready MCP tools.",
-  "homepage": "https://github.com/EliBarak12/elliot",
-  "repository": "https://github.com/EliBarak12/elliot",
+  "homepage": "https://github.com/EliBarak12/Elliot",
+  "repository": "https://github.com/EliBarak12/Elliot",
   "license": "MIT",
   "plugins": [
     {

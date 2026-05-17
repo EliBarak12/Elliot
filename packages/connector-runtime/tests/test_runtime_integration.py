@@ -116,6 +116,59 @@ def test_body_size_middleware_rejects_oversize(
     assert body["error"]["code"] == "BODY_TOO_LARGE"
 
 
+def test_body_size_middleware_rejects_chunked_oversize(
+    connector_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chunked upload (no Content-Length) above the cap must still be 413'd.
+
+    The middleware counts bytes off the receive stream and aborts once the
+    running total exceeds ELLIOT_MAX_REQUEST_BODY_BYTES. /v1/trace/ingest is a
+    POST that parses its body, so the counting wrapper actually runs.
+    """
+    monkeypatch.setenv("ELLIOT_MAX_REQUEST_BODY_BYTES", "1024")
+    app = create_app(connector_path=str(connector_file), secrets={})
+    client = TestClient(app)
+
+    def _chunks():
+        # Each chunk is small; the total exceeds the 1 KiB cap. Passing a
+        # generator makes httpx send a chunked request with no Content-Length.
+        for _ in range(8):
+            yield b"x" * 512
+
+    resp = client.post(
+        "/v1/trace/ingest",
+        headers={"Content-Type": "application/json"},
+        content=_chunks(),
+    )
+    assert resp.status_code == 413
+    body = resp.json()
+    assert body["error"]["code"] == "BODY_TOO_LARGE"
+
+
+def test_body_size_middleware_allows_chunked_under_limit(
+    connector_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chunked request under the cap passes through to the route untouched."""
+    monkeypatch.setenv("ELLIOT_MAX_REQUEST_BODY_BYTES", "1048576")
+    app = create_app(connector_path=str(connector_file), secrets={})
+    client = TestClient(app)
+
+    payload = b'{"harness":"test","session_id":"s1","events":[]}'
+
+    def _chunks():
+        yield payload
+
+    # A small chunked POST to the ingest endpoint must succeed (200), proving
+    # the body cap did not fire on an under-limit chunked request.
+    resp = client.post(
+        "/v1/trace/ingest",
+        headers={"Content-Type": "application/json"},
+        content=_chunks(),
+    )
+    assert resp.status_code != 413
+    assert resp.status_code == 200
+
+
 def test_audit_record_and_tail(tmp_path: Path) -> None:
     log = AuditLog(tmp_path / "audit.ndjson")
     log.record("tool_x", {"a": 1}, result_row_count=5, duration_ms=12.3)
@@ -158,6 +211,91 @@ def test_openai_tools_schema(connector_file: Path) -> None:
     assert len(tools) == 1
     assert tools[0]["type"] == "function"
     assert tools[0]["function"]["name"] == "list_animals"
+
+
+async def test_connector_schema_resource_redacts_secrets() -> None:
+    """The `connector://schema` resource must never leak resolved secret
+    values — auth blocks, custom headers, URL userinfo / token query params."""
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import ConnectorConfig
+
+    cfg = ConnectorConfig.model_validate(
+        {
+            "name": "Pets",
+            "slug": "pets",
+            "version": "1.0.0",
+            "sources": [
+                {
+                    "id": "animals",
+                    "name": "Animals API",
+                    "type": "rest",
+                    # userinfo + token-bearing query param both carry secrets.
+                    "url": "https://u:URLSECRET@api.example.com/animals?api_key=QUERYSECRET",
+                    # auth.secret_key has been resolve_secrets'd to a literal.
+                    "auth": {
+                        "type": "bearer",
+                        "secret_key": "RESOLVED_TOKEN_VALUE",
+                        # A custom header name a key-name blocklist wouldn't catch.
+                        "header_name": "X-Internal-Key",
+                    },
+                    # config_snapshot is an arbitrary dict that may hold secrets
+                    # under author-chosen keys.
+                    "config_snapshot": {"x_tenant_pass": "SNAPSHOTSECRET"},
+                }
+            ],
+            "tools": [
+                {
+                    "id": "t",
+                    "name": "T",
+                    "description": "d",
+                    "category": "READ",
+                    "sql": "SELECT * FROM animals",
+                    "parameters": [],
+                }
+            ],
+            "skills": [],
+        }
+    )
+    executor = ToolExecutor(cfg, secrets={})
+    mcp = create_runtime_server(cfg, executor)
+    contents = list(await mcp.read_resource("connector://schema"))
+    body = contents[0].content
+    assert isinstance(body, str)
+    for secret in (
+        "URLSECRET",
+        "QUERYSECRET",
+        "RESOLVED_TOKEN_VALUE",
+        "SNAPSHOTSECRET",
+    ):
+        assert secret not in body, f"{secret!r} leaked in connector://schema"
+    # Non-secret structure must still be present.
+    assert "animals" in body
+    assert "api.example.com" in body
+
+
+def test_redact_secret_blocks_masks_nested_auth_and_headers() -> None:
+    """_redact_secret_blocks masks whole auth/headers/credentials sub-mappings
+    regardless of the inner key names."""
+    from elliot_connector_runtime.server import _redact_secret_blocks
+
+    node: dict = {
+        "url": "https://x",
+        "auth": {"weird_field": "tok"},
+        "nested": {
+            "headers": {"X-Anything": "val"},
+            "credentials": {"u": "p"},
+            "safe": {"keep": "me"},
+        },
+        "items": [{"auth": {"a": "b"}}],
+    }
+    _redact_secret_blocks(node)
+    assert node["auth"] == "***"
+    assert node["nested"]["headers"] == "***"
+    assert node["nested"]["credentials"] == "***"
+    assert node["nested"]["safe"] == {"keep": "me"}
+    assert node["items"][0]["auth"] == "***"
+    assert node["url"] == "https://x"
 
 
 @respx.mock

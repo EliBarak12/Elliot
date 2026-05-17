@@ -1,5 +1,6 @@
 import { createRootRoute, createRoute, createRouter, Outlet } from "@tanstack/react-router";
 import { AppShell } from "./components/layout/AppShell";
+import { ErrorFallback } from "./components/layout/ErrorBoundary";
 import Dashboard from "./pages/Dashboard";
 import SourcesPage from "./pages/SourcesPage";
 import ToolsPage from "./pages/ToolsPage";
@@ -70,7 +71,12 @@ const routeTree = rootRoute.addChildren([
   consoleRoute,
 ]);
 
-export const router = createRouter({ routeTree });
+export const router = createRouter({
+  routeTree,
+  // Catch errors thrown in route components/loaders so a single throw renders a
+  // friendly fallback instead of white-screening the app.
+  defaultErrorComponent: () => <ErrorFallback />,
+});
 
 declare module "@tanstack/react-router" {
   interface Register {

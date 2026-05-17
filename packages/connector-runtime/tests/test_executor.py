@@ -105,6 +105,26 @@ async def test_executor_empty_result() -> None:
     assert result.rows == []
 
 
+@respx.mock
+async def test_executor_rest_source_row_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A REST source with huge pages is truncated at ELLIOT_MAX_RESULT_ROWS so
+    pagination cannot OOM the worker even before max_pages bites."""
+    monkeypatch.setenv("ELLIOT_MAX_RESULT_ROWS", "3")
+    # Page returns more rows than the cap; data_path "items" unwraps them.
+    respx.get("https://api.example.com/animals").mock(
+        return_value=httpx.Response(
+            200,
+            json={"items": [{"id": i, "species": "cat"} for i in range(20)]},
+        )
+    )
+    tool = CONNECTOR.tools[0]
+    executor = ToolExecutor(CONNECTOR, secrets={})
+    result = await executor.execute(tool, {"species": "cat"})
+    # Materialized rows are capped at 3, so the WHERE species='cat' query
+    # cannot return more than 3.
+    assert len(result.rows) <= 3
+
+
 async def test_executor_no_sql_no_filter_groups_raises() -> None:
     """A tool with no sql AND empty filter_groups AND empty return_fields raises ExecutorError.
 

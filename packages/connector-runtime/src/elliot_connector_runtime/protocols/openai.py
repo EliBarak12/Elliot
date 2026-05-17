@@ -105,6 +105,12 @@ def register_openai_routes(
             result = await executor.execute(td, {})
             duration = (time.monotonic() - t0) * 1000
             audit.record(td.id, {}, len(result.rows), duration)
+            # `result.truncated` is set when the executor capped the row set
+            # at ELLIOT_MAX_RESULT_ROWS — pass the marker through so the model
+            # knows the tool output is incomplete.
+            content: dict[str, Any] = {"rows": result.rows, "count": len(result.rows)}
+            if result.truncated:
+                content["truncated"] = True
             return {
                 "id": f"chatcmpl-{int(time.time())}",
                 "object": "chat.completion",
@@ -113,7 +119,7 @@ def register_openai_routes(
                         "index": 0,
                         "message": {
                             "role": "tool",
-                            "content": _json.dumps(result.rows),
+                            "content": _json.dumps(content),
                         },
                         "finish_reason": "stop",
                     }

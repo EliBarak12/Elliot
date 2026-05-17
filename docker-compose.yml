@@ -32,11 +32,18 @@ services:
 
   studio:
     build:
-      context: packages/studio
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: packages/studio/Dockerfile
     ports:
       - "127.0.0.1:8080:8080"
     env_file: .env
+    environment:
+      # In the compose network the backends are reachable by service name,
+      # not localhost. These override the .env defaults so the studio nginx
+      # reverse-proxy forwards /api/* to the right containers. ELLIOT_API_KEY
+      # still comes from .env and is injected by the proxy server-side.
+      ELLIOT_PLUGIN_ORIGIN: http://plugin:3000
+      ELLIOT_RUNTIME_ORIGIN: http://runtime:3001
     depends_on:
       plugin:
         condition: service_healthy
@@ -54,8 +61,11 @@ services:
     environment:
       MYSQL_DATABASE: elliot
       # Audit C7: no fallback default. Operators MUST supply this in .env.
-      # `:?` makes docker-compose fail fast if the variable is unset.
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set in .env}
+      # `?` (no colon) fails fast only when the variable is entirely unset, so
+      # the default (non-mysql) `docker compose up` still works with the blank
+      # MYSQL_ROOT_PASSWORD= line shipped in .env.example. The mysql profile
+      # itself rejects an empty root password at init, so it stays enforced.
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD?MYSQL_ROOT_PASSWORD must be set in .env}
     volumes:
       - mysql-data:/var/lib/mysql
     # Audit C7: bind to loopback only so the database is not exposed on every

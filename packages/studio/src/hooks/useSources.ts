@@ -19,8 +19,9 @@ export function useSources() {
       return Array.isArray(raw?.sources) ? raw.sources : [];
     },
     // Live-refresh so sources the agent discovers via MCP appear in the UI
-    // without a page reload.
-    refetchInterval: 4000,
+    // without a page reload. 30s keeps backend load sane at scale; window-focus
+    // refetch gives an immediate update when the user returns to the tab.
+    refetchInterval: 30_000,
     refetchOnWindowFocus: true,
   });
 }

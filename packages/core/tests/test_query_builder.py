@@ -128,6 +128,66 @@ def test_contains_generates_like():
     assert "%widget%" in list(bound.values())
 
 
+def test_contains_escapes_like_wildcards():
+    """A ``contains`` value with %, _, or \\ must be escaped so it matches
+    literally, and the generated clause must declare ESCAPE '\\'."""
+    tool = _make_tool(
+        filter_groups=[
+            FilterGroup(
+                conditions=[FilterCondition(field="name", operator="contains", parameter_name="q")]
+            )
+        ],
+    )
+    sql, bound = build_select_sql(tool, {"q": "100%_off\\sale"})
+    # Clause declares the escape character.
+    assert "ESCAPE '\\'" in sql
+    bound_val = next(iter(bound.values()))
+    # Wildcards in the user input are backslash-escaped; surrounding %% remain.
+    assert bound_val == "%100\\%\\_off\\\\sale%"
+
+
+def test_contains_wildcard_only_matches_literally():
+    """An agent passing a bare '%' must not turn into a match-everything query."""
+    tool = _make_tool(
+        filter_groups=[
+            FilterGroup(
+                conditions=[FilterCondition(field="name", operator="contains", parameter_name="q")]
+            )
+        ],
+    )
+    _sql, bound = build_select_sql(tool, {"q": "%"})
+    assert next(iter(bound.values())) == "%\\%%"
+
+
+def test_contains_like_escaping_end_to_end():
+    """Escaped wildcard is treated literally by SQLite."""
+    data = [
+        {"name": "50% discount"},
+        {"name": "regular price"},
+        {"name": "AxB"},
+    ]
+    engine = SQLiteEngine()
+    engine.load_result(flatten(data, "items"))
+    tool = _make_tool(
+        source_ids=["items"],
+        filter_groups=[
+            FilterGroup(
+                conditions=[FilterCondition(field="name", operator="contains", parameter_name="q")]
+            )
+        ],
+    )
+    # '%' must match only the literal-percent row, not every row.
+    sql, bound = build_select_sql(tool, {"q": "%"})
+    rows = engine.query(sql, bound)
+    assert len(rows) == 1
+    assert rows[0]["name"] == "50% discount"
+    # '_' must match literally, not as a single-char wildcard.
+    sql2, bound2 = build_select_sql(tool, {"q": "_"})
+    rows2 = engine.query(sql2, bound2)
+    engine.close()
+    assert rows2 == []
+
+
 def test_in_list_operator():
     tool = _make_tool(
         filter_groups=[

@@ -240,7 +240,10 @@ export default function AgentConsole() {
   const { data, isLoading, refetch, dataUpdatedAt } = useQuery<AgentSession[]>({
     queryKey: [...SESSIONS_QUERY_KEY],
     queryFn: () => httpJson<AgentSession[]>("/v1/sessions?n=20"),
-    refetchInterval: 15_000,
+    // useSessionStream() already pushes live snapshot/update frames into this
+    // same query cache, so this poll is only a slow fallback for when the SSE
+    // stream is unavailable. 60s keeps backend load minimal at scale.
+    refetchInterval: 60_000,
   });
 
   const sessions = Array.isArray(data) ? data : [];

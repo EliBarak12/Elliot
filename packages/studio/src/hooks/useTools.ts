@@ -6,9 +6,9 @@ export function useTools() {
     queryKey: ["tools"],
     queryFn: listTools,
     // Auto-refresh so tools the agent registers via MCP appear without a
-    // manual page reload. 4s is a good balance between latency-to-show
-    // (agent does work, user sees it within seconds) and request load.
-    refetchInterval: 4000,
+    // manual page reload. 30s keeps backend load sane at scale; window-focus
+    // refetch gives an immediate update when the user returns to the tab.
+    refetchInterval: 30_000,
     refetchOnWindowFocus: true,
   });
 }

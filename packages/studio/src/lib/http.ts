@@ -1,28 +1,13 @@
 // Centralised HTTP client. CLAUDE.md mandates every fetch go through this
-// module so the API key is injected exactly once and base URLs stay env-driven.
+// module so base URLs stay consistent.
 //
-// Note: VITE_API_KEY is a Vite build-time variable and is baked into the
-// shipped bundle. Treat it as a deployment-scoped token, not a per-user
-// secret. The plugin/runtime accept it via X-Elliot-Key or
-// Authorization: Bearer for browsers that cannot set custom headers
-// cross-origin without a preflight (CORS is configured to allow both).
-const API_KEY = import.meta.env.VITE_API_KEY ?? "";
-
-export const PLUGIN_URL = (
-  import.meta.env.VITE_PLUGIN_URL ?? "http://localhost:3000"
-).replace(/\/+$/, "");
-
-export const RUNTIME_URL = (
-  import.meta.env.VITE_RUNTIME_URL ?? "http://localhost:3001"
-).replace(/\/+$/, "");
-
-function authHeaders(): Record<string, string> {
-  if (!API_KEY) return {};
-  return {
-    "X-Elliot-Key": API_KEY,
-    Authorization: `Bearer ${API_KEY}`,
-  };
-}
+// All browser → backend traffic is SAME-ORIGIN. Studio's nginx (production)
+// and the Vite dev server (development) proxy `/api/plugin/*` and
+// `/api/runtime/*` to the plugin and runtime, and inject the `X-Elliot-Key`
+// header server-side. The API key therefore never reaches the browser bundle
+// — there is no `VITE_API_KEY` anymore.
+export const PLUGIN_URL = "/api/plugin";
+export const RUNTIME_URL = "/api/runtime";
 
 function mergeHeaders(
   ...sources: Array<HeadersInit | Record<string, string> | undefined>
@@ -43,10 +28,6 @@ function mergeHeaders(
   return out;
 }
 
-export function authHeadersForMcp(): Record<string, string> {
-  return authHeaders();
-}
-
 export class HttpError extends Error {
   status: number;
   body: string;
@@ -58,11 +39,17 @@ export class HttpError extends Error {
 }
 
 export async function httpFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const url = path.startsWith("http") ? path : `${RUNTIME_URL}${path.startsWith("/") ? "" : "/"}${path}`;
-  const headers = mergeHeaders(authHeaders(), init.headers as HeadersInit | undefined);
+  const url = path.startsWith("http")
+    ? path
+    : `${RUNTIME_URL}${path.startsWith("/") ? "" : "/"}${path}`;
+  const headers = mergeHeaders(init.headers as HeadersInit | undefined);
   const resp = await fetch(url, { ...init, headers });
   if (resp.status === 401) {
-    console.error("[http] 401 unauthorized — check VITE_API_KEY", { url });
+    console.error(
+      "[http] 401 unauthorized — the Studio proxy is not injecting a valid " +
+        "ELLIOT_API_KEY, or it does not match the backend's",
+      { url }
+    );
   }
   return resp;
 }

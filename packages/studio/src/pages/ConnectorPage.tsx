@@ -108,6 +108,15 @@ export default function ConnectorPage() {
           setConnectorName(data.connector.name);
           setConnectorSlug(data.connector.slug);
           setBuiltConnector(data.connector);
+          // Seed the tool/skill selection from what's already bundled so the
+          // checkboxes (and the "n / total" counters) reflect the built
+          // connector instead of showing 0 selected after a reload.
+          if (data.connector.tools) {
+            setSelectedToolIds(new Set(data.connector.tools.map((t) => t.id)));
+          }
+          if (data.connector.skills) {
+            setSelectedSkillIds(new Set(data.connector.skills.map((s) => s.id)));
+          }
         }
       } catch {
         // Plugin not yet connected — silently ignore

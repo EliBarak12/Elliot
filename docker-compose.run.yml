@@ -47,6 +47,15 @@ services:
     image: ghcr.io/elibarak12/elliot-studio:${ELLIOT_VERSION:-latest}
     ports:
       - "127.0.0.1:8080:8080"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Backends are reachable by compose service name inside the network.
+      # The studio nginx reverse-proxy forwards /api/* here and injects
+      # ELLIOT_API_KEY (from .env) as X-Elliot-Key server-side.
+      ELLIOT_PLUGIN_ORIGIN: http://plugin:3000
+      ELLIOT_RUNTIME_ORIGIN: http://runtime:3001
     depends_on:
       plugin:
         condition: service_healthy

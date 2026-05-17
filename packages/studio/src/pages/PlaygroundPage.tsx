@@ -62,15 +62,20 @@ export default function PlaygroundPage() {
     try {
       const args: Record<string, unknown> = {};
       for (const p of selectedTool.parameters) {
-        if (params[p.name] !== undefined) {
-          args[p.name] =
-            p.type === "integer"
-              ? parseInt(params[p.name])
-              : p.type === "number"
-                ? parseFloat(params[p.name])
-                : p.type === "boolean"
-                  ? params[p.name] === "true"
-                  : params[p.name];
+        const raw = params[p.name];
+        if (raw === undefined) continue;
+        if (p.type === "integer") {
+          // Radix 10 avoids legacy octal parsing; fall back to the raw string
+          // when the input isn't a valid number so the backend can report it.
+          const n = parseInt(raw, 10);
+          args[p.name] = Number.isNaN(n) ? raw : n;
+        } else if (p.type === "number") {
+          const n = parseFloat(raw);
+          args[p.name] = Number.isNaN(n) ? raw : n;
+        } else if (p.type === "boolean") {
+          args[p.name] = raw === "true";
+        } else {
+          args[p.name] = raw;
         }
       }
       // User-defined connector tools are not exposed as MCP tools by the plugin;

@@ -58,3 +58,23 @@ def _allow_absolute_file_paths(monkeypatch: pytest.MonkeyPatch) -> Generator[Non
     """
     monkeypatch.setenv("ELLIOT_FILE_READER_ALLOW_ABSOLUTE", "1")
     yield
+
+
+# ── SSRF: disable host→IP pinning so respx mocks still match ──────────────
+
+
+@pytest.fixture(autouse=True)
+def _disable_http_pinning(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
+    """Keep `_PinnedTransport` transparent during the suite.
+
+    Production wires `pinned_hosts` into every connector fetcher, so
+    `_PinnedTransport` rewrites each request's host to a validated IP. The
+    test suite mocks HTTP with `respx`, which matches by hostname — the
+    rewrite would make every mock miss. Setting ELLIOT_HTTP_DISABLE_PINNING
+    makes the transport skip only the rewrite (it is still installed and
+    used). Production never sets this var, so pinning stays fully active
+    there. The direct `_PinnedTransport` unit tests in test_http.py
+    explicitly clear this var to keep the rewrite behavior covered.
+    """
+    monkeypatch.setenv("ELLIOT_HTTP_DISABLE_PINNING", "1")
+    yield

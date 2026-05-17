@@ -149,6 +149,21 @@ class ToolExecutor:
                             "available_tables": sorted(table_names),
                         },
                     ) from exc
+                # A "no such column" error against tables that all exist but
+                # are empty is not a real error: an empty table cannot match
+                # any WHERE clause / projection, so the correct, non-error
+                # result is simply []. (An empty REST envelope like
+                # `{"items": []}` materializes a zero-row, zero-column table.)
+                if "no such column" in str(exc).lower():
+                    referenced = _extract_table_names(sql)
+                    existing = [t for t in referenced if t in table_names]
+                    if existing and all(_table_is_empty(engine, t) for t in existing):
+                        log.info(
+                            "tool.empty_source.no_match",
+                            tool_id=tool.id,
+                            tables=sorted(existing),
+                        )
+                        return self._capped_result(tool.id, [])
             raise
 
         return self._capped_result(tool.id, rows)
@@ -272,6 +287,8 @@ class ToolExecutor:
         source: SourceConfig,
         arguments: dict[str, Any],
     ) -> list[dict[str, Any]]:
+        from urllib.parse import urlsplit
+
         from elliot_core.http import SSRFError, safe_client, validate_url
 
         url = _interpolate(source.url or "", arguments)
@@ -283,8 +300,23 @@ class ToolExecutor:
         cursor: str | None = None
         next_url: str | None = None
         pages_fetched = 0
+        # FIX 3: overall accumulated-row cap so a source with huge pages can't
+        # OOM the worker even before max_pages bites.
+        row_cap = max_result_rows()
 
-        async with safe_client(timeout=source.timeout_ms / 1000) as client:
+        # SSRF DNS-rebinding defense: validate the initial URL and pin the
+        # connection pool to the vetted IP. A cross-host `next` link will fail
+        # closed inside `_PinnedTransport` — acceptable, it's safe.
+        try:
+            initial_ips = validate_url(url)
+        except SSRFError as exc:
+            raise ExecutorError(f"Refusing to fetch REST source: {exc.message}") from exc
+        initial_host = urlsplit(url).hostname or ""
+        pinned_hosts = {initial_host: initial_ips[0]} if (initial_host and initial_ips) else None
+
+        async with safe_client(
+            timeout=source.timeout_ms / 1000, pinned_hosts=pinned_hosts
+        ) as client:
             while True:
                 if pages_fetched >= pagination.max_pages:
                     break
@@ -333,6 +365,19 @@ class ToolExecutor:
                     )
 
                 all_rows.extend(rows)
+
+                # FIX 3: stop paginating and truncate once the accumulated
+                # row count reaches the cap.
+                if len(all_rows) >= row_cap:
+                    if len(all_rows) > row_cap:
+                        log.warning(
+                            "source.fetch.rows_truncated",
+                            source_id=source.id,
+                            returned=row_cap,
+                            accumulated=len(all_rows),
+                        )
+                        del all_rows[row_cap:]
+                    break
 
                 if pagination.strategy == "none" or not rows:
                     break
@@ -428,6 +473,16 @@ def _extract_table_names(sql: str) -> list[str]:
 def _missing_tables(sql: str, available: list[str]) -> set[str]:
     referenced = set(_extract_table_names(sql))
     return referenced - set(available)
+
+
+def _table_is_empty(engine: SQLiteEngine, table_name: str) -> bool:
+    """Return True if ``table_name`` exists in ``engine`` and holds 0 rows."""
+    try:
+        return engine.get_table_stats(table_name).get("row_count", 0) == 0
+    except Exception:
+        # If we can't count it (e.g. it vanished), don't claim it's empty —
+        # let the original INVALID_SQL error propagate.
+        return False
 
 
 def _interpolate(template: str, values: dict[str, Any]) -> str:

@@ -179,9 +179,15 @@ def test_safe_client_pinned_transport_used():
     assert isinstance(client._transport, _PinnedTransport)
 
 
-def test_pinned_transport_rejects_unvalidated_host():
+def test_pinned_transport_rejects_unvalidated_host(monkeypatch: pytest.MonkeyPatch):
     """A request to a host with no pin (e.g. an un-validated redirect target)
-    fails closed rather than connecting unvalidated — the DNS-rebinding fix."""
+    fails closed rather than connecting unvalidated — the DNS-rebinding fix.
+
+    The conftest autouse fixture sets ELLIOT_HTTP_DISABLE_PINNING so respx
+    mocks match; this test exercises the *real* rewrite behavior, so it must
+    explicitly clear that flag — production never sets it.
+    """
+    monkeypatch.delenv("ELLIOT_HTTP_DISABLE_PINNING", raising=False)
     from elliot_core.http import _PinnedTransport
 
     transport = _PinnedTransport({"example.com": "93.184.216.34"})
@@ -190,8 +196,13 @@ def test_pinned_transport_rejects_unvalidated_host():
         asyncio.run(transport.handle_async_request(request))
 
 
-def test_pinned_transport_rewrites_host_keeps_sni():
-    """The transport connects to the pinned IP but keeps SNI on the real host."""
+def test_pinned_transport_rewrites_host_keeps_sni(monkeypatch: pytest.MonkeyPatch):
+    """The transport connects to the pinned IP but keeps SNI on the real host.
+
+    Clears ELLIOT_HTTP_DISABLE_PINNING (set by the conftest autouse fixture)
+    so the genuine host-rewrite path is exercised.
+    """
+    monkeypatch.delenv("ELLIOT_HTTP_DISABLE_PINNING", raising=False)
     from elliot_core.http import _PinnedTransport
 
     transport = _PinnedTransport({"example.com": "93.184.216.34"})
@@ -210,3 +221,26 @@ def test_pinned_transport_rewrites_host_keeps_sni():
     assert captured["host"] == "93.184.216.34"  # socket connects to the vetted IP
     assert captured["sni"] == "example.com"  # TLS SNI stays on the real host
     assert captured["host_header"] == "example.com"  # Host header preserved
+
+
+def test_pinned_transport_disable_flag_makes_it_transparent(monkeypatch: pytest.MonkeyPatch):
+    """With ELLIOT_HTTP_DISABLE_PINNING set, the transport performs no host
+    rewrite — it stays in the request path but is transparent. This is the
+    test-only escape hatch; production never sets the var."""
+    monkeypatch.setenv("ELLIOT_HTTP_DISABLE_PINNING", "1")
+    from elliot_core.http import _PinnedTransport
+
+    transport = _PinnedTransport({"example.com": "93.184.216.34"})
+    captured: dict[str, Any] = {}
+
+    async def _fake_super(self: Any, request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+        captured["host"] = request.url.host
+        return httpx.Response(200)
+
+    with mock.patch.object(httpx.AsyncHTTPTransport, "handle_async_request", _fake_super):
+        # An un-pinned host would normally fail closed; with the flag set it
+        # passes through untouched.
+        request = httpx.Request("GET", "https://unpinned.example.org/path")
+        asyncio.run(transport.handle_async_request(request))
+
+    assert captured["host"] == "unpinned.example.org"  # no rewrite

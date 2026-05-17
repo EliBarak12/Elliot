@@ -213,6 +213,91 @@ def test_openai_tools_schema(connector_file: Path) -> None:
     assert tools[0]["function"]["name"] == "list_animals"
 
 
+async def test_connector_schema_resource_redacts_secrets() -> None:
+    """The `connector://schema` resource must never leak resolved secret
+    values — auth blocks, custom headers, URL userinfo / token query params."""
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import ConnectorConfig
+
+    cfg = ConnectorConfig.model_validate(
+        {
+            "name": "Pets",
+            "slug": "pets",
+            "version": "1.0.0",
+            "sources": [
+                {
+                    "id": "animals",
+                    "name": "Animals API",
+                    "type": "rest",
+                    # userinfo + token-bearing query param both carry secrets.
+                    "url": "https://u:URLSECRET@api.example.com/animals?api_key=QUERYSECRET",
+                    # auth.secret_key has been resolve_secrets'd to a literal.
+                    "auth": {
+                        "type": "bearer",
+                        "secret_key": "RESOLVED_TOKEN_VALUE",
+                        # A custom header name a key-name blocklist wouldn't catch.
+                        "header_name": "X-Internal-Key",
+                    },
+                    # config_snapshot is an arbitrary dict that may hold secrets
+                    # under author-chosen keys.
+                    "config_snapshot": {"x_tenant_pass": "SNAPSHOTSECRET"},
+                }
+            ],
+            "tools": [
+                {
+                    "id": "t",
+                    "name": "T",
+                    "description": "d",
+                    "category": "READ",
+                    "sql": "SELECT * FROM animals",
+                    "parameters": [],
+                }
+            ],
+            "skills": [],
+        }
+    )
+    executor = ToolExecutor(cfg, secrets={})
+    mcp = create_runtime_server(cfg, executor)
+    contents = list(await mcp.read_resource("connector://schema"))
+    body = contents[0].content
+    assert isinstance(body, str)
+    for secret in (
+        "URLSECRET",
+        "QUERYSECRET",
+        "RESOLVED_TOKEN_VALUE",
+        "SNAPSHOTSECRET",
+    ):
+        assert secret not in body, f"{secret!r} leaked in connector://schema"
+    # Non-secret structure must still be present.
+    assert "animals" in body
+    assert "api.example.com" in body
+
+
+def test_redact_secret_blocks_masks_nested_auth_and_headers() -> None:
+    """_redact_secret_blocks masks whole auth/headers/credentials sub-mappings
+    regardless of the inner key names."""
+    from elliot_connector_runtime.server import _redact_secret_blocks
+
+    node: dict = {
+        "url": "https://x",
+        "auth": {"weird_field": "tok"},
+        "nested": {
+            "headers": {"X-Anything": "val"},
+            "credentials": {"u": "p"},
+            "safe": {"keep": "me"},
+        },
+        "items": [{"auth": {"a": "b"}}],
+    }
+    _redact_secret_blocks(node)
+    assert node["auth"] == "***"
+    assert node["nested"]["headers"] == "***"
+    assert node["nested"]["credentials"] == "***"
+    assert node["nested"]["safe"] == {"keep": "me"}
+    assert node["items"][0]["auth"] == "***"
+    assert node["url"] == "https://x"
+
+
 @respx.mock
 async def test_executor_full_flow(connector_file: Path) -> None:
     from elliot_connector_runtime.cache import ConnectorCache

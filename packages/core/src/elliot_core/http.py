@@ -176,6 +176,14 @@ class _PinnedTransport(httpx.AsyncHTTPTransport):
         self._host_to_ip = {h.lower(): ip for h, ip in host_to_ip.items()}
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        # Test-only escape hatch: the suite mocks HTTP with `respx`, which
+        # matches requests by hostname. Rewriting the host to an IP would make
+        # every mock miss. When ELLIOT_HTTP_DISABLE_PINNING is set (only the
+        # test conftest sets it — never production) the transport stays in the
+        # request path but performs no host rewrite / SNI override, so respx
+        # still matches. Pinning is fully active in production.
+        if os.environ.get("ELLIOT_HTTP_DISABLE_PINNING", "").strip():
+            return await super().handle_async_request(request)
         original_host = request.url.host
         pinned_ip = self._host_to_ip.get(original_host.lower())
         if pinned_ip is None:

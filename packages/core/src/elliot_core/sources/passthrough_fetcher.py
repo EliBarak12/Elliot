@@ -12,6 +12,7 @@ from elliot_core.sources.api_fetcher import (
     _build_auth_headers,
     _build_auth_query_params,
     _extract_rows,
+    _pinned_hosts,
 )
 from elliot_core.types.source import FetchResult, SourceConfig
 
@@ -33,13 +34,19 @@ async def fetch_passthrough(
     base_params.update({k: v for k, v in query_params.items() if v is not None})
 
     target_url = source.url or ""
+    # SSRF DNS-rebinding defense: validate the URL and pin the client's
+    # connection to the vetted IP so a rebind between validate_url and the
+    # request cannot redirect the socket to a private/metadata address.
     try:
-        validate_url(target_url)
+        target_ips = validate_url(target_url)
     except SSRFError as exc:
         raise SourceFetchError(f"Refusing to fetch: {exc.message}") from exc
+    pinned_hosts = _pinned_hosts(target_url, target_ips)
 
     try:
-        async with safe_client(timeout=source.timeout_ms / 1000) as client:
+        async with safe_client(
+            timeout=source.timeout_ms / 1000, pinned_hosts=pinned_hosts
+        ) as client:
             resp = await client.request(
                 method=source.method,
                 url=target_url,

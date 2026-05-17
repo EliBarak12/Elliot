@@ -593,6 +593,32 @@ def _register_task_tool(mcp: FastMCP, task_store: TaskStore) -> None:
         return record.to_dict()
 
 
+_REDACTED = "***"
+# Nested mapping keys that may hold a secret value under an arbitrary,
+# author-chosen sub-key. We mask the whole block rather than relying on a
+# sub-key name check.
+_SECRET_BLOCK_KEYS = ("auth", "headers", "config_snapshot", "credentials")
+
+
+def _redact_secret_blocks(node: Any) -> None:
+    """Recursively mask whole ``auth`` / ``headers`` / ``credentials`` blocks.
+
+    ``resolve_secrets`` may have substituted literal secret values into a
+    source's auth block or custom request headers. Header/field names are
+    author-chosen (``X-Internal-Key``, ``X-Tenant``) so a key-name blocklist
+    cannot catch them — mask the whole sub-mapping structurally instead.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(key, str) and key.lower() in _SECRET_BLOCK_KEYS and value is not None:
+                node[key] = _REDACTED
+            else:
+                _redact_secret_blocks(value)
+    elif isinstance(node, list):
+        for item in node:
+            _redact_secret_blocks(item)
+
+
 def _register_resources(mcp: FastMCP, cfg: Any, executor: ToolExecutor, json: Any) -> None:
     """Register MCP Resources: connector schema, per-tool sample rows, source status."""
     from elliot_core.types import ConnectorConfig
@@ -605,15 +631,26 @@ def _register_resources(mcp: FastMCP, cfg: Any, executor: ToolExecutor, json: An
 
         The in-memory ``ConnectorConfig`` has had ``resolve_secrets`` applied
         to it during loader hydration, so source URLs / auth headers may
-        contain literal secret values. We mask known-secret fields and
-        redact URL userinfo / token-bearing query params before serializing.
+        contain literal secret values. Redaction is layered:
+
+        1. ``redact_value`` masks any key whose name looks secret-bearing
+           (substring match — catches ``private_key``, ``db_password``, …).
+        2. The entire ``auth`` block of every source is masked structurally —
+           a connector author can name an auth field anything, so a key-name
+           check alone is not enough.
+        3. Any ``headers`` mapping is masked structurally — custom header
+           names (``X-Internal-Key``, ``X-Tenant``) won't match a blocklist.
+        4. URL userinfo / token-bearing query params are stripped.
         """
         from elliot_core.redaction import redact_url, redact_value
 
         snapshot = redact_value(c.model_dump())
         for source in snapshot.get("sources", []) or []:
-            if isinstance(source, dict) and source.get("url"):
+            if not isinstance(source, dict):
+                continue
+            if source.get("url"):
                 source["url"] = redact_url(source.get("url"))
+            _redact_secret_blocks(source)
         return json.dumps(snapshot, indent=2, default=str)
 
     for tool_def in c.tools:
@@ -1047,17 +1084,23 @@ def create_app(
 
 async def _ping_source(source: Any) -> None:
     """Lightweight reachability check for a source."""
+    from urllib.parse import urlsplit
+
     from elliot_core.http import SSRFError, safe_client, validate_url
 
     if source.type == "rest":
         url = source.url or ""
         try:
-            validate_url(url)
+            ips = validate_url(url)
         except SSRFError as exc:
             # /v1/health must not be usable as an SSRF probe — surface the
             # block to the caller without making the HEAD request.
             raise RuntimeError(f"SSRF_BLOCKED: {exc.message}") from exc
-        async with safe_client(timeout=3) as client:
+        # Pin the connection to the validated IP so a DNS rebind between
+        # validate_url and the HEAD request can't redirect to a private host.
+        host = urlsplit(url).hostname or ""
+        pinned_hosts = {host: ips[0]} if (host and ips) else None
+        async with safe_client(timeout=3, pinned_hosts=pinned_hosts) as client:
             await client.head(url)
     # DB and file sources: skip ping — they're checked when tools execute
 

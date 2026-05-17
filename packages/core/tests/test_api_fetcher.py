@@ -241,3 +241,48 @@ async def test_fetch_endpoint_max_pages_warning():
     pg = PaginationConfig(strategy="page", page_size=2, max_pages=1)
     result = await fetch_endpoint(_source(pagination=pg), {})
     assert any("max_pages" in w for w in result.warnings)
+
+
+# ── FIX 3: overall accumulated-row cap ────────────────────────────────────
+
+
+@respx.mock
+async def test_fetch_endpoint_row_cap_truncates(monkeypatch: pytest.MonkeyPatch):
+    """A source with huge pages is truncated at ELLIOT_MAX_RESULT_ROWS even
+    before max_pages bites — bounds worker memory."""
+    monkeypatch.setenv("ELLIOT_MAX_RESULT_ROWS", "5")
+    # Each page returns a full page_size of rows so pagination would continue.
+    respx.get("https://api.example.com/items").mock(
+        return_value=Response(200, json=[{"id": i} for i in range(10)])
+    )
+    pg = PaginationConfig(strategy="page", page_size=10, max_pages=50)
+    result = await fetch_endpoint(_source(pagination=pg), {})
+    assert len(result.rows) == 5
+    assert any("row cap" in w for w in result.warnings)
+    # Truncation must stop pagination — only one upstream page was fetched.
+    assert result.page_count == 1
+
+
+# ── FIX 4: total upstream-retry budget ────────────────────────────────────
+
+
+async def _no_sleep(*_args, **_kwargs) -> None:  # noqa: ANN002, ANN003
+    """Patch-in for asyncio.sleep so retry tests don't actually wait."""
+    return None
+
+
+@respx.mock
+async def test_fetch_endpoint_total_retry_budget(monkeypatch: pytest.MonkeyPatch):
+    """A fetch against a flaky upstream stops once the global retry budget is
+    spent rather than amplifying retries indefinitely. With a budget of 1, the
+    second retry exhausts it and the fetch fails fast with a clear message."""
+    monkeypatch.setattr("elliot_core.sources.api_fetcher._MAX_TOTAL_RETRIES", 1)
+    monkeypatch.setattr("asyncio.sleep", _no_sleep)
+    # Always 503 — every attempt would otherwise be retried.
+    route = respx.get("https://api.example.com/items").mock(return_value=Response(503))
+    pg = PaginationConfig(strategy="page", page_size=2, max_pages=50)
+    with pytest.raises(SourceFetchError) as exc:
+        await fetch_endpoint(_source(pagination=pg), {})
+    assert "retry budget" in str(exc.value)
+    # Budget 1 => initial request + exactly one retry, then fail fast.
+    assert route.call_count == 2

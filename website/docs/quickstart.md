@@ -50,7 +50,7 @@ cp .env.example .env
 make dev
 ```
 
-`make dev` runs `elliot connect` first — auto-registering Elliot with every coding agent it can find (Claude Code, Cursor, VS Code Copilot, Windsurf, Codex). Then it brings up:
+`make dev` runs `elliot connect` first — auto-registering Elliot with every coding agent it can find (Claude Code, Cursor, OpenClaw, Codex). Then it brings up:
 
 - `elliot-mcp-plugin` on `:3000` (MCP endpoint)
 - `elliot-connector-runtime` on `:3001` (tool execution)
@@ -73,7 +73,7 @@ elliot lint my-api.connector.json
 elliot eval my-api.eval.yaml
 ```
 
-The linter checks every tool against the [five principles](./five-principles). The eval harness runs real prompts through real agents and reports a pass/fail with token counts.
+The linter checks every tool against the [five principles](./five-principles). The eval harness is **deterministic** — no LLM is involved. Each case names a tool and the arguments to call it with; Elliot executes that tool directly against the connector and asserts on the result (row counts, fields present, token size, error codes), reporting a pass/fail with token counts. See the [CLI reference](./cli#elliot-eval) for the suite schema.
 
 ## Call a tool from an agent
 

@@ -24,7 +24,7 @@ Agents are delegates of humans. Designing for them is anchored on designing for 
 
 Reduce forced human interaction; aim for parity between agent and browser/app interfaces.
 
-- **What Elliot does:** every connector ships through MCP, so any compliant client (Claude Code, Cursor, Codex, Windsurf, VS Code Copilot, …) gets identical access. Cross-source JOINs in `core/sql.py` mean an agent doesn't pay the cost of three round-trips to do what a SQL view would do for a human dashboard.
+- **What Elliot does:** every connector ships through MCP, so any compliant client (Claude Code, Cursor, OpenClaw, Codex, …) gets identical access. Cross-source JOINs in `core/sql.py` mean an agent doesn't pay the cost of three round-trips to do what a SQL view would do for a human dashboard.
 - **Where we're going:** structured authorization scopes per tool so the rare flows that must involve a human (payments, credential changes) can prompt for explicit consent without ejecting the agent from the session.
 
 ### 3. Contextual Alignment

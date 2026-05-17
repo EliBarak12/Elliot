@@ -139,7 +139,7 @@ flowchart TD
     H{"All pass?"}
     I["Fix: error handling,\nSQL, parameters"]
     J["Start plugin + runtime\n(honcho start)"]
-    K["Real agents connect\n(Claude Code, Copilot, …)"]
+    K["Real agents connect\n(Claude Code, Cursor, OpenClaw, Codex)"]
     L["Studio Agent Console\n(observe sessions)"] 
     M{"Token cost OK?\nError rate OK?"}
     N["Improve tools:\nadd LIMIT, better errors,\nnew tools based on demand"]

@@ -10,7 +10,14 @@ Scaffold a new connector from a template.
 elliot init --template rest-api-key my-api.connector.json
 ```
 
-Templates: `rest-api-key`, `rest-bearer`, `postgres`, `mysql`, `csv-local`.
+Templates:
+
+- `rest-api-key` — REST API with API key header auth
+- `postgres-readonly` — PostgreSQL read-only connector
+- `paginated-rest` — REST API with cursor/offset pagination
+- `openapi-petstore` — full Petstore example (docs/tutorials)
+
+Run `elliot init --list` to print this list.
 
 ## `elliot lint`
 
@@ -24,21 +31,42 @@ Exit code is non-zero on any failure. CI-friendly.
 
 ## `elliot eval`
 
-Run an eval suite — real prompts through real agents — and report pass/fail with token counts.
+Run an eval suite and report pass/fail with row counts and token estimates.
+
+Eval is **deterministic** — there is no LLM involved. Each case names a tool
+and the arguments to call it with; Elliot executes that tool directly against
+the connector and asserts on the result (row counts, fields present, token
+size, error codes). This makes eval fast, free, and reproducible in CI.
 
 ```bash
 elliot eval my-api.eval.yaml
 ```
 
-Eval files look like:
+An eval suite has a `name`, the `connector` it targets, and a list of `cases`.
+Each case has an `id`, a `tool_id`, the `arguments` to call it with, and an
+`expect` block of assertions:
 
 ```yaml
-suite: pet store
+name: My SaaS Analytics
+connector: my-saas
+version: "1.0.0"
 cases:
-  - prompt: "How many cats do we have?"
-    expect_tool: list_animals
-    expect_args: { species: "cat" }
+  - id: list-customers-by-plan
+    description: Filters to only pro-plan customers
+    tool_id: list_customers
+    arguments: { plan: pro }
+    expect:
+      no_error: true
+      min_rows: 1
+      fields_present: [id, name, email, plan]
+      max_token_estimate: 800
+      all_rows_match: { field: plan, value: pro }
 ```
+
+Supported `expect` keys: `no_error` (default `true`), `min_rows`, `max_rows`,
+`fields_present`, `all_rows_match` (`{ field, value }`), `error_code`, and
+`max_token_estimate`. See `connectors/my-saas.eval.yaml` in the repo for a
+complete working suite.
 
 ## `elliot connect`
 
@@ -48,7 +76,7 @@ Auto-register Elliot with every coding agent on the host.
 elliot connect
 ```
 
-Detects Claude Code, Cursor, VS Code Copilot, Windsurf, and Codex and writes the right MCP config for each. Re-run any time you install a new agent.
+Detects Claude Code, Cursor, OpenClaw, and Codex and writes the right MCP config for each. Re-run any time you install a new agent.
 
 ## `elliot status`
 

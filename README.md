@@ -4,7 +4,7 @@
 
 # Elliot
 
-**Turn any API or database into MCP tools for Claude, Cursor, and Codex — with built-in observability.**
+**Turn any API or database into MCP tools for Claude Code, Cursor, OpenClaw, and Codex — with built-in observability.**
 
 [![CI](https://github.com/EliBarak12/Elliot/actions/workflows/ci.yml/badge.svg)](https://github.com/EliBarak12/Elliot/actions/workflows/ci.yml)
 [![Docs](https://github.com/EliBarak12/Elliot/actions/workflows/docs.yml/badge.svg)](https://github.com/EliBarak12/Elliot/actions/workflows/docs.yml)
@@ -29,7 +29,7 @@ Elliot is an open-source platform for turning the products you already have — 
 - 🛡️ **Safe by default** — parameterised SQL, env-var secrets, no keys in connector files. Connector files are safe to commit.
 - 🔭 **Every call observable** — tokens, latency, arguments, and errors for every agent call, streamed to an audit log and visible in Studio.
 - ⚙️ **One command to run** — start the whole stack with Docker. No Python, Node, or toolchain to install.
-- 🧩 **Works with every agent** — Claude Code, Cursor, Codex, OpenClaw, VS Code Copilot, Windsurf. Elliot auto-registers with each.
+- 🧩 **Works with every agent** — Claude Code, Cursor, OpenClaw, and Codex. Elliot auto-registers with each.
 - 🤖 **Agents build connectors** — `discover → build → lint → eval → deploy`. The platform itself is agentic: agents can build connectors through Elliot.
 
 ## Quickstart

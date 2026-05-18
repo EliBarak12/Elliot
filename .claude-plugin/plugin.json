@@ -9,5 +9,6 @@
   "homepage": "https://github.com/EliBarak12/Elliot",
   "repository": "https://github.com/EliBarak12/Elliot",
   "license": "MIT",
-  "keywords": ["mcp", "connectors", "agent-tools", "api", "database"]
+  "keywords": ["mcp", "connectors", "agent-tools", "api", "database"],
+  "mcpServers": "./.mcp.json"
 }

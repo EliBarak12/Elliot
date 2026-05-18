@@ -73,7 +73,7 @@ Add to `.mcp.json` in your project root (already present in this repo):
 ```json
 {
   "mcpServers": {
-    "elliot": { "url": "http://localhost:3000/mcp" }
+    "elliot": { "url": "http://localhost:3000/mcp/" }
   }
 }
 ```

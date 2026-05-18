@@ -230,3 +230,72 @@ def test_end_to_end_aggregation_on_real_data():
     assert rows[0]["category"] == "electronics"
     assert rows[0]["total"] == 300
     assert rows[1]["total"] == 50
+
+
+# ── dialect-aware quoting / DB push-down support ───────────────────────────
+
+
+def test_build_select_sql_default_dialect_double_quotes():
+    """The default (sqlite) dialect keeps ANSI double-quote identifiers."""
+    tool = _make_tool(return_fields=[ReturnField(field="name")])
+    sql, _ = build_select_sql(tool, {})
+    assert sql.startswith('SELECT "name" FROM "orders"')
+
+
+def test_build_select_sql_mysql_dialect_uses_backticks():
+    tool = _make_tool(return_fields=[ReturnField(field="name")])
+    sql, _ = build_select_sql(tool, {}, dialect="mysql", from_clause="`orders`")
+    assert "`name`" in sql
+    assert "FROM `orders`" in sql
+    assert '"name"' not in sql
+
+
+def test_build_select_sql_postgres_dialect_double_quotes():
+    tool = _make_tool(return_fields=[ReturnField(field="name")])
+    sql, _ = build_select_sql(tool, {}, dialect="postgres", from_clause='"orders"')
+    assert '"name"' in sql
+    assert 'FROM "orders"' in sql
+
+
+def test_build_select_sql_from_clause_override():
+    """from_clause replaces the FROM expression verbatim — used by the DB
+    push-down to wrap a custom source query as a derived table."""
+    tool = _make_tool()
+    sql, _ = build_select_sql(tool, {}, from_clause="(SELECT 1) AS _elliot_src")
+    assert "FROM (SELECT 1) AS _elliot_src" in sql
+
+
+def test_build_select_sql_mysql_contains_escape_doubles_backslash():
+    """MySQL string literals treat backslash as an escape, so the ESCAPE
+    clause carries a doubled backslash there but a lone one elsewhere."""
+    tool = _make_tool(
+        filter_groups=[
+            FilterGroup(
+                conditions=[FilterCondition(field="name", operator="contains", parameter_name="q")]
+            )
+        ],
+    )
+    mysql_sql, _ = build_select_sql(tool, {"q": "ab"}, dialect="mysql", from_clause="`t`")
+    assert "ESCAPE '\\\\'" in mysql_sql
+
+    sqlite_sql, _ = build_select_sql(tool, {"q": "ab"})
+    assert "ESCAPE '\\'" in sqlite_sql
+    assert "ESCAPE '\\\\'" not in sqlite_sql
+
+
+def test_quote_ident_dialects():
+    from elliot_core.tools.query_builder import quote_ident
+
+    assert quote_ident("orders") == '"orders"'
+    assert quote_ident("orders", "postgres") == '"orders"'
+    assert quote_ident("orders", "mysql") == "`orders`"
+
+
+def test_quote_ident_rejects_bad_identifier():
+    import pytest
+
+    from elliot_core.errors import ElliotError
+    from elliot_core.tools.query_builder import quote_ident
+
+    with pytest.raises(ElliotError):
+        quote_ident("orders; DROP TABLE x", "mysql")

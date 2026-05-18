@@ -209,3 +209,85 @@ async def test_postgres_custom_query_then_tool_join(
         lint = await call_tool_json(session, "elliot_lint_connector", {})
         errors = [i for i in lint["issues"] if i["severity"] == "ERROR"]
         assert not errors, f"DB-source connector lint had ERRORs: {errors}"
+
+
+@pytest.mark.asyncio
+async def test_postgres_runtime_filter_pushdown(local_pg: LocalPostgres) -> None:
+    """The connector runtime pushes a filter_groups tool's WHERE / ORDER BY /
+    LIMIT straight to Postgres instead of snapshotting the whole table into
+    the in-memory SQLite mirror.
+
+    Drives ``ToolExecutor`` directly against the live ephemeral cluster so
+    the push-down path (``_execute_db_pushdown`` -> ``run_select`` ->
+    SQLAlchemy -> psycopg2) is exercised end-to-end against a real server.
+    """
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_core.types import (
+        ConnectorConfig,
+        FilterCondition,
+        FilterGroup,
+        OrderField,
+        ParameterDefinition,
+        ReturnField,
+        SourceConfig,
+        ToolDefinition,
+    )
+
+    connector = ConnectorConfig(
+        name="DB Pushdown",
+        slug="db-pushdown",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="customers",
+                name="customers",
+                type="postgres",
+                url=local_pg.dsn,
+                table="customers",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="customers_by_plan",
+                name="Customers by plan",
+                description="List customers on a given plan, highest revenue first.",
+                category="READ",
+                source_ids=["customers"],
+                return_fields=[
+                    ReturnField(field="name"),
+                    ReturnField(field="plan"),
+                    ReturnField(field="mrr_cents"),
+                ],
+                filter_groups=[
+                    FilterGroup(
+                        conditions=[
+                            FilterCondition(field="plan", operator="=", parameter_name="plan")
+                        ]
+                    )
+                ],
+                order_by=[OrderField(field="mrr_cents", direction="DESC")],
+                parameters=[
+                    ParameterDefinition(
+                        name="plan", type="string", required=True, description="Plan tier"
+                    )
+                ],
+            )
+        ],
+        skills=[],
+    )
+
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(connector.tools[0], {"plan": "enterprise"})
+
+    # SCHEMA_SQL seeds exactly two enterprise customers; the WHERE ran on the
+    # server, so only those rows came back — not the whole 4-row table.
+    assert len(result.rows) == 2
+    assert all(r["plan"] == "enterprise" for r in result.rows)
+    # ORDER BY mrr_cents DESC was pushed down too: Alice (1299000) before
+    # Carol (799000).
+    assert [r["name"] for r in result.rows] == ["Alice Chen", "Carol White"]
+
+    # A different argument value re-runs the query server-side (the push-down
+    # path is not served from the snapshot cache).
+    starter = await executor.execute(connector.tools[0], {"plan": "starter"})
+    assert [r["name"] for r in starter.rows] == ["David Park"]

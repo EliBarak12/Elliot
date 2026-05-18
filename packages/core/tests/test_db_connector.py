@@ -213,3 +213,39 @@ class TestQueryDatabase:
             result = query_database(source, {})
 
         assert result.fetched_at
+
+
+class TestRunSelect:
+    """run_select pushes a tool's compiled, parameterized SELECT to the DB."""
+
+    def test_rejects_non_select_sql(self) -> None:
+        from elliot_core.sources.db_connector import run_select
+
+        source = _pg_source(url="postgresql://localhost/test")
+        with pytest.raises(ElliotError) as exc_info:
+            run_select(source, {}, "DROP TABLE users", {})
+        assert exc_info.value.code == "INVALID_SQL"
+
+    def test_binds_params_to_execute(self) -> None:
+        from elliot_core.sources.db_connector import run_select
+
+        source = _pg_source(url="postgresql://localhost/test")
+        engine = _make_engine_mock([{"id": 7}])
+        with patch(_PATCH_ENGINE, return_value=engine):
+            result = run_select(source, {}, 'SELECT * FROM "t" WHERE id = :id', {"id": 7})
+
+        # _run_query passes the bound params as the 2nd positional arg to execute().
+        call = engine.connect.return_value.execute.call_args
+        assert call[0][1] == {"id": 7}
+        assert result.rows[0]["id"] == 7
+
+    def test_returns_fetch_result_for_mysql_source(self) -> None:
+        from elliot_core.sources.db_connector import run_select
+
+        source = _mysql_source(url="mysql+pymysql://root:pass@localhost/test")
+        engine = _make_engine_mock([{"order_id": 1}, {"order_id": 2}])
+        with patch(_PATCH_ENGINE, return_value=engine):
+            result = run_select(source, {}, "SELECT * FROM `orders`", None)
+
+        assert len(result.rows) == 2
+        assert result.fetched_at

@@ -28,7 +28,7 @@ This supersedes any stdio references in DEVELOPMENT_GUIDE.md or ARCHITECTURE_LEG
 │  │                                      │                          │
 │  │  @elliot/mcp-plugin                  │                          │
 │  │  (StreamableHTTPServerTransport)     │                          │
-│  │  http://localhost:3000/mcp           │◄── Claude Code           │
+│  │  http://localhost:3000/mcp/          │◄── Claude Code           │
 │  └──────────────────────────────────────┘    (URL-based MCP)       │
 │                                                                     │
 │  ┌──────────────────────────────────────┐                          │
@@ -168,7 +168,7 @@ Because both servers are SSE-based, Claude Code connects using `"url"` — not `
 {
   "mcpServers": {
     "elliot": {
-      "url": "http://localhost:3000/mcp"
+      "url": "http://localhost:3000/mcp/"
     }
   }
 }
@@ -177,7 +177,7 @@ Because both servers are SSE-based, Claude Code connects using `"url"` — not `
 The install script (`scripts/install-claude.mjs`) now writes:
 ```javascript
 config.mcpServers.elliot = {
-  url: `http://localhost:${PORT}/mcp`,
+  url: `http://localhost:${PORT}/mcp/`,
 };
 ```
 
@@ -190,11 +190,11 @@ No `command`, no `args`, no subprocess. Claude Code connects to the running serv
 ```bash
 # Terminal 1 — Plugin (for building connectors via Claude Code)
 pnpm --filter @elliot/mcp-plugin run start
-# → http://localhost:3000/mcp
+# → http://localhost:3000/mcp/
 
 # Terminal 2 — Runtime (for deployed connector + Studio)
 elliot serve --connector .elliot/connector.json
-# → http://localhost:3001/mcp
+# → http://localhost:3001/mcp/
 ```
 
 Or add both to a `dev` script in the root:
@@ -235,7 +235,7 @@ The plugin server allows requests from the Studio origin (`http://localhost:5173
 |---|---|---|
 | Plugin transport | `StdioServerTransport` | `StreamableHTTPServerTransport` |
 | Plugin entry | `#!/usr/bin/env node` spawned by client | `http.createServer` on `:3000` |
-| Claude Code config | `{ command, args }` | `{ url: "http://localhost:3000/mcp" }` |
+| Claude Code config | `{ command, args }` | `{ url: "http://localhost:3000/mcp/" }` |
 | Session state | Lost on every reconnect | Persistent in memory |
 | Runtime transport | `StreamableHTTPServerTransport` | Same (unchanged) |
 | Studio transport | `StreamableHTTPClientTransport` | Same (unchanged) |

@@ -11,7 +11,7 @@ import json
 import subprocess
 from pathlib import Path
 
-PLUGIN_URL = "http://localhost:3000/mcp"
+PLUGIN_URL = "http://localhost:3000/mcp/"
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
 # 1. Claude Code — project .mcp.json

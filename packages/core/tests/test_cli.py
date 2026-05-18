@@ -279,20 +279,20 @@ def test_write_codex_toml_creates_file(tmp_path: Path) -> None:
     from elliot_core.cli import _write_codex_toml
 
     config = tmp_path / ".codex" / "config.toml"
-    changed = _write_codex_toml(config, "http://localhost:3000/mcp")
+    changed = _write_codex_toml(config, "http://localhost:3000/mcp/")
 
     assert changed is True
     content = config.read_text(encoding="utf-8")
     assert "[mcp_servers.elliot]" in content
-    assert 'url = "http://localhost:3000/mcp"' in content
+    assert 'url = "http://localhost:3000/mcp/"' in content
 
 
 def test_write_codex_toml_idempotent(tmp_path: Path) -> None:
     from elliot_core.cli import _write_codex_toml
 
     config = tmp_path / ".codex" / "config.toml"
-    _write_codex_toml(config, "http://localhost:3000/mcp")
-    changed = _write_codex_toml(config, "http://localhost:3000/mcp")
+    _write_codex_toml(config, "http://localhost:3000/mcp/")
+    changed = _write_codex_toml(config, "http://localhost:3000/mcp/")
 
     assert changed is False
     assert config.read_text(encoding="utf-8").count("[mcp_servers.elliot]") == 1
@@ -303,11 +303,11 @@ def test_write_codex_toml_updates_stale_url(tmp_path: Path) -> None:
 
     config = tmp_path / ".codex" / "config.toml"
     _write_codex_toml(config, "http://localhost:9999/mcp")
-    changed = _write_codex_toml(config, "http://localhost:3000/mcp")
+    changed = _write_codex_toml(config, "http://localhost:3000/mcp/")
 
     assert changed is True
     content = config.read_text(encoding="utf-8")
-    assert 'url = "http://localhost:3000/mcp"' in content
+    assert 'url = "http://localhost:3000/mcp/"' in content
     assert "9999" not in content
     assert content.count("[mcp_servers.elliot]") == 1
 
@@ -322,7 +322,7 @@ def test_write_codex_toml_preserves_other_sections(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    _write_codex_toml(config, "http://localhost:3000/mcp")
+    _write_codex_toml(config, "http://localhost:3000/mcp/")
 
     content = config.read_text(encoding="utf-8")
     assert "[mcp_servers.other]" in content

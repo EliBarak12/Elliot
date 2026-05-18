@@ -516,14 +516,24 @@ def _register_tool(
                 # ELLIOT_MAX_RESULT_ROWS and is not the complete answer.
                 payload["truncated"] = True
             return payload
-        except ElliotError as exc:
+        except Exception as exc:
+            # Every failure must be observed — not just ElliotError. A tool
+            # backed by a REST source fails with httpx.HTTPStatusError /
+            # ExecutorError / a timeout, none of which are ElliotError. If
+            # those escaped unobserved the failed call would never reach the
+            # audit log, so metrics reported a 100% success rate.
             duration_ms = round((time.monotonic() - t0) * 1000, 1)
-            _observe(td.id, kwargs, [], duration_ms, str(exc), session_id)
-            error_content = to_mcp_error_content(exc)
+            elliot_exc = (
+                exc
+                if isinstance(exc, ElliotError)
+                else ElliotError("TOOL_EXECUTION_ERROR", str(exc))
+            )
+            _observe(td.id, kwargs, [], duration_ms, str(elliot_exc), session_id)
+            error_content = to_mcp_error_content(elliot_exc)
             if ctx is not None:
                 with contextlib.suppress(Exception):
                     await ctx.warning(
-                        f"tool.call.error: {td.id} code={exc.code}",
+                        f"tool.call.error: {td.id} code={elliot_exc.code}",
                         logger="elliot.runtime",
                     )
             raise ValueError(error_content["text"]) from exc

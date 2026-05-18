@@ -538,6 +538,75 @@ def test_mcp_tool_call_writes_observability(tmp_path: Path) -> None:
         os.environ.pop("ELLIOT_DB_URL", None)
 
 
+def test_mcp_tool_call_records_non_elliot_error(tmp_path: Path) -> None:
+    """A non-ElliotError failure (HTTP error, executor error, timeout) must
+    still be recorded in the audit log and session tracker. If it isn't, the
+    failed call is invisible and metrics wrongly report a 100% success rate.
+    """
+    cfg_path = tmp_path / "pets.connector.json"
+    cfg_path.write_text(json.dumps(MINIMAL_CONNECTOR))
+
+    audit_path = tmp_path / "audit.ndjson"
+
+    import os
+
+    os.environ["ELLIOT_AUDIT_LOG"] = str(audit_path)
+    try:
+        from elliot_connector_runtime.audit import AuditLog as _AuditLog
+        from elliot_connector_runtime.cache import ConnectorCache
+        from elliot_connector_runtime.executor import ToolExecutor
+        from elliot_connector_runtime.server import create_runtime_server
+        from elliot_connector_runtime.session_tracker import (
+            SessionTracker as _Tracker,
+        )
+
+        config = ConnectorCache().get(cfg_path)
+        executor = ToolExecutor(config, secrets={})
+        audit = _AuditLog(audit_path)
+        tracker = _Tracker(tmp_path / "sessions.ndjson")
+
+        # A plain RuntimeError stands in for httpx.HTTPStatusError / ExecutorError
+        # — anything that is not an ElliotError.
+        async def _boom(tool, args):  # type: ignore[no-untyped-def]
+            raise RuntimeError("upstream returned 500")
+
+        executor.execute = _boom  # type: ignore[assignment]
+
+        mcp = create_runtime_server(config, executor, audit=audit, tracker=tracker)
+
+        import asyncio
+
+        tool = mcp._tool_manager.get_tool("list_animals")
+        assert tool is not None
+
+        class _Ctx:
+            request_id = "err-req-1"
+
+            async def info(self, *a, **k):  # type: ignore[no-untyped-def]
+                pass
+
+            async def warning(self, *a, **k):  # type: ignore[no-untyped-def]
+                pass
+
+        mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
+
+        with pytest.raises(ValueError):
+            asyncio.run(tool.fn())
+
+        # The failed call must appear in the audit log with an error set.
+        entries = audit.tail(10)
+        assert len(entries) == 1
+        assert entries[0]["tool_id"] == "list_animals"
+        assert "500" in entries[0]["error"]
+
+        # And in the session tracker as a failed event.
+        live = tracker.tail(10)
+        assert len(live) == 1
+        assert live[0]["error_count"] == 1
+    finally:
+        os.environ.pop("ELLIOT_AUDIT_LOG", None)
+
+
 def test_cache_ttl_expiry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """TTL expiry is verified by advancing the monotonic clock, not by
     real-time sleep. ttl_seconds=0.01 + time.sleep(0.05) was flaky on slow

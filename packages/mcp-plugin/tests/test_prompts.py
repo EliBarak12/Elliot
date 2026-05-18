@@ -75,7 +75,7 @@ def test_parse_skill_file_extracts_all_fields(tmp_path: Path):
 
 
 def test_load_skills_finds_repo_skills():
-    """The real .claude-plugin/skills/ directory should be discoverable."""
+    """The real repo-root skills/ directory should be discoverable."""
     skills = load_skills()
     names = {s.name for s in skills}
     # Six canonical skills must all load
@@ -101,11 +101,11 @@ def test_load_skills_uses_env_override(tmp_path: Path, monkeypatch: pytest.Monke
 def test_load_skills_handles_missing_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """If no skills dir is found, return empty list rather than raising."""
     monkeypatch.setenv("ELLIOT_SKILLS_DIR", str(tmp_path / "does-not-exist"))
-    # Also need to disable the walk-up fallback. Change cwd to a location with
-    # no .claude-plugin ancestor — but the function walks from __file__ parents,
-    # which always finds the repo's .claude-plugin. So we rely on env override
-    # pointing at a missing dir; the function should log and walk up, finding
-    # the real one. To truly test the "nothing found" path, we'd need to mock.
+    # Also need to disable the walk-up fallback. The function walks from
+    # __file__ parents, which always finds the repo's skills/ directory. So we
+    # rely on env override pointing at a missing dir; the function should log
+    # and walk up, finding the real one. To truly test the "nothing found"
+    # path, we'd need to mock.
     # Here we just confirm the function tolerates a bad override gracefully.
     skills = load_skills()
     # Either it falls back to the real dir, or returns [] — both are valid.
@@ -174,7 +174,7 @@ def test_skills_dir_override_missing_falls_back(tmp_path: Path, monkeypatch: pyt
     """A bad ELLIOT_SKILLS_DIR override should not crash — fall back to repo walk."""
     monkeypatch.setenv("ELLIOT_SKILLS_DIR", str(tmp_path / "nonexistent"))
     skills = load_skills()
-    # Repo walk should still find .claude-plugin/skills/
+    # Repo walk should still find the repo-root skills/ directory
     assert len(skills) >= 6
     # Confirm the override was at least *attempted* — no exception raised
     assert "ELLIOT_SKILLS_DIR" in os.environ

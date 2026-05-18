@@ -1,4 +1,4 @@
-"""Tests for plugin manifests (.claude-plugin, .codex-plugin).
+"""Tests for plugin manifests (.claude-plugin, .codex-plugin, .cursor-plugin).
 
 These manifests determine whether the marketplace install actually works:
 
@@ -18,19 +18,19 @@ We assert against the Claude Code plugin spec (docs.claude.com):
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CLAUDE_SKILLS_DIR = REPO_ROOT / ".claude-plugin" / "skills"
-CODEX_SKILLS_DIR = REPO_ROOT / ".codex-plugin" / "skills"
+SKILLS_DIR = REPO_ROOT / "skills"
 EXPECTED_SKILLS = (
     "getting-started",
+    "onboard-product",
     "discover-source",
     "build-connector",
     "lint-connector",
+    "audit-connector",
     "run-eval",
     "deploy",
 )
@@ -119,12 +119,24 @@ def test_plugin_mcp_config_is_auto_discoverable():
     assert "elliot" in data["mcpServers"]
 
 
+def test_skills_are_at_plugin_root_not_inside_claude_plugin():
+    """Spec: component dirs (skills/, agents/, ...) must live at the plugin
+    root, NOT inside .claude-plugin/. The plugin root is the repo root.
+    """
+    assert SKILLS_DIR.is_dir(), "skills/ must exist at the repo (plugin) root"
+    stray = REPO_ROOT / ".claude-plugin" / "skills"
+    assert not stray.exists(), (
+        "skills/ must not live inside .claude-plugin/ — Claude Code only "
+        "auto-discovers component dirs at the plugin root."
+    )
+
+
 @pytest.mark.parametrize("skill_name", EXPECTED_SKILLS)
 def test_each_skill_dir_exists_for_auto_discovery(skill_name: str):
     """Claude Code auto-discovers skills under skills/<name>/SKILL.md — no
     manifest declaration needed.
     """
-    skill_md = CLAUDE_SKILLS_DIR / skill_name / "SKILL.md"
+    skill_md = SKILLS_DIR / skill_name / "SKILL.md"
     assert skill_md.exists(), f"Missing skill file: {skill_md}"
 
 
@@ -144,29 +156,18 @@ def test_codex_marketplace_manifest_is_valid_json():
     assert "elliot" in plugin_names
 
 
-@pytest.mark.parametrize("skill_name", EXPECTED_SKILLS)
-def test_codex_mirror_has_every_skill(skill_name: str):
-    skill_md = CODEX_SKILLS_DIR / skill_name / "SKILL.md"
-    assert skill_md.exists(), f"Missing skill file: {skill_md}"
-
-
-def test_codex_skills_are_in_sync_with_claude_skills():
-    """sync_skills.py --check must pass — if it fails, run the sync script."""
-    result = subprocess.run(
-        ["python", "scripts/sync_skills.py", "--check"],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, (
-        f"Codex skills out of sync with Claude skills. "
-        f"Run: uv run python scripts/sync_skills.py\n{result.stdout}"
-    )
+def test_codex_plugin_skills_resolve_to_repo_root():
+    """Codex plugin.json lists skills by path relative to the plugin root.
+    The plugin root is the repo root, so each `skills/<name>` must exist there.
+    """
+    data = _read_json(REPO_ROOT / ".codex-plugin" / "plugin.json")
+    for rel in data.get("skills", []):
+        assert (REPO_ROOT / rel).is_dir(), f"Codex skill path does not exist: {rel}"
 
 
 @pytest.mark.parametrize("skill_name", EXPECTED_SKILLS)
 def test_each_skill_has_frontmatter_and_body(skill_name: str):
-    skill_md = CLAUDE_SKILLS_DIR / skill_name / "SKILL.md"
+    skill_md = SKILLS_DIR / skill_name / "SKILL.md"
     text = skill_md.read_text(encoding="utf-8")
     assert text.startswith("---\n"), f"{skill_name} missing frontmatter delim"
     lines = text.splitlines()

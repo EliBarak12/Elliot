@@ -12,9 +12,11 @@
   "keywords": ["mcp", "connectors", "agent-tools", "api", "database"],
   "skills": [
     "skills/getting-started",
+    "skills/onboard-product",
     "skills/discover-source",
     "skills/build-connector",
     "skills/lint-connector",
+    "skills/audit-connector",
     "skills/run-eval",
     "skills/deploy"
   ],

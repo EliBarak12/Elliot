@@ -5,9 +5,12 @@ WORKDIR /app
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1
+# uv.lock covers the whole workspace, so `uv sync --frozen` needs every
+# workspace member present — even the ones this image doesn't run.
 COPY pyproject.toml uv.lock ./
 COPY packages/core packages/core
 COPY packages/connector-runtime packages/connector-runtime
+COPY packages/mcp-plugin packages/mcp-plugin
 RUN pip install --no-cache-dir uv \
  && uv sync --frozen --no-dev
 

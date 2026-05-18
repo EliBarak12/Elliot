@@ -3,7 +3,11 @@ FROM node:22-alpine AS build
 WORKDIR /app
 # Pin pnpm to the same major as CI to keep lockfile resolution consistent.
 RUN corepack enable && corepack prepare pnpm@9 --activate
+# Every workspace member's package.json must be present before install, or
+# `--frozen-lockfile` fails and the studio deps never get linked.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/studio/package.json packages/studio/package.json
+COPY website/package.json website/package.json
 RUN pnpm install --frozen-lockfile
 COPY . .
 # No VITE_* build args: the browser bundle talks only to same-origin /api/*

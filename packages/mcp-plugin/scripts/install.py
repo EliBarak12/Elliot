@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Registers Elliot with Claude Code and Codex automatically.
+Registers Elliot with Claude Code, Codex, and OpenClaw automatically.
 1. Writes .mcp.json at project root       -> Claude Code project-level auto-discovery
 2. Runs `claude mcp add-json`             -> Claude Code user-level registration
 3. Writes .codex/config.toml             -> Codex project-level auto-discovery
 4. Writes ~/.codex/config.toml           -> Codex user-level registration
+5. Writes ~/.openclaw/openclaw.json      -> OpenClaw user-level registration
 """
 
 import json
@@ -60,5 +61,19 @@ try:
         print("✓ Codex: registered at user scope")
 except Exception:
     print("  Could not write ~/.codex/config.toml — project-level is sufficient")
+
+# 5. OpenClaw — user ~/.openclaw/openclaw.json
+# OpenClaw nests servers two levels deep (mcp.servers.<name>) and expects a
+# `transport` field; remote HTTP servers use the "streamable-http" spelling.
+try:
+    openclaw_config = Path.home() / ".openclaw" / "openclaw.json"
+    openclaw_config.parent.mkdir(parents=True, exist_ok=True)
+    oc_data = json.loads(openclaw_config.read_text()) if openclaw_config.exists() else {}
+    oc_servers = oc_data.setdefault("mcp", {}).setdefault("servers", {})
+    oc_servers["elliot"] = {"transport": "streamable-http", "url": PLUGIN_URL}
+    openclaw_config.write_text(json.dumps(oc_data, indent=2))
+    print("✓ OpenClaw: registered at ~/.openclaw/openclaw.json")
+except Exception:
+    print("  Could not write ~/.openclaw/openclaw.json — skipping OpenClaw")
 
 print("\nDone! Now run: make dev")

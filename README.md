@@ -152,7 +152,7 @@ On first connect, an agent automatically calls `prompts/get name=getting_started
 
 </td><td>
 
-Add to your Cursor MCP config:
+Install the bundled plugin (`.cursor-plugin/`) from the Cursor marketplace, or add the MCP server by hand:
 ```json
 { "mcpServers": { "elliot": {
   "url": "http://localhost:3000/mcp/"
@@ -170,7 +170,11 @@ codex plugin marketplace add EliBarak12/Elliot
 
 </td><td>
 
-Pointed at `http://localhost:3000/mcp/` by `elliot connect`, which writes `~/.openclaw/openclaw.json` with the `streamable-http` transport.
+```
+openclaw plugins install elliot@elliot
+```
+
+OpenClaw also reads the `.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin/` bundles directly. `elliot connect` writes `~/.openclaw/openclaw.json` with the `streamable-http` transport.
 
 </td></tr>
 </table>

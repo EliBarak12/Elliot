@@ -48,6 +48,19 @@ def test_install_creates_codex_config(tmp_path: Path):
     assert "[mcp_servers.elliot]" in codex_config.read_text()
 
 
+def test_install_creates_openclaw_config(tmp_path: Path):
+    with patch("subprocess.run", side_effect=FileNotFoundError):
+        _run_install(tmp_path)
+    openclaw_config = tmp_path / "home" / ".openclaw" / "openclaw.json"
+    assert openclaw_config.exists()
+    data = json.loads(openclaw_config.read_text())
+    entry = data["mcp"]["servers"]["elliot"]
+    assert entry == {
+        "transport": "streamable-http",
+        "url": "http://localhost:3000/mcp/",
+    }
+
+
 def test_install_idempotent_mcp_json(tmp_path: Path):
     """Running twice does not duplicate the elliot entry."""
     with patch("subprocess.run", side_effect=FileNotFoundError):

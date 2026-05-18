@@ -1,0 +1,13 @@
+{
+  "name": "elliot",
+  "version": "1.0.0",
+  "description": "Turn any API or database into agent-ready MCP tools. Design, validate, deploy, and observe connector tool sets with Cursor.",
+  "author": {
+    "name": "Eli Barak",
+    "url": "https://github.com/EliBarak12"
+  },
+  "homepage": "https://github.com/EliBarak12/Elliot",
+  "repository": "https://github.com/EliBarak12/Elliot",
+  "license": "MIT",
+  "keywords": ["mcp", "connectors", "agent-tools", "api", "database"]
+}

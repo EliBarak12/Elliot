@@ -3,6 +3,12 @@ name: Release images
 # Build and publish the three Elliot service images to GHCR so end users can
 # run Elliot without a source checkout or local build toolchain. Triggered by
 # a SemVer tag push (vX.Y.Z) or manually via the Actions tab.
+#
+# NOTE: GHCR packages are created PRIVATE by default, even for a public repo.
+# After the first successful run, set each package's visibility to Public
+# (Package settings -> Change visibility) — otherwise the anonymous pull in
+# scripts/install.sh fails with "denied". There is no REST API for this; it
+# is a one-time manual step per package (elliot-plugin/-runtime/-studio).
 on:
   push:
     tags: ["v*"]

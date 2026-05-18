@@ -70,7 +70,24 @@ fi
 
 # 5. Pull + start -----------------------------------------------------------
 say "Pulling Elliot images ..."
-docker compose -f "$COMPOSE_FILE" pull
+if ! docker compose -f "$COMPOSE_FILE" pull; then
+  err ""
+  err "Could not pull the Elliot images from ghcr.io (access denied)."
+  err ""
+  err "The most common cause is that the published packages are still"
+  err "private. GHCR packages are created private by default — even when"
+  err "the source repository is public — so an anonymous pull is denied."
+  err ""
+  err "Maintainer fix (one-time): make each package public at"
+  err "  https://github.com/users/EliBarak12/packages"
+  err "  -> elliot-plugin / elliot-runtime / elliot-studio"
+  err "  -> Package settings -> Danger Zone -> Change visibility -> Public"
+  err ""
+  err "Alternatively, authenticate with a GitHub token that has the"
+  err "'read:packages' scope, then re-run this installer:"
+  err "  echo \"\$GITHUB_TOKEN\" | docker login ghcr.io -u <github-username> --password-stdin"
+  exit 1
+fi
 say "Starting Elliot ..."
 docker compose -f "$COMPOSE_FILE" up -d
 

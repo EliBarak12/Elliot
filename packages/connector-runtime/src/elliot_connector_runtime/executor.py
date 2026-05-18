@@ -94,6 +94,14 @@ class ToolExecutor:
     ) -> QueryResult:
         from elliot_core.sqlite.query_runner import validate_tool_sql
 
+        # DB filter push-down: when a tool's filters compile to a SELECT and
+        # it needs exactly one Postgres/MySQL source, run that SELECT straight
+        # against the database so filtering, projection and LIMIT all happen
+        # server-side — instead of snapshotting the whole table into SQLite.
+        pushdown = self._pushdown_source(tool)
+        if pushdown is not None:
+            return await self._execute_db_pushdown(tool, pushdown, arguments)
+
         # Determine SQL: prefer explicit sql, fall back to build_select_sql for filter_groups tools
         if tool.sql:
             # Even connector-supplied SQL must be a single SELECT/CTE — a
@@ -407,43 +415,67 @@ class ToolExecutor:
         return all_rows
 
     async def _fetch_db(self, source: SourceConfig) -> list[dict[str, Any]]:
-        import functools
+        """Fetch a whole DB source for the SQLite-snapshot path.
 
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, functools.partial(self._query_postgres, source))
+        Routed through elliot_core's SQLAlchemy connector so Postgres and
+        MySQL are both supported and Postgres runs in a read-only
+        transaction. The push-down path (``_execute_db_pushdown``) avoids
+        this whole-table fetch whenever a tool's filters can run server-side.
+        """
+        from elliot_core.sources.db_connector import query_database
 
-    def _query_postgres(self, source: SourceConfig) -> list[dict[str, Any]]:
-        import psycopg2
-        import psycopg2.extras
-        from psycopg2 import sql as psql
+        result = await asyncio.to_thread(query_database, source, self._secrets)
+        return result.rows
 
-        from elliot_core.sql import safe_ident
+    def _pushdown_source(self, tool: ToolDefinition) -> SourceConfig | None:
+        """Return the DB source a tool's filters can be pushed down to.
 
-        dsn = self._resolve_dsn(source)
-        conn = psycopg2.connect(dsn)
-        try:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                if source.query:
-                    cur.execute(source.query)
-                else:
-                    # source.table comes from connector config; validate-and-
-                    # quote via safe_ident (raises INVALID_IDENTIFIER on bad
-                    # input). psql.SQL+Identifier provides defense-in-depth
-                    # via the postgres protocol-level quoter.
-                    safe_ident(source.table or "")
-                    cur.execute(
-                        psql.SQL("SELECT * FROM {tbl}").format(
-                            tbl=psql.Identifier(source.table or "")
-                        )
-                    )
-                return [dict(row) for row in cur.fetchall()]
-        finally:
-            conn.close()
+        Eligible when there is no injected test engine, the tool has no raw
+        SQL but does define filter_groups / return_fields, and it needs
+        exactly one source which is a Postgres or MySQL database. Raw-SQL
+        tools and multi-source tools keep the SQLite-snapshot path because
+        their SQL is authored in the SQLite dialect against snapshot tables.
+        """
+        if self._injected_engine is not None:
+            return None
+        if tool.sql:
+            return None
+        if not (tool.filter_groups or tool.return_fields):
+            return None
+        needed = self._sources_needed_for(tool)
+        if len(needed) != 1:
+            return None
+        source = needed[0]
+        return source if source.type in ("postgres", "mysql") else None
 
-    def _resolve_dsn(self, source: SourceConfig) -> str:
-        if source.auth and source.auth.secret_key:
-            return self._secrets.get(source.auth.secret_key, "")
-        return source.url or ""
+    async def _execute_db_pushdown(
+        self,
+        tool: ToolDefinition,
+        source: SourceConfig,
+        arguments: dict[str, Any],
+    ) -> QueryResult:
+        """Compile the tool to a dialect-correct SELECT and run it on the DB.
+
+        The tool's filter_groups / return_fields / order_by / limit are
+        pushed straight to Postgres/MySQL, so the database does the
+        filtering and only the matching rows cross the wire — no full-table
+        snapshot, and the agent's parameters reach the real query.
+        """
+        from elliot_core.sources.db_connector import run_select
+        from elliot_core.tools.query_builder import build_select_sql
+
+        dialect = source.type  # "postgres" | "mysql"
+        from_clause = _db_from_clause(source, dialect)
+        sql, params = build_select_sql(tool, arguments, dialect=dialect, from_clause=from_clause)
+        result = await asyncio.to_thread(run_select, source, self._secrets, sql, params)
+        log.info(
+            "tool.db_pushdown",
+            tool_id=tool.id,
+            source_id=source.id,
+            dialect=dialect,
+            row_count=len(result.rows),
+        )
+        return self._capped_result(tool.id, result.rows)
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -490,6 +522,26 @@ def _interpolate(template: str, values: dict[str, Any]) -> str:
     for key, val in values.items():
         template = template.replace(f"{{{key}}}", str(val))
     return template
+
+
+def _db_from_clause(source: SourceConfig, dialect: str) -> str:
+    """Build the FROM expression for a pushed-down DB query.
+
+    Uses the real table name when the source declares one; otherwise wraps
+    the source's custom query as a derived table so the tool's WHERE /
+    ORDER BY / LIMIT can be layered on top of it.
+    """
+    from elliot_core.sqlite.query_runner import validate_tool_sql
+    from elliot_core.tools.query_builder import quote_ident
+
+    if source.table:
+        return quote_ident(source.table, dialect)
+    if source.query:
+        ok, reason = validate_tool_sql(source.query)
+        if not ok:
+            raise ExecutorError(f"Source {source.id!r} has an invalid query: {reason}")
+        return f"({source.query}) AS _elliot_src"
+    raise ExecutorError(f"DB source {source.id!r} has neither 'table' nor 'query' set")
 
 
 def _resolve_secret(key: str, secrets: dict[str, str]) -> str:

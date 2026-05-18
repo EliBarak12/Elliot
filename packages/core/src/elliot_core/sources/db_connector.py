@@ -52,7 +52,34 @@ def query_database(config: SourceConfig, secrets: dict[str, str]) -> FetchResult
     )
 
 
-def _run_query(config: SourceConfig, sql: str, secrets: dict[str, str]) -> list[dict[str, Any]]:
+def run_select(
+    config: SourceConfig,
+    secrets: dict[str, str],
+    sql: str,
+    params: dict[str, Any] | None = None,
+) -> FetchResult:
+    """Run a validated, parameterized SELECT against a DB source.
+
+    The connector runtime uses this to push a tool's compiled WHERE /
+    ORDER BY / LIMIT straight to Postgres/MySQL — so the database does the
+    filtering and only matching rows cross the wire — instead of fetching
+    the whole table and filtering the in-memory SQLite mirror. ``sql`` must
+    be a single SELECT (enforced by :func:`validate_tool_sql`); ``params``
+    are bound, never interpolated.
+    """
+    valid, reason = validate_tool_sql(sql)
+    if not valid:
+        raise ElliotError("INVALID_SQL", f"Source '{config.id}': {reason}")
+    rows = _run_query(config, sql, secrets, params)
+    return FetchResult(rows=rows, fetched_at=datetime.now(UTC).isoformat())
+
+
+def _run_query(
+    config: SourceConfig,
+    sql: str,
+    secrets: dict[str, str],
+    params: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     try:
         from sqlalchemy import create_engine, text
     except ImportError as exc:
@@ -72,7 +99,7 @@ def _run_query(config: SourceConfig, sql: str, secrets: dict[str, str]) -> list[
     try:
         engine = create_engine(dsn, connect_args=connect_args, pool_pre_ping=True)
         with engine.connect() as conn:
-            result = conn.execute(text(sql))
+            result = conn.execute(text(sql), params or {})
             return [dict(row._mapping) for row in result]
     except ElliotError:
         raise

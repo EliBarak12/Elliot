@@ -12,7 +12,13 @@ from elliot_connector_runtime.executor import (
     _extract_table_names,
     _interpolate,
 )
-from elliot_core.types import ConnectorConfig, ParameterDefinition, SourceConfig, ToolDefinition
+from elliot_core.types import (
+    ConnectorConfig,
+    ParameterDefinition,
+    ReturnField,
+    SourceConfig,
+    ToolDefinition,
+)
 
 CONNECTOR = ConnectorConfig(
     name="Pets",
@@ -535,3 +541,212 @@ async def test_executor_falls_back_to_all_sources_when_source_ids_empty(
     executor = ToolExecutor(connector, secrets={})
     result = await executor.execute(connector.tools[0], {})
     assert result.rows[0]["name"] == "widget"
+
+
+# ── DB filter push-down ────────────────────────────────────────────────────
+
+
+def test_db_from_clause_table() -> None:
+    """A DB source with a table name yields a dialect-quoted FROM."""
+    from elliot_connector_runtime.executor import _db_from_clause
+
+    src = SourceConfig(id="db", name="DB", type="postgres", table="orders")
+    assert _db_from_clause(src, "postgres") == '"orders"'
+    assert _db_from_clause(src, "mysql") == "`orders`"
+
+
+def test_db_from_clause_wraps_custom_query() -> None:
+    """A DB source with a custom query is wrapped as a derived table so the
+    tool's WHERE / LIMIT can layer on top of it."""
+    from elliot_connector_runtime.executor import _db_from_clause
+
+    src = SourceConfig(
+        id="db", name="DB", type="postgres", query="SELECT * FROM orders WHERE active"
+    )
+    assert _db_from_clause(src, "postgres") == "(SELECT * FROM orders WHERE active) AS _elliot_src"
+
+
+def test_db_from_clause_rejects_non_select_query() -> None:
+    from elliot_connector_runtime.executor import _db_from_clause
+
+    src = SourceConfig(id="db", name="DB", type="postgres", query="DROP TABLE orders")
+    with pytest.raises(ExecutorError, match="invalid query"):
+        _db_from_clause(src, "postgres")
+
+
+def test_db_from_clause_requires_table_or_query() -> None:
+    from elliot_connector_runtime.executor import _db_from_clause
+
+    src = SourceConfig(id="db", name="DB", type="postgres", url="postgresql://x/y")
+    with pytest.raises(ExecutorError, match="neither 'table' nor 'query'"):
+        _db_from_clause(src, "postgres")
+
+
+async def test_executor_db_pushdown_postgres(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A filter_groups tool on a single Postgres source pushes its WHERE
+    straight to the database instead of snapshotting the whole table."""
+    from elliot_core.sources import db_connector
+    from elliot_core.types.source import FetchResult
+    from elliot_core.types.tool import FilterCondition, FilterGroup
+
+    captured: dict[str, str] = {}
+
+    def fake_run_select(
+        config: SourceConfig,
+        secrets: dict[str, str],
+        sql: str,
+        params: dict[str, object] | None,
+    ) -> FetchResult:
+        captured["sql"] = sql
+        captured["params"] = str(params)
+        captured["source_id"] = config.id
+        return FetchResult(rows=[{"id": 1, "status": "open"}], fetched_at="2026-01-01T00:00:00Z")
+
+    monkeypatch.setattr(db_connector, "run_select", fake_run_select)
+
+    connector = ConnectorConfig(
+        name="Orders",
+        slug="orders",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="db",
+                name="DB",
+                type="postgres",
+                url="postgresql://localhost/test",
+                table="orders",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="orders_by_status",
+                name="Orders by status",
+                description="List orders filtered by status",
+                category="READ",
+                source_ids=["db"],
+                filter_groups=[
+                    FilterGroup(
+                        conditions=[
+                            FilterCondition(field="status", operator="=", parameter_name="status")
+                        ]
+                    )
+                ],
+                parameters=[
+                    ParameterDefinition(name="status", type="string", required=True, description="")
+                ],
+            )
+        ],
+        skills=[],
+    )
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(connector.tools[0], {"status": "open"})
+
+    assert result.rows == [{"id": 1, "status": "open"}]
+    assert captured["source_id"] == "db"
+    assert 'FROM "orders"' in captured["sql"]
+    assert "WHERE" in captured["sql"]
+    # The agent's parameter value reaches the bound params of the real query.
+    assert "open" in captured["params"]
+
+
+async def test_executor_db_pushdown_mysql(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MySQL push-down quotes identifiers with backticks."""
+    from elliot_core.sources import db_connector
+    from elliot_core.types.source import FetchResult
+
+    captured: dict[str, str] = {}
+
+    def fake_run_select(
+        config: SourceConfig,
+        secrets: dict[str, str],
+        sql: str,
+        params: dict[str, object] | None,
+    ) -> FetchResult:
+        captured["sql"] = sql
+        return FetchResult(rows=[{"order_id": 9}], fetched_at="x")
+
+    monkeypatch.setattr(db_connector, "run_select", fake_run_select)
+
+    connector = ConnectorConfig(
+        name="Shop",
+        slug="shop",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="db",
+                name="DB",
+                type="mysql",
+                url="mysql+pymysql://root:pass@localhost/test",
+                table="orders",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="recent_orders",
+                name="Recent orders",
+                description="List recent order ids",
+                category="READ",
+                source_ids=["db"],
+                return_fields=[ReturnField(field="order_id")],
+            )
+        ],
+        skills=[],
+    )
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(connector.tools[0], {})
+
+    assert result.rows == [{"order_id": 9}]
+    assert "FROM `orders`" in captured["sql"]
+    assert "`order_id`" in captured["sql"]
+
+
+async def test_executor_db_pushdown_skipped_for_raw_sql(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A DB tool with raw SQL keeps the SQLite-snapshot path — its SQL is
+    authored in the SQLite dialect, so it cannot be pushed to Postgres."""
+    from elliot_core.sources import db_connector
+    from elliot_core.types.source import FetchResult
+
+    calls: list[str] = []
+
+    def fake_query_database(config: SourceConfig, secrets: dict[str, str]) -> FetchResult:
+        calls.append("query_database")
+        return FetchResult(rows=[{"id": 1, "status": "open"}], fetched_at="x")
+
+    def fake_run_select(*args: object, **kwargs: object) -> FetchResult:
+        calls.append("run_select")
+        raise AssertionError("push-down must not run for a raw-SQL tool")
+
+    monkeypatch.setattr(db_connector, "query_database", fake_query_database)
+    monkeypatch.setattr(db_connector, "run_select", fake_run_select)
+
+    connector = ConnectorConfig(
+        name="Orders",
+        slug="orders",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="db",
+                name="DB",
+                type="postgres",
+                url="postgresql://localhost/test",
+                table="orders",
+                table_name="orders",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="raw_orders",
+                name="Raw orders",
+                description="Raw-SQL tool",
+                category="READ",
+                source_ids=["db"],
+                sql='SELECT * FROM "orders"',
+            )
+        ],
+        skills=[],
+    )
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(connector.tools[0], {})
+
+    assert calls == ["query_database"]
+    assert result.rows[0]["status"] == "open"

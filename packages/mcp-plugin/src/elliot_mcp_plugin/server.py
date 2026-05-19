@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import mcp.types as types
+import structlog
 from mcp.server import Server
 from mcp.server.fastmcp import FastMCP
 from mcp.server.stdio import stdio_server
@@ -11,6 +12,8 @@ from elliot_core.connector.schema_gen import to_mcp_tool_schema
 from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.tools.executor import ToolExecutor
 from elliot_core.types.connector import ConnectorConfig
+
+log = structlog.get_logger(__name__)
 
 
 def _make_annotations(schema: dict[str, Any]) -> types.ToolAnnotations:
@@ -62,6 +65,16 @@ def create_server(config: ConnectorConfig, secrets: dict[str, str]) -> Server:
                 isError=False,
             )
         except ElliotError as exc:
+            content = to_mcp_error_content(exc)
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=content["text"])],
+                isError=True,
+            )
+        except Exception as exc:
+            # CLAUDE.md: every MCP tool handler has a top-level catch-all.
+            # A non-ElliotError (bug, network failure) must not escape and
+            # crash the stdio process — log the trace, return a safe error.
+            log.error("call_tool.unhandled", tool=name, exc_info=exc)
             content = to_mcp_error_content(exc)
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=content["text"])],

@@ -48,7 +48,9 @@ class TestCLIMain:
         code = _invoke(["--connector", str(missing)])
         assert code == 1
         captured = capsys.readouterr()
-        assert "Error" in captured.err
+        # Fatal errors are logged as structured JSON to stderr.
+        assert "cli.fatal" in captured.err
+        assert "missing.connector.json" in captured.err
 
     def test_exits_0_on_keyboard_interrupt(self, tmp_path: Path) -> None:
         connector_file = tmp_path / "test.connector.json"

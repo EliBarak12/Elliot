@@ -348,9 +348,11 @@ class ToolExecutor:
                 resp.raise_for_status()
                 pages_fetched += 1
 
-                data = resp.json()
-                if source.data_path:
-                    data = jmespath.search(source.data_path, data)
+                # Keep the raw response envelope: cursor pagination reads
+                # next_cursor from it, and data_path may narrow `data` to a
+                # bare list that no longer carries the cursor field.
+                envelope = resp.json()
+                data = jmespath.search(source.data_path, envelope) if source.data_path else envelope
 
                 # Unwrap a paginated envelope (``{items: [...], total, ...}``)
                 # the same way the design-time api_fetcher does. Without this
@@ -398,9 +400,11 @@ class ToolExecutor:
                         break
                     page += 1
                 elif pagination.strategy == "cursor":
-                    cursor = (data.get("next_cursor") if isinstance(data, dict) else None) or (
-                        data.get(pagination.cursor_field or "cursor")
-                        if isinstance(data, dict)
+                    cursor = (
+                        envelope.get("next_cursor") if isinstance(envelope, dict) else None
+                    ) or (
+                        envelope.get(pagination.cursor_field or "cursor")
+                        if isinstance(envelope, dict)
                         else None
                     )
                     if not cursor:
@@ -518,9 +522,16 @@ def _table_is_empty(engine: SQLiteEngine, table_name: str) -> bool:
 
 
 def _interpolate(template: str, values: dict[str, Any]) -> str:
-    """Replace {param} placeholders in a URL template."""
+    """Replace {param} placeholders in a URL template.
+
+    Each value is percent-encoded with ``safe=""`` so an agent-supplied
+    argument like ``"../admin"`` cannot escape its path segment or inject
+    extra query parameters / URL fragments.
+    """
+    from urllib.parse import quote
+
     for key, val in values.items():
-        template = template.replace(f"{{{key}}}", str(val))
+        template = template.replace(f"{{{key}}}", quote(str(val), safe=""))
     return template
 
 

@@ -219,22 +219,32 @@ def _cmd_status(args: argparse.Namespace) -> None:
     except Exception:
         results.append(("database", db_url, False, ""))
 
+    # The runtime is connector-bound and started on demand by
+    # elliot_start_runtime — it is expected to be down until a connector is
+    # deployed, so it never counts toward the failure exit code.
+    _optional = {"runtime"}
+
     print("\nElliot Services")
     print("─" * 56)
     all_ok = True
     for name, url, ok, detail in results:
         icon = "✓" if ok else "✗"
-        state = "running" if ok else "not reachable"
+        if ok:
+            state = "running"
+        elif name in _optional:
+            state = "not running (starts on demand when you deploy a connector)"
+        else:
+            state = "not reachable"
         print(f"  {name:<10} {url:<35} {icon} {state}{detail}")
-        if not ok:
+        if not ok and name not in _optional:
             all_ok = False
 
     print()
     if all_ok:
-        print("  All services healthy.")
+        print("  All required services healthy.")
     else:
-        failed = sum(1 for _, _, ok, _ in results if not ok)
-        print(f"  {failed} service(s) not reachable. Is honcho running? Try: honcho start")
+        failed = sum(1 for n, _, ok, _ in results if not ok and n not in _optional)
+        print(f"  {failed} service(s) not reachable. Is honcho running? Try: make dev")
         sys.exit(1)
 
 

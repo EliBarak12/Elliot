@@ -75,8 +75,9 @@ This pulls the pre-built images, generates a local `.env`, starts all three serv
 # Prerequisites: uv (Python 3.13) and pnpm (Node 22)
 git clone https://github.com/EliBarak12/Elliot.git && cd Elliot
 make setup
-make dev          # boots plugin (:3000) + runtime (:3001) + studio (:5173)
+make dev          # boots plugin (:3000) + studio (:5173)
                   # and writes the MCP config for every detected coding agent
+                  # the runtime (:3001) starts on demand when you deploy a connector
 ```
 
 Then open Studio at <http://localhost:5173>, scaffold a connector, lint it, and your agent can use it in the same session.

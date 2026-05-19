@@ -34,7 +34,7 @@ Stop and ask the user to start Elliot. Use this exact message:
 > git clone https://github.com/EliBarak12/Elliot.git
 > cd Elliot
 > make setup     # one-time: installs uv + pnpm deps
-> make dev       # starts plugin (3000), runtime (3001), and studio (5173)
+> make dev       # starts plugin (3000) and studio (5173)
 > ```
 >
 > Once it's running, Studio will open automatically in your browser at `http://localhost:5173`. Tell me when you see it and I'll continue."

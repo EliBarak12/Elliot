@@ -1,0 +1,13 @@
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="elliot-brand" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00cec8" />
+      <stop offset="1" stop-color="#00cec8" stop-opacity="0.7" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#elliot-brand)" />
+  <path
+    d="M24 18h18v7H32v5.5h9v6.5h-9V43h10.5v7H24z"
+    fill="#ffffff"
+  />
+</svg>

@@ -79,4 +79,6 @@ def is_elliot_error(err: object) -> bool:
 def to_mcp_error_content(err: object) -> dict[str, str]:
     if isinstance(err, ElliotError):
         return {"type": "text", "text": f"[{err.code}] {err.message}"}
-    return {"type": "text", "text": f"Unexpected error: {err}"}
+    # Never interpolate an unexpected exception verbatim — its str() may leak
+    # file paths, SQL, or secrets. The full traceback belongs in the log.
+    return {"type": "text", "text": "[INTERNAL_ERROR] An unexpected error occurred."}

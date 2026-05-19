@@ -44,10 +44,12 @@ def test_to_mcp_error_content_elliot():
 
 
 def test_to_mcp_error_content_generic():
-    err = RuntimeError("unexpected")
+    err = RuntimeError("/srv/secret/path leaked")
     content = to_mcp_error_content(err)
     assert content["type"] == "text"
-    assert "Unexpected error" in content["text"]
+    # The raw exception string must not leak to the agent.
+    assert "secret" not in content["text"]
+    assert "INTERNAL_ERROR" in content["text"]
 
 
 def test_elliot_error_with_detail():

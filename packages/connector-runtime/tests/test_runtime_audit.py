@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from elliot_connector_runtime.audit import AuditLog
 
 
@@ -27,8 +29,10 @@ def test_tail_empty_when_no_file(tmp_path: Path) -> None:
     assert AuditLog(tmp_path / "missing.ndjson").tail() == []
 
 
-def test_log_rotates_at_size_cap(tmp_path: Path) -> None:
+def test_log_rotates_at_size_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Once the file exceeds the cap it rotates so it cannot grow unbounded."""
+    # 65536 is the minimum cap the size-parser allows.
+    monkeypatch.setenv("ELLIOT_AUDIT_LOG_MAX_BYTES", "65536")
     path = tmp_path / "audit.ndjson"
     log = AuditLog(path)
     for i in range(3000):

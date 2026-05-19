@@ -37,6 +37,7 @@ import os
 import random
 import shutil
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +110,35 @@ hits.sort(key=lambda c: c["lifetime_value"], reverse=True)
 for c in hits:
     print(c["name"], c["lifetime_value"])
 print("TOTAL", round(sum(c["lifetime_value"] for c in hits), 2))"""
+
+# Tool definitions the agent must read before it can use each strategy.
+RAW_TOOL_DEF = json.dumps(
+    {
+        "name": "get_customers",
+        "description": "Return the full customers API response as JSON.",
+        "parameters": {},
+    }
+)
+CODEEXEC_TOOL_DEF = json.dumps(
+    {
+        "name": "run_python",
+        "description": (
+            "Execute a Python snippet in a sandbox. The data file "
+            "'customers_api.json' is available on disk. Returns stdout."
+        ),
+        "parameters": {"code": {"type": "string", "required": True}},
+    }
+)
+
+
+@dataclass
+class Step:
+    """One turn in an agent loop, and the tokens it pushes through context."""
+
+    direction: str  # "agent" — model emits it;  "ctx" — it lands in context
+    label: str
+    tokens: int
+    detail: str = ""
 
 
 def est_tokens(obj: Any) -> int:
@@ -250,6 +280,22 @@ def _fmt_ctx(tokens: int, window: int = 200_000) -> str:
     return f"NO ({tokens / window:.1f}x over)"
 
 
+def print_transcript(title: str, summary: str, steps: list[Step]) -> int:
+    """Print one agent's turn-by-turn run and return its total token cost."""
+    total = sum(s.tokens for s in steps)
+    print(f"[ {title} ]  {summary}")
+    for i, step in enumerate(steps, 1):
+        arrow = "model >>" if step.direction == "agent" else ">> ctx "
+        pct = step.tokens / total * 100 if total else 0.0
+        print(f"  {i}. {arrow}  {step.label:<44} {step.tokens:>11,} tok  {pct:5.1f}%")
+        if step.detail:
+            print(f"               └ {step.detail}")
+    print(f"     {'-' * 75}")
+    print(f"     {'TOTAL through the context window':<44} {total:>11,} tok")
+    print()
+    return total
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -283,6 +329,7 @@ def main() -> None:
 
         # ── Strategy 1: raw dump ────────────────────────────────────────────
         raw_tokens = est_tokens(payload)
+        raw_call = json.dumps({"tool": "get_customers", "args": {}})
 
         # ── Strategy 2: code execution ──────────────────────────────────────
         # Schema discovery output: keys + meta + first two full records.
@@ -293,12 +340,6 @@ def main() -> None:
         )
         answer = "\n".join(f"{c['name']}\t{c['lifetime_value']}" for c in hits)
         answer += f"\nTOTAL\t{total_ltv}"
-        codeexec_tokens = (
-            est_tokens(EXPLORE_CODE)
-            + est_tokens(explore_out)
-            + est_tokens(FILTER_CODE)
-            + est_tokens(answer)
-        )
 
         # ── Strategy 3: Elliot connector ────────────────────────────────────
         connector = build_connector(data_path)
@@ -306,6 +347,56 @@ def main() -> None:
         elliot_tokens = est_tokens(list_result.model_dump())
         agg_tokens = est_tokens(agg_result.model_dump())
         tool_defs_tokens = est_tokens([t.model_dump() for t in connector.tools])
+        elliot_call = json.dumps({"tool": "list_enterprise_customers_de", "args": {}})
+
+        # ── Per-agent step transcripts ──────────────────────────────────────
+        raw_steps = [
+            Step("ctx", "reads get_customers tool definition", est_tokens(RAW_TOOL_DEF)),
+            Step("agent", "calls get_customers()", est_tokens(raw_call)),
+            Step(
+                "ctx",
+                "tool result: the ENTIRE JSON API response",
+                raw_tokens,
+                f"{size_mb:.1f} MB · {args.customers:,} customers · "
+                f"{n_orders:,} nested orders — handed back unprocessed",
+            ),
+        ]
+        codeexec_steps = [
+            Step("ctx", "reads run_python tool definition", est_tokens(CODEEXEC_TOOL_DEF)),
+            Step(
+                "agent",
+                "writes exploration code (schema unknown)",
+                est_tokens(EXPLORE_CODE),
+                "must inspect the file before it can write a correct filter",
+            ),
+            Step(
+                "ctx",
+                "sandbox stdout: keys + meta + 2 sample records",
+                est_tokens(explore_out),
+                "bulk data stays on disk — only this schema sample enters context",
+            ),
+            Step("agent", "writes filter + aggregate code", est_tokens(FILTER_CODE)),
+            Step(
+                "ctx",
+                f"sandbox stdout: {len(hits)} matching customers + total",
+                est_tokens(answer),
+            ),
+        ]
+        elliot_steps = [
+            Step(
+                "ctx",
+                "reads 2 Elliot tool definitions (the contract)",
+                tool_defs_tokens,
+                "verb-first descriptions + typed params — read once per session",
+            ),
+            Step("agent", "calls list_enterprise_customers_de()", est_tokens(elliot_call)),
+            Step(
+                "ctx",
+                f"tool result: {len(list_result.rows)} shaped rows + meta",
+                elliot_tokens,
+                "filter + sort ran server-side in SQLite — only matches return",
+            ),
+        ]
 
         # ── Report ──────────────────────────────────────────────────────────
         line = "=" * 68
@@ -322,10 +413,22 @@ def main() -> None:
         print(f"  answer ................. {len(hits)} customers, ${total_ltv:,.2f} total")
         print()
 
+        print("STEP BY STEP — what each agent does, and where the tokens go")
+        print(line)
+        raw_total = print_transcript(
+            "raw-dump agent", "wire the REST API straight into one MCP tool", raw_steps
+        )
+        codeexec_total = print_transcript(
+            "code-exec agent", "give the agent a Python sandbox over the file", codeexec_steps
+        )
+        elliot_total = print_transcript(
+            "elliot agent", "call an Elliot READ tool that filters server-side", elliot_steps
+        )
+
         rows = [
-            ("raw-dump", raw_tokens),
-            ("code-exec", codeexec_tokens),
-            ("elliot", elliot_tokens),
+            ("raw-dump", raw_total),
+            ("code-exec", codeexec_total),
+            ("elliot", elliot_total),
         ]
         max_tokens = max(t for _, t in rows)
         print("Token cost per strategy  (lower is better)")
@@ -333,7 +436,7 @@ def main() -> None:
         print(f"  {'strategy':<11} {'tokens':>12}   {'200K context':<16} {'vs elliot':>10}")
         print("-" * 68)
         for name, tokens in rows:
-            ratio = tokens / elliot_tokens
+            ratio = tokens / elliot_total
             ratio_str = "baseline" if name == "elliot" else f"{ratio:,.0f}x more"
             print(f"  {name:<11} {tokens:>12,}   {_fmt_ctx(tokens):<16} {ratio_str:>10}")
         print("-" * 68)
@@ -343,30 +446,27 @@ def main() -> None:
         print("  (bars are log-scaled — raw-dump dwarfs the rest linearly)")
         print()
 
-        print("What each strategy puts in the context window")
-        print(f"  raw-dump   the entire {size_mb:.1f} MB response, unprocessed")
-        print("  code-exec  schema-discovery sample + filter code + printed answer")
-        print(f"  elliot     {len(list_result.rows)} shaped rows from a server-side SELECT")
+        print("Reading the steps")
+        print("  raw-dump   step 3 is 99.9% of the cost — the whole payload, every call.")
+        print("  code-exec  steps 2-3 (schema discovery) cost more than the answer itself;")
+        print("             the file avoids context, but the agent must still look at it.")
+        print("  elliot     the result IS the answer — no payload, no discovery round-trip.")
         print()
         print("Elliot can also do the math server-side:")
         print(
             f"  total_value_enterprise_de -> {len(agg_result.rows)} row, "
             f"{agg_tokens} tokens: {agg_result.rows}"
         )
-        print(
-            f"  (one-time tool-definition overhead for both Elliot tools: "
-            f"{tool_defs_tokens:,} tokens)"
-        )
         print()
 
-        savings = (1 - elliot_tokens / raw_tokens) * 100
+        savings = (1 - elliot_total / raw_total) * 100
         print(
-            f"Bottom line: Elliot answers the question in {elliot_tokens:,} tokens — "
-            f"{raw_tokens / elliot_tokens:,.0f}x fewer than dumping the raw API "
+            f"Bottom line: Elliot answers the question in {elliot_total:,} tokens — "
+            f"{raw_total / elliot_total:,.0f}x fewer than dumping the raw API "
             f"({savings:.2f}% saved)"
         )
         print(
-            f"             and {codeexec_tokens / elliot_tokens:,.1f}x fewer than a "
+            f"             and {codeexec_total / elliot_total:,.1f}x fewer than a "
             f"code-execution agent that still pays for schema discovery."
         )
         print(line)

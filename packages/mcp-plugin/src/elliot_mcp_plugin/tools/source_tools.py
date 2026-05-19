@@ -18,6 +18,7 @@ from elliot_core.paths import PathEscape, safe_join
 from elliot_core.sources.api_fetcher import fetch_endpoint
 from elliot_core.sources.db_connector import query_database
 from elliot_core.sources.file_reader import read_file
+from elliot_core.sql import is_valid_ident, safe_ident
 from elliot_core.sqlite.flattener import flatten
 from elliot_core.types.source import SourceConfig
 from elliot_mcp_plugin.session import ElliotSession
@@ -206,6 +207,17 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                     )
                 }
 
+            # The supplied name becomes the SQLite table name (and is later
+            # f-stringed into DROP TABLE during elliot_remove_source). Reject
+            # anything that isn't a plain identifier at registration so a
+            # hostile value can never reach src.table_name.
+            if not is_valid_ident(name):
+                raise ElliotError(
+                    "INVALID_IDENTIFIER",
+                    "name must match ^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+                    detail={"name": str(name)[:64]},
+                )
+
             source_id = str(uuid.uuid4())
             cfg = _build_source_config(key, config, source_id, name)
             secrets = session.workspace.load_secrets()
@@ -293,7 +305,8 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
     def elliot_preview_source(table_name: str, limit: int = 10) -> dict:  # type: ignore[type-arg]
         """Return the first N rows from a loaded source table."""
         try:
-            rows = session.engine.query(f'SELECT * FROM "{table_name}" LIMIT :n', {"n": limit})
+            quoted = safe_ident(table_name)
+            rows = session.engine.query(f"SELECT * FROM {quoted} LIMIT :n", {"n": limit})
             schema = session.engine.get_table_schema(table_name)
             return {"rows": rows, "row_count": len(rows), "schema": schema}
         except ElliotError as exc:
@@ -346,10 +359,16 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             if src is None:
                 return {"error": f"Source not found: {source_id}"}
             if src.table_name:
-                session.engine._conn.execute(f'DROP TABLE IF EXISTS "{src.table_name}"')
+                # Defense in depth: elliot_discover_source validates name at
+                # registration, but older session files on disk may predate
+                # that check, so re-validate here before f-stringing into DDL.
+                quoted = safe_ident(src.table_name)
+                session.engine._conn.execute(f"DROP TABLE IF EXISTS {quoted}")
                 session.engine._conn.commit()
             session.save()
             log.info("source.removed", source_id=source_id, table=src.table_name)
             return {"status": "removed", "source_id": source_id, "table": src.table_name}
+        except ElliotError as exc:
+            return to_mcp_error_content(exc)
         except Exception as exc:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))

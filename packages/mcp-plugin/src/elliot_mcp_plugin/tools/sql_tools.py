@@ -6,6 +6,7 @@ import structlog
 from mcp.server.fastmcp import FastMCP
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.sql import safe_ident
 from elliot_core.sqlite.query_runner import run_tool_query, validate_tool_sql
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -49,8 +50,9 @@ def register_sql_tools(mcp: FastMCP, session: ElliotSession) -> None:
     def elliot_sample_data(table_name: str, limit: int = 10) -> dict:  # type: ignore[type-arg]
         """Return N random rows from a table."""
         try:
+            quoted = safe_ident(table_name)
             rows = session.engine.query(
-                f'SELECT * FROM "{table_name}" ORDER BY RANDOM() LIMIT :n', {"n": limit}
+                f"SELECT * FROM {quoted} ORDER BY RANDOM() LIMIT :n", {"n": limit}
             )
             return {"rows": rows}
         except ElliotError as exc:
@@ -84,6 +86,13 @@ def register_sql_tools(mcp: FastMCP, session: ElliotSession) -> None:
     def elliot_explain_query(sql: str) -> dict:  # type: ignore[type-arg]
         """Return EXPLAIN QUERY PLAN output for a SELECT statement."""
         try:
+            # SQLite still executes the inner statement when prefixed with
+            # EXPLAIN QUERY PLAN, so we must run the same SELECT-only guard
+            # we apply to elliot_query_sql — otherwise a payload like
+            # ``SELECT 1; DROP TABLE x`` slips past as a multi-statement.
+            valid, reason = validate_tool_sql(sql)
+            if not valid:
+                raise ElliotError("VALIDATION_ERROR", reason)
             rows = session.engine.query(f"EXPLAIN QUERY PLAN {sql}")
             return {"plan": rows}
         except ElliotError as exc:

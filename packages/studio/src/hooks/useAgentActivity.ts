@@ -61,6 +61,16 @@ export function useAgentActivity(): { isActive: boolean; lastEventAt: number | n
   const [lastEventAt, setLastEventAt] = useState<number | null>(null);
   const [isActive, setIsActive] = useState(false);
 
+  // The active-window timer is held in a ref, not returned as effect cleanup:
+  // a session update arriving inside the window would otherwise run the
+  // cleanup, cancel the timer, and leave `isActive` stuck true forever.
+  const timerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    };
+  }, []);
+
   useEffect(() => {
     if (!session) return;
 
@@ -93,8 +103,11 @@ export function useAgentActivity(): { isActive: boolean; lastEventAt: number | n
     const now = Date.now();
     setLastEventAt(now);
     setIsActive(true);
-    const t = window.setTimeout(() => setIsActive(false), ACTIVE_WINDOW_MS);
-    return () => window.clearTimeout(t);
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => {
+      setIsActive(false);
+      timerRef.current = null;
+    }, ACTIVE_WINDOW_MS);
   }, [session]);
 
   return { isActive, lastEventAt };

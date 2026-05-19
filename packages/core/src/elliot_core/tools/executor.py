@@ -85,6 +85,8 @@ class ToolExecutor:
         as query string parameters. Returns the API response without full pagination.
         Optionally applies filter_groups as a post-fetch SQL filter.
         """
+        if not tool.source_ids:
+            raise ElliotError("INVALID_TOOL", f"Tool '{tool.id}' has no source_ids")
         source = self._source_map.get(tool.source_ids[0])
         if not source:
             raise ElliotError("SOURCE_NOT_FOUND", f"Source '{tool.source_ids[0]}' not found")
@@ -175,6 +177,8 @@ class ToolExecutor:
     async def _execute_write(self, tool: ToolDefinition, params: dict[str, Any]) -> ToolResult:
         if not tool.api_mapping:
             raise ElliotError("MISSING_API_MAPPING", f"WRITE tool '{tool.id}' has no api_mapping")
+        if not tool.source_ids:
+            raise ElliotError("INVALID_TOOL", f"{tool.category} tool '{tool.id}' has no source_ids")
         source = self._source_map.get(tool.source_ids[0])
         if not source:
             raise ElliotError("SOURCE_NOT_FOUND", f"Source '{tool.source_ids[0]}' not found")
@@ -261,8 +265,18 @@ def _coerce_and_validate(tool: ToolDefinition, params: dict[str, Any]) -> dict[s
         if val is None and p.required:
             raise ElliotError("MISSING_PARAM", f"Required parameter missing: '{p.name}'")
         if val is not None:
-            result[p.name] = _coerce(val, p.type)
+            coerced = _coerce(val, p.type)
+            if p.enum is not None and str(coerced) not in p.enum:
+                raise ElliotError(
+                    "INVALID_PARAM_VALUE",
+                    f"Parameter '{p.name}' must be one of {p.enum}, got: {coerced!r}",
+                )
+            result[p.name] = coerced
     return result
+
+
+_TRUE_STRINGS = {"true", "1", "yes", "on"}
+_FALSE_STRINGS = {"false", "0", "no", "off"}
 
 
 def _coerce(val: Any, typ: str) -> Any:
@@ -272,9 +286,23 @@ def _coerce(val: Any, typ: str) -> Any:
         except (ValueError, TypeError) as exc:
             raise ElliotError("INVALID_PARAM_TYPE", f"Expected integer, got: {val!r}") from exc
     if typ == "number":
-        return float(val)
+        try:
+            return float(val)
+        except (ValueError, TypeError) as exc:
+            raise ElliotError("INVALID_PARAM_TYPE", f"Expected number, got: {val!r}") from exc
     if typ == "boolean":
-        return bool(val)
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            low = val.strip().lower()
+            if low in _TRUE_STRINGS:
+                return True
+            if low in _FALSE_STRINGS:
+                return False
+            raise ElliotError("INVALID_PARAM_TYPE", f"Expected boolean, got: {val!r}")
+        if isinstance(val, (int, float)):
+            return bool(val)
+        raise ElliotError("INVALID_PARAM_TYPE", f"Expected boolean, got: {val!r}")
     return str(val)
 
 

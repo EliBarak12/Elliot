@@ -132,15 +132,16 @@ Works against the default branch of the repo — until `main` carries these
 manifests, you need to install from a feature branch via the GitHub source
 form.
 
-## 2. Marketplace install (Codex, plugins shipped Mar 2026)
+## 2. Marketplace install (Codex)
 
 ```
-codex plugin marketplace add EliBarak12/elliot
-/plugin install elliot
+codex plugin marketplace add EliBarak12/Elliot
 ```
 
-The Codex plugin format is structurally similar but evolving — treat this path
-as experimental until the Codex plugin spec stabilizes.
+Then open the plugin directory in Codex, pick the `elliot` marketplace, and
+install the `elliot` plugin. Codex reads `.agents/plugins/marketplace.json` at
+the cloned repo root and the plugin manifest at `.codex-plugin/plugin.json`,
+which declares the skills under `skills/` and the Elliot MCP server.
 
 ## 3. Standalone install (no clone)
 

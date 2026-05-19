@@ -2,30 +2,30 @@
 
 These manifests determine whether the marketplace install actually works:
 
-  /plugin marketplace add EliBarak12/elliot
+  /plugin marketplace add EliBarak12/Elliot
   /plugin install elliot@elliot
 
-We assert against the Claude Code plugin spec (docs.claude.com):
-- marketplace.json lives at .claude-plugin/marketplace.json (NOT the repo root)
-- marketplace.json requires `name`, `owner.name`, `plugins`
+We assert against the Claude Code and Codex plugin specs:
+- marketplace.json lives at .claude-plugin/marketplace.json (Claude Code) and
+  .agents/plugins/marketplace.json (Codex) — NOT inside .codex-plugin/
+- marketplace.json requires `name` and `plugins`; Claude Code also `owner.name`
 - Each plugin entry requires `name` and `source`
 - `source` is either a relative path starting with `./` or a structured object
-- plugin.json fields: `name` required; MCP config goes via `mcpServers` or
+- plugin.json fields: `name` required; MCP config via `mcpServers` or an
   auto-discovered `.mcp.json` at the plugin root
-- Skills live under `skills/<name>/SKILL.md` and are auto-discovered
+- Skills live under `skills/<name>/SKILL.md` at the PLUGIN ROOT (a sibling of
+  .claude-plugin/ and .codex-plugin/) — never inside .claude-plugin/skills/
 """
 
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CLAUDE_SKILLS_DIR = REPO_ROOT / ".claude-plugin" / "skills"
-CODEX_SKILLS_DIR = REPO_ROOT / ".codex-plugin" / "skills"
+SKILLS_DIR = REPO_ROOT / "skills"
 EXPECTED_SKILLS = (
     "getting-started",
     "discover-source",
@@ -78,8 +78,8 @@ def test_marketplace_plugin_entry_has_valid_source():
         if isinstance(src, str):
             assert src.startswith("./"), f"Relative path source must start with './' (got: {src!r})"
         elif isinstance(src, dict):
-            assert src.get("source") in {"github", "url", "git-subdir", "npm"}, (
-                f"Object source must declare type github|url|git-subdir|npm (got: {src})"
+            assert src.get("source") in {"github", "url", "git-subdir", "local", "npm"}, (
+                f"Object source must declare a known type (got: {src})"
             )
         else:
             raise AssertionError(f"source must be string or object (got: {type(src)})")
@@ -120,53 +120,57 @@ def test_plugin_mcp_config_is_auto_discoverable():
 
 
 @pytest.mark.parametrize("skill_name", EXPECTED_SKILLS)
-def test_each_skill_dir_exists_for_auto_discovery(skill_name: str):
-    """Claude Code auto-discovers skills under skills/<name>/SKILL.md — no
-    manifest declaration needed.
+def test_each_skill_dir_exists_at_plugin_root(skill_name: str):
+    """Claude Code and Codex auto-discover skills under <plugin-root>/skills/
+    <name>/SKILL.md — the `skills/` directory sits NEXT TO .claude-plugin/, not
+    inside it.
     """
-    skill_md = CLAUDE_SKILLS_DIR / skill_name / "SKILL.md"
+    skill_md = SKILLS_DIR / skill_name / "SKILL.md"
     assert skill_md.exists(), f"Missing skill file: {skill_md}"
 
 
-def test_codex_plugin_manifest_is_valid_json():
-    """Codex plugin format (Mar 2026) is experimental in this repo — we still
-    keep the file valid JSON and mirror the same skill set."""
+def test_skills_are_not_nested_inside_claude_plugin():
+    """Regression guard: skills inside .claude-plugin/skills/ are NEVER loaded
+    by Claude Code — only the MCP server would attach. Skills must live at the
+    plugin root.
+    """
+    nested = REPO_ROOT / ".claude-plugin" / "skills"
+    assert not nested.exists(), (
+        "Found .claude-plugin/skills/. Claude Code auto-discovers skills from "
+        "<plugin-root>/skills/, NOT from inside .claude-plugin/. Move them to "
+        "the repo-root skills/ directory."
+    )
+
+
+def test_codex_plugin_manifest_is_valid():
+    """Codex manifest: name + mcpServers, and `skills` pointing at ./skills/."""
     data = _read_json(REPO_ROOT / ".codex-plugin" / "plugin.json")
     assert data["name"] == "elliot"
     assert "mcpServers" in data
     assert "elliot" in data["mcpServers"]
+    # Codex resolves `skills` relative to the plugin root; the path must exist.
+    skills_ref = data.get("skills")
+    assert skills_ref, "Codex plugin.json must declare a `skills` path"
+    resolved = (REPO_ROOT / skills_ref.lstrip("./")).resolve()
+    assert resolved.is_dir(), f"Codex `skills` path does not resolve: {skills_ref}"
 
 
-def test_codex_marketplace_manifest_is_valid_json():
-    data = _read_json(REPO_ROOT / ".codex-plugin" / "marketplace.json")
+def test_codex_marketplace_is_at_agents_plugins_path():
+    """Codex reads marketplaces from .agents/plugins/marketplace.json."""
+    path = REPO_ROOT / ".agents" / "plugins" / "marketplace.json"
+    assert path.exists(), (
+        "Codex marketplace missing. Codex discovers .agents/plugins/"
+        "marketplace.json — a file under .codex-plugin/ is NOT discovered."
+    )
+    data = _read_json(path)
     assert data["name"] == "elliot"
     plugin_names = {p["name"] for p in data["plugins"]}
     assert "elliot" in plugin_names
 
 
 @pytest.mark.parametrize("skill_name", EXPECTED_SKILLS)
-def test_codex_mirror_has_every_skill(skill_name: str):
-    skill_md = CODEX_SKILLS_DIR / skill_name / "SKILL.md"
-    assert skill_md.exists(), f"Missing skill file: {skill_md}"
-
-
-def test_codex_skills_are_in_sync_with_claude_skills():
-    """sync_skills.py --check must pass — if it fails, run the sync script."""
-    result = subprocess.run(
-        ["python", "scripts/sync_skills.py", "--check"],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, (
-        f"Codex skills out of sync with Claude skills. "
-        f"Run: uv run python scripts/sync_skills.py\n{result.stdout}"
-    )
-
-
-@pytest.mark.parametrize("skill_name", EXPECTED_SKILLS)
 def test_each_skill_has_frontmatter_and_body(skill_name: str):
-    skill_md = CLAUDE_SKILLS_DIR / skill_name / "SKILL.md"
+    skill_md = SKILLS_DIR / skill_name / "SKILL.md"
     text = skill_md.read_text(encoding="utf-8")
     assert text.startswith("---\n"), f"{skill_name} missing frontmatter delim"
     lines = text.splitlines()

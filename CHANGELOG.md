@@ -10,10 +10,14 @@ All notable changes to Elliot are documented here. The format follows [Keep a Ch
 - Structured agent identity capture: `AgentIdentity` parser + ASGI `AgentIdentityMiddleware` extract the AX `User-Agent` convention (`agent-<tool>[/<version>] [model-<id>]`) and common MCP client UA strings into a request-scoped contextvar. Session NDJSON and the `agent_sessions` table now carry `client`, `client_version`, `model`, `modality`, and the raw `user_agent`. Studio renders these as badges in the Agent Console.
 - Opt-in confirmation gate for destructive tools: when `ELLIOT_REQUIRE_DESTRUCTIVE_CONFIRMATION=true`, every `WRITE`/`ACTION` tool gains a required `confirm: bool` parameter and returns a structured `CONFIRMATION_REQUIRED` error if called without it.
 - GitHub issue templates for bug reports, feature requests, and connector requests.
+- `elliot export-plugin <connector.json>` scaffolds an installable Codex + Claude Code plugin from any connector. The generated folder ships both manifests, marketplace catalogs, and an `.mcp.json` that serves the connector over stdio (`elliot-mcp --connector`), so a user-built connector installs natively in either host.
 
 ### Changed
 - The connector runtime's DB fetch path now goes through elliot-core's SQLAlchemy connector. MySQL sources work in the runtime (they were previously routed through the Postgres-only `psycopg2` driver), Postgres runs in a read-only transaction, and a source's custom `query` is validated as a single read-only `SELECT` before it runs.
 - README hero rewritten around the agent-first value proposition with badges, a 60-second quickstart, and per-client install snippets.
+
+### Fixed
+- Plugin skills now load in Claude Code and Codex. They were nested in `.claude-plugin/skills/`, where neither host discovers them — only the MCP server attached. Skills now live in a single plugin-root `skills/` directory that Claude Code and Codex both auto-discover; the Codex manifest declares it via `skills`, and the Codex marketplace moved to the spec location `.agents/plugins/marketplace.json`. The per-host skill mirrors and `scripts/sync_skills.py` are gone.
 
 ## [0.1.0] — Unreleased
 

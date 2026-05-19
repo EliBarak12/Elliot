@@ -1,13 +1,15 @@
 """MCP prompts: ship Elliot skills to every agent over the wire.
 
-Claude Code reads SKILL.md files from `.claude-plugin/skills/` directly, but
-Codex / Cursor / Windsurf / VS Code Copilot have no equivalent loader — they
-only see what the MCP server exposes. Registering each skill as an MCP prompt
-delivers the same workflow guidance to every agent that speaks MCP.
+Claude Code and Codex auto-discover SKILL.md files from the plugin root's
+`skills/` directory, but agents reached only over MCP (and older clients)
+have no equivalent loader — they only see what the MCP server exposes.
+Registering each skill as an MCP prompt delivers the same workflow guidance
+to every agent that speaks MCP.
 
-Source of truth: `.claude-plugin/skills/<name>/SKILL.md` at the repo root.
-Each file has YAML frontmatter and a markdown body; the body becomes the
-prompt content, the frontmatter becomes the prompt name + description.
+Source of truth: `skills/<name>/SKILL.md` at the plugin root (the repo root,
+the directory that contains `.claude-plugin/` and `.codex-plugin/`). Each
+file has YAML frontmatter and a markdown body; the body becomes the prompt
+content, the frontmatter becomes the prompt name + description.
 """
 
 from __future__ import annotations
@@ -74,11 +76,12 @@ def _parse_skill_file(path: Path) -> Skill | None:
 
 
 def _find_skills_dir() -> Path | None:
-    """Locate `.claude-plugin/skills/`.
+    """Locate the plugin-root `skills/` directory.
 
     Order:
       1. ELLIOT_SKILLS_DIR env var override (deployable image / packaged install)
-      2. Repo-root layout: walk up from this file looking for `.claude-plugin/skills`
+      2. Repo-root layout: walk up from this file looking for a `skills/`
+         directory that sits next to `.claude-plugin/` (the plugin root).
     """
     override = os.environ.get("ELLIOT_SKILLS_DIR")
     if override:
@@ -89,9 +92,12 @@ def _find_skills_dir() -> Path | None:
 
     here = Path(__file__).resolve()
     for parent in here.parents:
-        candidate = parent / ".claude-plugin" / "skills"
-        if candidate.is_dir():
-            return candidate
+        # Anchor on the plugin root: the directory holding `.claude-plugin/`.
+        # Skills live in a sibling `skills/`, not inside `.claude-plugin/`.
+        if (parent / ".claude-plugin").is_dir():
+            candidate = parent / "skills"
+            if candidate.is_dir():
+                return candidate
     return None
 
 
@@ -124,7 +130,7 @@ def _render_prompt_body(skill: Skill) -> str:
 
 
 def register_prompts(mcp: FastMCP) -> int:
-    """Register every skill in `.claude-plugin/skills/` as an MCP prompt.
+    """Register every skill in the plugin-root `skills/` directory as an MCP prompt.
 
     Returns the number of prompts registered.
     """

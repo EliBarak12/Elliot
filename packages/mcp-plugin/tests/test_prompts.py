@@ -75,7 +75,7 @@ def test_parse_skill_file_extracts_all_fields(tmp_path: Path):
 
 
 def test_load_skills_finds_repo_skills():
-    """The real .claude-plugin/skills/ directory should be discoverable."""
+    """The real plugin-root skills/ directory should be discoverable."""
     skills = load_skills()
     names = {s.name for s in skills}
     # Six canonical skills must all load
@@ -174,7 +174,7 @@ def test_skills_dir_override_missing_falls_back(tmp_path: Path, monkeypatch: pyt
     """A bad ELLIOT_SKILLS_DIR override should not crash — fall back to repo walk."""
     monkeypatch.setenv("ELLIOT_SKILLS_DIR", str(tmp_path / "nonexistent"))
     skills = load_skills()
-    # Repo walk should still find .claude-plugin/skills/
+    # Repo walk should still find the plugin-root skills/ directory.
     assert len(skills) >= 6
     # Confirm the override was at least *attempted* — no exception raised
     assert "ELLIOT_SKILLS_DIR" in os.environ

@@ -201,6 +201,62 @@ def test_cmd_init_custom_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
 
 # ---------------------------------------------------------------------------
+# export-plugin subcommand
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_export_plugin_creates_plugin_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_export_plugin
+
+    monkeypatch.chdir(tmp_path)
+    connector = _write_connector(tmp_path, GOOD_CONNECTOR)
+    args = argparse.Namespace(path=str(connector), out=str(tmp_path / "p"), force=False)
+    _cmd_export_plugin(args)
+    assert (tmp_path / "p" / ".codex-plugin" / "plugin.json").exists()
+    assert (tmp_path / "p" / ".claude-plugin" / "plugin.json").exists()
+    assert (tmp_path / "p" / ".mcp.json").exists()
+
+
+def test_cmd_export_plugin_missing_file_exits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_export_plugin
+
+    monkeypatch.chdir(tmp_path)
+    args = argparse.Namespace(path=str(tmp_path / "nope.connector.json"), out=None, force=False)
+    with pytest.raises(SystemExit):
+        _cmd_export_plugin(args)
+
+
+def test_cmd_export_plugin_nonempty_dir_needs_force(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import argparse
+
+    from elliot_core.cli import _cmd_export_plugin
+
+    monkeypatch.chdir(tmp_path)
+    connector = _write_connector(tmp_path, GOOD_CONNECTOR)
+    out = tmp_path / "p"
+    out.mkdir()
+    (out / "existing.txt").write_text("keep me", encoding="utf-8")
+
+    args = argparse.Namespace(path=str(connector), out=str(out), force=False)
+    with pytest.raises(SystemExit):
+        _cmd_export_plugin(args)
+
+    args_forced = argparse.Namespace(path=str(connector), out=str(out), force=True)
+    _cmd_export_plugin(args_forced)
+    assert (out / ".mcp.json").exists()
+
+
+# ---------------------------------------------------------------------------
 # status subcommand
 # ---------------------------------------------------------------------------
 

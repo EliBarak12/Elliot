@@ -148,6 +148,40 @@ def _cmd_init(args: argparse.Namespace) -> None:
     print(f"Next: elliot lint {dest}")
 
 
+def _cmd_export_plugin(args: argparse.Namespace) -> None:
+    """Scaffold an installable Codex + Claude Code plugin from a connector."""
+    from elliot_core.errors import ElliotError
+    from elliot_core.plugin_export import export_plugin
+
+    src = Path(args.path)
+    if not src.exists():
+        print(f"Error: connector file not found: {src}", file=sys.stderr)
+        sys.exit(1)
+
+    out_dir = Path(args.out) if args.out else Path(f"{src.stem.split('.')[0]}-plugin")
+    if out_dir.exists() and any(out_dir.iterdir()) and not args.force:
+        print(
+            f"Error: {out_dir} already exists and is not empty. Pass --force to overwrite.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        written = export_plugin(src, out_dir)
+    except (FileNotFoundError, ElliotError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"\nExported plugin to {out_dir}/")
+    for path in written:
+        print(f"  + {path.relative_to(out_dir)}")
+    print("\n  Install in Claude Code:")
+    print(f"    /plugin marketplace add {out_dir.resolve()}")
+    print("\n  Install in Codex:")
+    print(f"    codex plugin marketplace add {out_dir.resolve()}")
+    print(f"\n  See {out_dir}/README.md for prerequisites and secrets.\n")
+
+
 def _cmd_status(args: argparse.Namespace) -> None:
     import httpx
 
@@ -185,22 +219,32 @@ def _cmd_status(args: argparse.Namespace) -> None:
     except Exception:
         results.append(("database", db_url, False, ""))
 
+    # The runtime is connector-bound and started on demand by
+    # elliot_start_runtime — it is expected to be down until a connector is
+    # deployed, so it never counts toward the failure exit code.
+    _optional = {"runtime"}
+
     print("\nElliot Services")
     print("─" * 56)
     all_ok = True
     for name, url, ok, detail in results:
         icon = "✓" if ok else "✗"
-        state = "running" if ok else "not reachable"
+        if ok:
+            state = "running"
+        elif name in _optional:
+            state = "not running (starts on demand when you deploy a connector)"
+        else:
+            state = "not reachable"
         print(f"  {name:<10} {url:<35} {icon} {state}{detail}")
-        if not ok:
+        if not ok and name not in _optional:
             all_ok = False
 
     print()
     if all_ok:
-        print("  All services healthy.")
+        print("  All required services healthy.")
     else:
-        failed = sum(1 for _, _, ok, _ in results if not ok)
-        print(f"  {failed} service(s) not reachable. Is honcho running? Try: honcho start")
+        failed = sum(1 for n, _, ok, _ in results if not ok and n not in _optional)
+        print(f"  {failed} service(s) not reachable. Is honcho running? Try: make dev")
         sys.exit(1)
 
 
@@ -472,6 +516,16 @@ def main() -> None:
     init_cmd.add_argument("--list", action="store_true", help="Show available templates")
     init_cmd.add_argument("output", nargs="?", help="Output filename")
 
+    export_cmd = sub.add_parser(
+        "export-plugin",
+        help="Scaffold an installable Codex + Claude Code plugin from a connector",
+    )
+    export_cmd.add_argument("path", help="Path to .connector.json")
+    export_cmd.add_argument("--out", help="Output directory (default: <slug>-plugin/)")
+    export_cmd.add_argument(
+        "--force", action="store_true", help="Overwrite a non-empty output directory"
+    )
+
     sub.add_parser("status", help="Show running status of all Elliot services")
     connect_cmd = sub.add_parser(
         "connect",
@@ -517,6 +571,8 @@ def main() -> None:
         _cmd_eval(args)
     elif args.command == "init":
         _cmd_init(args)
+    elif args.command == "export-plugin":
+        _cmd_export_plugin(args)
     elif args.command == "status":
         _cmd_status(args)
     elif args.command == "connect":

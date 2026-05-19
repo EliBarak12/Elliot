@@ -1,7 +1,6 @@
-.PHONY: dev setup run stop test test-cov lint format typecheck build-studio sync-skills sync-skills-check studio-open ci e2e e2e-mcp e2e-agent e2e-ui
+.PHONY: dev setup run stop test test-cov lint format typecheck build-studio studio-open ci e2e e2e-mcp e2e-agent e2e-ui
 
 dev:
-	uv run python scripts/sync_skills.py
 	uv run elliot connect
 	uv run python scripts/open_studio.py &
 	honcho start
@@ -65,11 +64,5 @@ typecheck:
 build-studio:
 	pnpm --filter @elliot/studio run build
 
-sync-skills:
-	uv run python scripts/sync_skills.py
-
-sync-skills-check:
-	uv run python scripts/sync_skills.py --check
-
-ci: lint typecheck test-cov sync-skills-check
+ci: lint typecheck test-cov
 	@echo "All checks passed."

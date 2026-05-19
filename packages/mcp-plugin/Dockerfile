@@ -11,6 +11,9 @@ COPY pyproject.toml uv.lock ./
 COPY packages/core packages/core
 COPY packages/mcp-plugin packages/mcp-plugin
 COPY packages/connector-runtime packages/connector-runtime
+# Skills are loaded at runtime to register one MCP prompt each — bundle them so
+# the HTTP plugin server ships the same workflow guidance as the local install.
+COPY skills skills
 RUN pip install --no-cache-dir uv \
  && uv sync --frozen --no-dev
 
@@ -19,7 +22,8 @@ FROM python:3.13-slim AS runtime
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH="/app/.venv/bin:$PATH"
+    PATH="/app/.venv/bin:$PATH" \
+    ELLIOT_SKILLS_DIR=/app/skills
 # Minimal runtime tools for HEALTHCHECK.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl \

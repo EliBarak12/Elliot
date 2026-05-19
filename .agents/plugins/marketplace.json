@@ -1,0 +1,23 @@
+{
+  "name": "elliot",
+  "interface": {
+    "displayName": "Elliot"
+  },
+  "plugins": [
+    {
+      "name": "elliot",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "description": "Elliot platform plugin for Codex: 8 skills (getting-started, onboard-product, discover-source, build-connector, lint-connector, audit-connector, run-eval, deploy) plus the Elliot MCP server. Design, validate, deploy, and observe agent-ready connectors for any API or database.",
+      "keywords": ["mcp", "connectors", "agent-tools", "api", "database"],
+      "version": "1.0.0",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

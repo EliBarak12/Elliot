@@ -3,24 +3,30 @@
   "version": "1.0.0",
   "description": "Turn any API or database into agent-ready MCP tools. Design, validate, deploy, and observe connector tool sets with Codex.",
   "author": {
-    "name": "Elliot",
-    "url": "https://github.com/EliBarak12/Elliot"
+    "name": "Eli Barak",
+    "url": "https://github.com/EliBarak12"
   },
   "homepage": "https://github.com/EliBarak12/Elliot",
   "repository": "https://github.com/EliBarak12/Elliot",
   "license": "MIT",
   "keywords": ["mcp", "connectors", "agent-tools", "api", "database"],
-  "skills": [
-    "skills/getting-started",
-    "skills/discover-source",
-    "skills/build-connector",
-    "skills/lint-connector",
-    "skills/run-eval",
-    "skills/deploy"
-  ],
+  "skills": "./skills/",
   "mcpServers": {
     "elliot": {
       "url": "http://localhost:3000/mcp/"
     }
+  },
+  "interface": {
+    "displayName": "Elliot",
+    "shortDescription": "Build agent-ready MCP connectors for any API or DB",
+    "longDescription": "Elliot turns existing products into agentic products. Use it to design verb-first tool contracts, size results for context windows, validate connectors with deterministic evals, deploy them to a runtime, and observe every agent session. Ships 8 workflow skills plus the Elliot MCP server.",
+    "developerName": "Eli Barak",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/EliBarak12/Elliot",
+    "defaultPrompt": [
+      "I have an API at https://... — help me build an Elliot connector for it.",
+      "Lint and run an eval on my Elliot connector before I deploy it."
+    ]
   }
 }

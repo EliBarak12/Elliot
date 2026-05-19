@@ -45,10 +45,15 @@ Ask these questions, one topic at a time, in plain language. Wait for answers.
 Record the answers with `elliot_record_product_intent`.
 
 ### 3. Propose the tool set
-Map each job-to-be-done to one tool. Cross-check against the imported
-collection and the intent. Present the proposed tool list to the user with a
-one-line rationale per tool, and **confirm with them** before building. Drop
-anything agents don't need — fewer, sharper tools beat many.
+Map each job-to-be-done to one **domain tool** — named for the job, not the
+API route. Where a job is a question ("how many", "what's the total", "top
+accounts", "breakdown by month"), propose an aggregation tool that computes
+the answer in SQL rather than a tool that dumps raw rows. Make sure the set
+spans the whole source — every entity and operation agents need across the
+user's API, DB, or files. Cross-check against the imported collection and the
+intent. Present the proposed tool list to the user with a one-line rationale
+per tool, and **confirm with them** before building. Drop anything agents
+don't need — fewer, sharper tools beat many.
 
 ### 4. Build the connector
 Follow the `build-connector` prompt to discover the source, explore the data
@@ -56,16 +61,18 @@ shape, and create each tool. Honor the five principles — descriptions are
 verb-first contracts, results are sized, errors are actionable.
 
 ### 5. Scan
-Call `elliot_lint_connector` and fix every issue. The linter now also flags
-generic parameter names, enum candidates, missing pagination, and any tool
-that returns a field the user marked sensitive.
+Call `elliot_build_connector` to assemble the connector, then `elliot_lint_connector`
+and fix every issue. The linter also flags generic parameter names, enum
+candidates, missing pagination, and any tool that returns a field the user
+marked sensitive. For a deeper quality report, call `elliot_quality_scan`.
 
 ### 6. Audit with parallel sub-agents
 Invoke the `audit-connector` prompt. It runs 5 parallel sub-agents that try to
 use the connector for real, captures their failures, and drives a fix loop.
 
-### 7. Save and deploy
-Once the audit passes, call `elliot_save_connector`, then follow `deploy`.
+### 7. Export and deploy
+Once the audit passes, call `elliot_build_connector` then `elliot_export_connector`
+to write the connector file, then follow the `deploy` prompt.
 
 ## Rules
 - Interview before you design. Never skip step 2.

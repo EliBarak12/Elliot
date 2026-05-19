@@ -34,7 +34,7 @@ Stop and ask the user to start Elliot. Use this exact message:
 > git clone https://github.com/EliBarak12/Elliot.git
 > cd Elliot
 > make setup     # one-time: installs uv + pnpm deps
-> make dev       # starts plugin (3000), runtime (3001), and studio (5173)
+> make dev       # starts plugin (3000) and studio (5173)
 > ```
 >
 > Once it's running, Studio will open automatically in your browser at `http://localhost:5173`. Tell me when you see it and I'll continue."
@@ -61,7 +61,7 @@ Every Elliot tool you create or modify must honor these:
 
 Call these any time you need to refresh what's available:
 
-- `prompts/list` — every workflow Elliot ships (build, lint, eval, deploy, discover-source, getting-started).
+- `prompts/list` — every workflow Elliot ships (getting-started, onboard-product, discover-source, build-connector, lint-connector, run-eval, audit-connector, deploy).
 - `resources/list` — connector templates, error reference, principles, install instructions.
 - `tools/list` — the Elliot MCP tools (all prefixed `elliot_`).
 
@@ -72,10 +72,11 @@ When the user wants to build a new connector, follow this exact order. Each numb
 | # | Prompt | What it does |
 |---|--------|--------------|
 | 1 | `discover-source` | Identify the user's data source (REST API, Postgres, etc.) and call `elliot_set_context` + `elliot_discover_source` |
-| 2 | `build-connector` | Draft tools with verb-first descriptions, typed parameters, output projections |
-| 3 | `lint-connector` | Run `elliot_lint_connector`; fix every error and warning |
+| 2 | `build-connector` | Create tools (`elliot_create_tool`), then `elliot_build_connector` to assemble them into a connector |
+| 3 | `lint-connector` | Run `elliot_lint_connector` on the built connector; fix every error and warning |
 | 4 | `run-eval`        | Run `elliot_run_eval` to validate tool quality against expected outputs |
-| 5 | `deploy`          | Full pipeline: lint → validate → eval → save → start runtime |
+| 5 | `audit-connector` | Spawn parallel sub-agents to exercise the connector for real, then fix what they break |
+| 6 | `deploy`          | Full pipeline: build → lint → eval → `elliot_export_connector` → `elliot_start_runtime` |
 
 If the user is somewhere mid-workflow, jump straight to the right prompt. Don't start from step 1 every time.
 
@@ -94,7 +95,7 @@ These are accessible via `resources/read`:
 ## What you must NEVER do
 
 - Never log secret values, API keys, or raw query results — they may contain PII.
-- Never call `elliot_save_connector` before lint and eval both pass.
+- Never call `elliot_export_connector` before `elliot_build_connector`, lint, and eval all pass.
 - Never invent tool annotations — `readOnlyHint`, `destructiveHint`, `openWorldHint` must be set deliberately, because the user's downstream agents rely on them to decide whether to confirm before calling.
 - Never use a tool the user hasn't asked for (e.g. don't run `elliot_start_runtime` unless the user is ready to deploy).
 

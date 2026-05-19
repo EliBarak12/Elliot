@@ -75,8 +75,9 @@ This pulls the pre-built images, generates a local `.env`, starts all three serv
 # Prerequisites: uv (Python 3.13) and pnpm (Node 22)
 git clone https://github.com/EliBarak12/Elliot.git && cd Elliot
 make setup
-make dev          # boots plugin (:3000) + runtime (:3001) + studio (:5173)
+make dev          # boots plugin (:3000) + studio (:5173)
                   # and writes the MCP config for every detected coding agent
+                  # the runtime (:3001) starts on demand when you deploy a connector
 ```
 
 Then open Studio at <http://localhost:5173>, scaffold a connector, lint it, and your agent can use it in the same session.
@@ -133,6 +134,10 @@ Studio in detail:
    plugin (:3000) serves tools to any MCP client
    runtime (:3001) executes them against live data
    studio observes, runs, and edits everything
+
+6. (Optional) Ship the connector as a plugin
+   elliot export-plugin my-domain.connector.json
+   produces an installable Codex + Claude Code plugin folder
 ```
 
 On first connect, an agent automatically calls `prompts/get name=getting_started` — a single prompt that teaches it the five principles, the canonical workflow, and the reference resources available.
@@ -165,8 +170,9 @@ Install the bundled plugin (`.cursor-plugin/`) from the Cursor marketplace, or a
 
 ```
 codex plugin marketplace add EliBarak12/Elliot
-/plugin install elliot
 ```
+
+Then open the plugin directory in Codex and install `elliot`. Codex reads `.agents/plugins/marketplace.json` and the manifest at `.codex-plugin/plugin.json`.
 
 </td><td>
 
@@ -179,7 +185,17 @@ OpenClaw also reads the `.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin
 </td></tr>
 </table>
 
-Every install path wires the MCP URL only — Elliot's server still needs to be running, locally or at a hosted endpoint.
+Every install path wires the MCP URL only — Elliot's server still needs to be running, locally or at a hosted endpoint. Skills ship in the repo-root `skills/` directory; Claude Code and Codex auto-discover them, and every other MCP client receives the same guidance as MCP prompts.
+
+### Ship a connector as its own plugin
+
+Once you've built a connector, package it as a standalone plugin that installs in Codex *and* Claude Code:
+
+```
+elliot export-plugin my-domain.connector.json
+```
+
+This scaffolds a `my-domain-plugin/` folder with the Codex and Claude Code manifests, marketplaces, an `.mcp.json` that serves the connector over stdio (`elliot-mcp --connector`), and a `skills/` directory. The MCP server is named after the connector slug, so its tools are `mcp__<slug>__<tool-id>`; the generated skills — a usage guide plus one per connector workflow — already reference that prefix. Install it with `/plugin marketplace add <folder>` (Claude Code) or `codex plugin marketplace add <folder>` (Codex).
 
 ## Project layout
 

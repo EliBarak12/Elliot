@@ -41,9 +41,11 @@ export function ToolEditor({ tool, onSaved }: Props) {
   const [sourceIds, setSourceIds] = useState<string[]>(tool?.source_ids ?? []);
   const [parameters, setParameters] = useState<ParameterDefinition[]>(tool?.parameters ?? []);
   const [sql, setSql] = useState(tool?.sql ?? "");
-  const [filterGroups, setFilterGroups] = useState<FilterGroup[]>([]);
-  const [returnFields, setReturnFields] = useState<ReturnField[]>([]);
-  const [apiMapping, setApiMapping] = useState<ApiRequestMapping>(DEFAULT_API_MAPPING);
+  const [filterGroups, setFilterGroups] = useState<FilterGroup[]>(tool?.filter_groups ?? []);
+  const [returnFields, setReturnFields] = useState<ReturnField[]>(tool?.return_fields ?? []);
+  const [apiMapping, setApiMapping] = useState<ApiRequestMapping>(
+    tool?.api_mapping ?? DEFAULT_API_MAPPING
+  );
   const [saved, setSaved] = useState(false);
   const [status, setStatus] = useState<{ type: "ok" | "error"; message: string } | null>(null);
 
@@ -57,6 +59,9 @@ export function ToolEditor({ tool, onSaved }: Props) {
     setSourceIds(tool.source_ids ?? []);
     setParameters(tool.parameters ?? []);
     setSql(tool.sql ?? "");
+    setFilterGroups(tool.filter_groups ?? []);
+    setReturnFields(tool.return_fields ?? []);
+    setApiMapping(tool.api_mapping ?? DEFAULT_API_MAPPING);
     setSaved(false);
     setStatus(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps

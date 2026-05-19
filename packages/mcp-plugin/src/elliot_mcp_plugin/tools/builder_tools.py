@@ -7,11 +7,17 @@ analyze an OpenAPI spec → create a draft → refine tools → lint → save.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
+
+if TYPE_CHECKING:
+    from mcp.server.fastmcp import FastMCP
+
+    from elliot_mcp_plugin.session import ElliotSession
 
 log = structlog.get_logger(__name__)
 
@@ -209,3 +215,43 @@ def list_saved_connectors(connectors_dir: str) -> list[dict[str, Any]]:
         except Exception:
             result.append({"file": f.name, "error": "parse error"})
     return result
+
+
+def _default_connectors_dir(session: ElliotSession) -> str:
+    """Resolve the directory connectors are saved to / listed from."""
+    env = os.environ.get("ELLIOT_CONNECTORS_DIR")
+    if env:
+        return env
+    return str(Path(session.workspace._dir).resolve().parent / "connectors")
+
+
+def register_builder_tools(mcp: FastMCP, session: ElliotSession) -> None:
+    """Wire the agentic connector-builder tools onto the MCP server.
+
+    These functions existed but were never registered, so the OpenAPI-spec →
+    draft → refine → save flow was unreachable over MCP.
+    """
+    mcp.tool(name="elliot_analyze_api_spec")(analyze_api_spec)
+    mcp.tool(name="elliot_create_draft")(create_draft)
+    mcp.tool(name="elliot_list_drafts")(list_drafts)
+    mcp.tool(name="elliot_update_tool_in_draft")(update_tool_in_draft)
+    mcp.tool(name="elliot_remove_tool_from_draft")(remove_tool_from_draft)
+    mcp.tool(name="elliot_add_tool_to_draft")(add_tool_to_draft)
+    mcp.tool(name="elliot_run_draft_lint")(run_draft_lint)
+    mcp.tool(name="elliot_discard_draft")(discard_draft)
+
+    @mcp.tool(name="elliot_save_draft")
+    def _save_draft(
+        draft_id: str, filename: str, connectors_dir: str | None = None
+    ) -> dict[str, Any]:
+        """Save a draft as a .connector.json file.
+
+        `filename` should end in .connector.json. Saved under connectors_dir
+        (defaults to the session's connectors directory).
+        """
+        return save_draft(draft_id, filename, connectors_dir or _default_connectors_dir(session))
+
+    @mcp.tool(name="elliot_list_saved_connectors")
+    def _list_saved_connectors(connectors_dir: str | None = None) -> list[dict[str, Any]]:
+        """List all saved .connector.json files (name, slug, version, tool count)."""
+        return list_saved_connectors(connectors_dir or _default_connectors_dir(session))

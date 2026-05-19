@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from elliot_core.types.source import SourceConfig
 from elliot_core.types.tool import SkillDefinition, ToolDefinition
 
 
 class ProductContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     description: str = ""
     base_url: str = ""
@@ -14,6 +16,8 @@ class ProductContext(BaseModel):
 
 
 class ConnectorConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     slug: str
     version: str

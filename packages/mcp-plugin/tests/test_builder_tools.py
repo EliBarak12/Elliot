@@ -168,3 +168,25 @@ def test_analyze_api_spec_invalid_returns_error() -> None:
 def test_update_draft_not_found_returns_error() -> None:
     result = update_tool_in_draft("badid", "tool", "{}")
     assert "error" in result
+
+
+def test_builder_tools_are_registered_on_server() -> None:
+    """register_builder_tools wires the draft flow onto the MCP server."""
+    import asyncio
+
+    from mcp.server.fastmcp import FastMCP
+
+    from elliot_mcp_plugin.tools.builder_tools import register_builder_tools
+
+    class _FakeWorkspace:
+        _dir = Path("/tmp/elliot-test/.elliot")
+
+    class _FakeSession:
+        workspace = _FakeWorkspace()
+
+    mcp = FastMCP("test")
+    register_builder_tools(mcp, _FakeSession())  # type: ignore[arg-type]
+    names = {t.name for t in asyncio.run(mcp.list_tools())}
+    assert "elliot_analyze_api_spec" in names
+    assert "elliot_save_draft" in names
+    assert "elliot_list_saved_connectors" in names

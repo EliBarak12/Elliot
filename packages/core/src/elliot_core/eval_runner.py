@@ -67,7 +67,11 @@ def _check_expectations(
 
 class EvalRunner:
     def __init__(self, config: ConnectorConfig, secrets: dict[str, str] | None = None) -> None:
-        from elliot_connector_runtime.executor import ToolExecutor
+        # Use elliot-core's own ToolExecutor. The previous import reached into
+        # elliot_connector_runtime — a downstream package elliot-core does not
+        # depend on — so a standalone elliot-core install raised ImportError
+        # the moment an EvalRunner was constructed.
+        from elliot_core.tools.executor import ToolExecutor
 
         self._executor = ToolExecutor(config, secrets or {})
         self._config = config
@@ -99,7 +103,8 @@ class EvalRunner:
         error_code: str | None = None
 
         try:
-            query_result = await self._executor.execute(tool, case.arguments)
+            # core's ToolExecutor.execute takes the tool id, not the object.
+            query_result = await self._executor.execute(case.tool_id, case.arguments)
             rows = query_result.rows
         except Exception as exc:
             error_str = str(exc)

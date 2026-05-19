@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import mcp.types as types
+import structlog
 from mcp.server import Server
 from mcp.server.fastmcp import FastMCP
 from mcp.server.stdio import stdio_server
@@ -11,6 +12,8 @@ from elliot_core.connector.schema_gen import to_mcp_tool_schema
 from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.tools.executor import ToolExecutor
 from elliot_core.types.connector import ConnectorConfig
+
+log = structlog.get_logger(__name__)
 
 
 def _make_annotations(schema: dict[str, Any]) -> types.ToolAnnotations:
@@ -67,6 +70,16 @@ def create_server(config: ConnectorConfig, secrets: dict[str, str]) -> Server:
                 content=[types.TextContent(type="text", text=content["text"])],
                 isError=True,
             )
+        except Exception as exc:
+            # CLAUDE.md: every MCP tool handler has a top-level catch-all.
+            # A non-ElliotError (bug, network failure) must not escape and
+            # crash the stdio process — log the trace, return a safe error.
+            log.error("call_tool.unhandled", tool=name, exc_info=exc)
+            content = to_mcp_error_content(exc)
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=content["text"])],
+                isError=True,
+            )
 
     return server
 
@@ -76,6 +89,7 @@ def create_elliot_server(session: Any) -> FastMCP:
     from elliot_mcp_plugin.prompts import register_prompts
     from elliot_mcp_plugin.resources import register_resources
     from elliot_mcp_plugin.tools.audit_tools import register_audit_tools
+    from elliot_mcp_plugin.tools.builder_tools import register_builder_tools
     from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
     from elliot_mcp_plugin.tools.context_tools import register_context_tools
     from elliot_mcp_plugin.tools.eval_tools import register_eval_tools
@@ -125,6 +139,7 @@ def create_elliot_server(session: Any) -> FastMCP:
     register_skill_tools(mcp, session)
     register_context_tools(mcp, session)
     register_connector_tools(mcp, session)
+    register_builder_tools(mcp, session)
     register_studio_tools(mcp, session)
     register_eval_tools(mcp, session)
     register_onboarding_tools(mcp, session)

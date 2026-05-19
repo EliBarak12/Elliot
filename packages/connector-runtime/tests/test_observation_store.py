@@ -179,3 +179,12 @@ def test_error_recorded_correctly(store: ObservationStore) -> None:
 
 def test_empty_token_efficiency(store: ObservationStore) -> None:
     assert store.token_efficiency() == []
+
+
+def test_sqlite_uses_wal_mode(store: ObservationStore) -> None:
+    """A file-backed SQLite store runs in WAL mode for concurrent access."""
+    from sqlalchemy import text as sa_text
+
+    with Session(store._engine) as db:
+        mode = db.execute(sa_text("PRAGMA journal_mode")).scalar()
+    assert str(mode).lower() == "wal"

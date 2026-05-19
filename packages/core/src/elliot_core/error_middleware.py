@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from elliot_core.errors import ElliotError
+from elliot_core.redaction import redact_value
 
 # Audit Medium 30: previously the code → status map used prefix matching
 # (``"AUTH"`` → 401). That accidentally classified codes like ``AUTH_OK_FORCED``
@@ -46,7 +49,13 @@ def _status_for(error: ElliotError) -> int:
 
 
 def register_error_handlers(app: FastAPI) -> None:
-    """Wire ElliotError and generic exception handlers into a FastAPI app."""
+    """Wire ElliotError and generic exception handlers into a FastAPI app.
+
+    All handlers emit the same ``{"error": {"code", "message", "detail"}}``
+    shape. The explicit ``RequestValidationError`` / ``HTTPException`` handlers
+    are required because the catch-all ``Exception`` handler would otherwise
+    shadow FastAPI's built-ins and turn 422s / 404s into opaque 500s.
+    """
 
     @app.exception_handler(ElliotError)
     async def _elliot_handler(request: Request, exc: ElliotError) -> JSONResponse:
@@ -56,7 +65,36 @@ def register_error_handlers(app: FastAPI) -> None:
                 "error": {
                     "code": exc.code,
                     "message": exc.message,
-                    "detail": exc.detail,
+                    # detail is free-form Any and may carry SQL fragments or
+                    # PII — redact before it reaches the client.
+                    "detail": redact_value(exc.detail),
+                }
+            },
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed.",
+                    "detail": redact_value(exc.errors()),
+                }
+            },
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        code = "NOT_FOUND" if exc.status_code == 404 else f"HTTP_{exc.status_code}"
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": {
+                    "code": code,
+                    "message": str(exc.detail) if exc.detail else "Request failed.",
+                    "detail": None,
                 }
             },
         )

@@ -81,6 +81,21 @@ def test_redact_audit_arguments_alias():
     assert out == {"api_key": "***", "ok": "y"}
 
 
+def test_redact_value_masks_secret_under_benign_key():
+    """A secret-shaped value is redacted even under a non-sensitive key name."""
+    jwt = "eyJhbGciOiJIUzI1Ni, dummy".replace(", dummy", "") + "." + "eyJzdWIiOiIxMjM0NTY3" + ".sig"
+    out = redact_value({"note": jwt, "comment": "all fine here"})
+    assert out["note"] == "***"
+    assert out["comment"] == "all fine here"
+
+
+def test_redact_value_masks_known_token_prefixes():
+    out = redact_value(["sk-ABCDEFGHIJKLMNOP1234", "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345", "fine"])
+    assert out[0] == "***"
+    assert out[1] == "***"
+    assert out[2] == "fine"
+
+
 # ── expanded sensitive-key coverage ───────────────────────────────────────
 
 

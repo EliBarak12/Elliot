@@ -11,6 +11,7 @@ from elliot_core.redaction import redact_url
 from elliot_core.sources.api_fetcher import (
     _build_auth_headers,
     _build_auth_query_params,
+    _enforce_response_size,
     _extract_rows,
     _pinned_hosts,
 )
@@ -63,6 +64,7 @@ async def fetch_passthrough(
             f"Network error fetching {redact_url(source.url)}: {type(exc).__name__}"
         ) from exc
 
+    _enforce_response_size(resp, source.url)
     data = resp.json()
     rows = _extract_rows(data, source.data_path)
     pagination_meta = _extract_pagination_meta(data, resp.headers, source)

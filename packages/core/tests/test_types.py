@@ -161,3 +161,21 @@ def test_read_tool_without_source_or_sql_raises():
                 }
             ],
         )
+
+
+def test_unknown_field_on_tool_is_rejected():
+    """A typo'd connector field is a validation error, not silently dropped."""
+    with pytest.raises(PydanticValidationError):
+        ToolDefinition(
+            id="t",
+            name="T",
+            description="d",
+            category="READ",
+            sql="SELECT 1",
+            max_row=5,  # typo for response_shape.max_rows
+        )
+
+
+def test_unknown_field_on_source_is_rejected():
+    with pytest.raises(PydanticValidationError):
+        SourceConfig(id="s", name="S", type="rest", url="https://x", typo_field=1)

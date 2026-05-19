@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -22,6 +23,10 @@ interface Props {
 }
 
 export function FilterGroupBuilder({ groups, onChange, availableFields }: Props) {
+  // One datalist for the whole builder — rendering it per condition row
+  // produced duplicate DOM ids, so only the first ever bound.
+  const fieldsListId = useId();
+
   const updateGroup = (i: number, g: FilterGroup) => {
     const next = [...groups];
     next[i] = g;
@@ -36,6 +41,11 @@ export function FilterGroupBuilder({ groups, onChange, availableFields }: Props)
 
   return (
     <div className="space-y-3">
+      <datalist id={fieldsListId}>
+        {availableFields.map((f) => (
+          <option key={f} value={f} />
+        ))}
+      </datalist>
       {groups.map((group, gi) => (
         <div key={gi} className="border rounded-md p-3 space-y-2">
           <div className="flex items-center gap-2">
@@ -61,7 +71,7 @@ export function FilterGroupBuilder({ groups, onChange, availableFields }: Props)
           {group.conditions.map((cond, ci) => (
             <div key={ci} className="flex items-center gap-2 flex-wrap">
               <Input
-                list="fields"
+                list={fieldsListId}
                 placeholder="field"
                 value={cond.field}
                 onChange={(e) => {
@@ -71,9 +81,6 @@ export function FilterGroupBuilder({ groups, onChange, availableFields }: Props)
                 }}
                 className="w-32 h-7 text-xs"
               />
-              <datalist id="fields">
-                {availableFields.map((f) => <option key={f} value={f} />)}
-              </datalist>
 
               <select
                 value={cond.operator}

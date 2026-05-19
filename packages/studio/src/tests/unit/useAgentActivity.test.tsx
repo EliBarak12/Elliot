@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { renderHook, waitFor, act } from "@testing-library/react";
 
 const sessionData: { value: Record<string, unknown> | null } = { value: null };
 const toastSuccess = vi.fn();
@@ -66,5 +66,27 @@ describe("useAgentActivity", () => {
     sessionData.value = { tool_count: 1 };
     rerender();
     await waitFor(() => expect(result.current.isActive).toBe(true));
+  });
+
+  it("isActive returns to false after the window even if sessions keep updating", async () => {
+    vi.useFakeTimers();
+    try {
+      sessionData.value = { tool_count: 0 };
+      const { result, rerender } = renderHook(() => useAgentActivity());
+      sessionData.value = { tool_count: 1 };
+      rerender();
+      expect(result.current.isActive).toBe(true);
+      // A non-event session update arrives inside the active window. The
+      // window timer must survive it (previously the effect cleanup cancelled
+      // it, leaving isActive stuck true).
+      sessionData.value = { tool_count: 1, source_count: 0 };
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(7_000);
+      });
+      expect(result.current.isActive).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

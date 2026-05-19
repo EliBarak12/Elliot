@@ -115,3 +115,42 @@ def test_analyze_postman_rejects_non_collection() -> None:
 def test_analyze_postman_warns_on_write_tools() -> None:
     proposed = analyze_postman(_COLLECTION)
     assert any("write" in w.lower() for w in proposed.warnings)
+
+
+_COLLECTION_WITH_VARS = {
+    "info": {"name": "Var API", "schema": "https://schema.getpostman.com/json/v2.1.0"},
+    "variable": [{"key": "baseUrl", "value": "https://api.example.com/v2"}],
+    "item": [
+        {
+            "name": "List things",
+            "request": {
+                "method": "GET",
+                "url": {"raw": "{{baseUrl}}/things", "path": ["things"]},
+            },
+        }
+    ],
+}
+
+
+def test_analyze_postman_resolves_collection_variables() -> None:
+    """{{baseUrl}} is substituted so the source gets a real base URL."""
+    proposed = analyze_postman(_COLLECTION_WITH_VARS)
+    assert proposed.sources[0].base_url == "https://api.example.com"
+
+
+def test_analyze_postman_detects_request_level_auth() -> None:
+    collection = {
+        "info": {"name": "ReqAuth", "_postman_id": "x"},
+        "item": [
+            {
+                "name": "Get widget",
+                "request": {
+                    "method": "GET",
+                    "url": "https://api.example.com/widgets",
+                    "auth": {"type": "apikey"},
+                },
+            }
+        ],
+    }
+    proposed = analyze_postman(collection)
+    assert proposed.sources[0].auth_hint == "api_key"

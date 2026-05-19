@@ -213,6 +213,39 @@ def test_openai_tools_schema(connector_file: Path) -> None:
     assert tools[0]["function"]["name"] == "list_animals"
 
 
+def test_openai_parse_tool_message() -> None:
+    from elliot_connector_runtime.protocols.openai import _parse_tool_message
+
+    # Bare tool id (back-compat).
+    assert _parse_tool_message("list_animals") == ("list_animals", {})
+    # JSON object with arguments — previously dropped.
+    tid, args = _parse_tool_message('{"tool": "list_animals", "arguments": {"species": "cat"}}')
+    assert tid == "list_animals"
+    assert args == {"species": "cat"}
+
+
+def test_openai_chat_completions_unknown_tool(client: TestClient) -> None:
+    """An unknown tool returns a structured error, not a 500."""
+    resp = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "tool", "content": "no_such_tool"}]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["object"] == "chat.completion"
+    content = json.loads(body["choices"][0]["message"]["content"])
+    assert content["error"]["code"] == "TOOL_NOT_FOUND"
+
+
+def test_openai_chat_completions_advertises_tools(client: TestClient) -> None:
+    resp = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert resp.status_code == 200
+    assert any(t["function"]["name"] == "list_animals" for t in resp.json()["tools"])
+
+
 async def test_connector_schema_resource_redacts_secrets() -> None:
     """The `connector://schema` resource must never leak resolved secret
     values — auth blocks, custom headers, URL userinfo / token query params."""

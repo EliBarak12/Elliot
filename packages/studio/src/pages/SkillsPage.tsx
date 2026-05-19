@@ -14,7 +14,7 @@ import type { SkillDefinition } from "@/types/api";
 
 export default function SkillsPage() {
   const queryClient = useQueryClient();
-  const { data: skillsRaw, isLoading } = useSkills();
+  const { data: skillsRaw, isLoading, isError, refetch } = useSkills();
   const skills = Array.isArray(skillsRaw) ? (skillsRaw as SkillDefinition[]) : [];
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -59,7 +59,23 @@ export default function SkillsPage() {
               </>
             )}
 
-            {!isLoading && skills.length === 0 && (
+            {!isLoading && isError && (
+              <Card className="p-4 text-center">
+                <p className="text-xs text-muted-foreground mb-2">
+                  Couldn&apos;t load skills — the Elliot MCP plugin didn&apos;t respond.
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void refetch()}
+                  className="gap-1.5"
+                >
+                  Retry
+                </Button>
+              </Card>
+            )}
+
+            {!isLoading && !isError && skills.length === 0 && (
               <Card className="p-4 text-center">
                 <p className="text-xs text-muted-foreground mb-2">No skills defined yet.</p>
                 <Button size="sm" variant="outline" onClick={startNew} className="gap-1.5">

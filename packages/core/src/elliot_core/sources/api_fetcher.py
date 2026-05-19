@@ -27,6 +27,33 @@ _MAX_RETRIES = 3
 _MAX_TOTAL_RETRIES = 8
 
 _DEFAULT_MAX_RESULT_ROWS = 10_000
+_DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024  # 64 MB per response body
+
+
+def _max_response_bytes() -> int:
+    """Per-response body-size cap (env ELLIOT_MAX_RESPONSE_BYTES)."""
+    raw = os.environ.get("ELLIOT_MAX_RESPONSE_BYTES", "")
+    try:
+        return max(1024, int(raw)) if raw else _DEFAULT_MAX_RESPONSE_BYTES
+    except ValueError:
+        return _DEFAULT_MAX_RESPONSE_BYTES
+
+
+def _enforce_response_size(resp: httpx.Response, url: str | None) -> None:
+    """Reject an oversized response body before it is parsed/materialized."""
+    cap = _max_response_bytes()
+    declared = resp.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > cap:
+                raise SourceFetchError(
+                    f"Response from {redact_url(url)} declares "
+                    f"{declared} bytes, exceeding the {cap}-byte limit"
+                )
+        except ValueError:
+            pass
+    if len(resp.content) > cap:
+        raise SourceFetchError(f"Response body from {redact_url(url)} exceeds the {cap}-byte limit")
 
 
 def _max_rows() -> int:
@@ -48,7 +75,27 @@ def _pinned_hosts(url: str, ips: list[str]) -> dict[str, str] | None:
     return {host: ips[0]} if (host and ips) else None
 
 
-_ENV_VAR_NAME = __import__("re").compile(r"^[A-Z][A-Z0-9_]*$")
+_ENV_VAR_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def _retry_after_seconds(value: str | None, fallback: float) -> float:
+    """Parse a Retry-After header, which may be a delay in seconds or an
+    HTTP-date. Falls back to ``fallback`` for missing/unparseable values."""
+    if not value:
+        return fallback
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+
+        when = parsedate_to_datetime(value)
+    except (ValueError, TypeError):
+        return fallback
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return max(0.0, (when - datetime.now(UTC)).total_seconds())
 
 
 def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
@@ -67,8 +114,6 @@ def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
       ``elliot_core.secrets.resolve_secrets`` has already replaced a
       ``{{ env:VAR }}`` template at load time with the resolved value.
     """
-    import os
-
     if key.startswith("{{ env:") and key.endswith(" }}"):
         env_var = key[len("{{ env:") : -len(" }}")].strip()
         return secrets.get(env_var) or secrets.get(env_var.lower()) or os.environ.get(env_var, "")
@@ -202,7 +247,9 @@ async def fetch_endpoint(config: SourceConfig, secrets: dict[str, str]) -> Fetch
                             f"fetching {redact_url(config.url)}"
                         )
                     retry_budget -= 1
-                    delay = min(float(resp.headers.get("Retry-After", 2**attempt)), 30)
+                    delay = min(
+                        _retry_after_seconds(resp.headers.get("Retry-After"), 2**attempt), 30
+                    )
                     await asyncio.sleep(delay)
                     continue
                 break
@@ -213,6 +260,7 @@ async def fetch_endpoint(config: SourceConfig, secrets: dict[str, str]) -> Fetch
                     f"HTTP {status} from {redact_url(config.url)} after {_MAX_RETRIES} attempts"
                 )
 
+            _enforce_response_size(resp, config.url)
             data = resp.json()
             rows = _extract_rows(data, config.data_path)
             all_rows.extend(rows)
@@ -243,7 +291,11 @@ async def fetch_endpoint(config: SourceConfig, secrets: dict[str, str]) -> Fetch
                     break
                 page += 1
             elif pagination.strategy == "cursor":
-                cursor = data.get("next_cursor") or data.get(pagination.cursor_field or "cursor")
+                cursor = (
+                    data.get("next_cursor") or data.get(pagination.cursor_field or "cursor")
+                    if isinstance(data, dict)
+                    else None
+                )
                 if not cursor:
                     break
             elif pagination.strategy == "link_header":

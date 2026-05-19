@@ -57,10 +57,32 @@ def to_mcp_tool_schema(tool: ToolDefinition) -> dict[str, Any]:
     return schema
 
 
+def _openai_strict_param_schema(p: Any) -> dict[str, Any]:
+    """Build a parameter schema valid under OpenAI strict function calling.
+
+    Strict mode requires every property to appear in ``required`` and forbids
+    keywords like ``default``. An optional parameter is therefore modelled as
+    nullable (``type: [<type>, "null"]``) rather than omitted from required.
+    """
+    base_type = _TYPE_MAP.get(p.type, "string")
+    schema: dict[str, Any] = {"description": p.description}
+    schema["type"] = base_type if p.required else [base_type, "null"]
+    if p.enum is not None:
+        # A nullable enum must allow null as a member.
+        schema["enum"] = list(p.enum) if p.required else [*p.enum, None]
+    return schema
+
+
 def to_openai_function(tool: ToolDefinition) -> dict[str, Any]:
-    """Convert ToolDefinition to OpenAI function-calling tool descriptor."""
-    props = {p.name: _param_schema(p) for p in tool.parameters}
-    required = [p.name for p in tool.parameters if p.required]
+    """Convert ToolDefinition to an OpenAI function-calling tool descriptor.
+
+    Emitted in OpenAI strict mode: every parameter is listed in ``required``
+    and optional parameters are nullable, which is what strict + structured
+    outputs demand. The previous schema put only required params in
+    ``required``, which OpenAI rejects when ``strict`` is true.
+    """
+    props = {p.name: _openai_strict_param_schema(p) for p in tool.parameters}
+    required = [p.name for p in tool.parameters]
     return {
         "type": "function",
         "function": {

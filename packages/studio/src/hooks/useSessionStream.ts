@@ -138,7 +138,11 @@ export function useSessionStream(): void {
         }
         if (cancelled) break;
         backoff = Math.min(backoff + 1, 5);
-        await new Promise((resolve) => setTimeout(resolve, backoff * 2000));
+        // Exponential backoff with random jitter so many tabs reconnecting
+        // after a runtime restart don't stampede; the 500ms floor prevents a
+        // tight loop when a stream connects then closes immediately.
+        const delay = 500 + backoff * 2000 + Math.random() * 1000;
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
     void loop();

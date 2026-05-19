@@ -77,12 +77,15 @@ def test_analyze_extracts_title_slug() -> None:
     assert result.slug == "pet-store"
 
 
-def test_analyze_only_get_endpoints() -> None:
+def test_analyze_includes_write_endpoints() -> None:
+    """Write endpoints become WRITE/ACTION tools, not silently skipped."""
     result = analyze_spec(PETSTORE_MINIMAL)
-    assert all(t.http_method == "GET" for t in result.tools)
+    delete_tool = next(t for t in result.tools if t.http_method == "DELETE")
+    assert delete_tool.category == "ACTION"
+    assert delete_tool.id == "delete_pet"
 
 
-def test_analyze_write_endpoints_skipped_with_warning() -> None:
+def test_analyze_write_endpoints_produce_warning() -> None:
     result = analyze_spec(PETSTORE_MINIMAL)
     assert any("write endpoint" in w for w in result.warnings)
 
@@ -145,3 +148,60 @@ def test_ensure_verb_first_already_verb() -> None:
 
 def test_ensure_verb_first_adds_return() -> None:
     assert _ensure_verb_first("All pets in the store") == "Return all pets in the store"
+
+
+_SPEC_WITH_REFS = {
+    "openapi": "3.1.0",
+    "info": {"title": "Ref API", "version": "2.0.0"},
+    "servers": [{"url": "https://api.example.com"}],
+    "components": {
+        "parameters": {
+            "PageParam": {
+                "name": "page",
+                "in": "query",
+                "schema": {"type": "integer"},
+                "required": False,
+                "description": "Page number",
+            }
+        },
+        "schemas": {
+            "NewWidget": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                    "name": {"type": "string"},
+                    "tags": {"type": ["array", "null"]},
+                },
+            }
+        },
+    },
+    "paths": {
+        "/widgets": {
+            "parameters": [{"$ref": "#/components/parameters/PageParam"}],
+            "post": {
+                "operationId": "createWidget",
+                "summary": "Create a widget",
+                "requestBody": {
+                    "content": {
+                        "application/json": {"schema": {"$ref": "#/components/schemas/NewWidget"}}
+                    }
+                },
+                "responses": {"201": {}},
+            },
+        }
+    },
+}
+
+
+def test_analyze_resolves_param_and_body_refs() -> None:
+    result = analyze_spec(_SPEC_WITH_REFS)
+    tool = next(t for t in result.tools if t.http_method == "POST")
+    assert tool.category == "WRITE"
+    names = {p.name for p in tool.parameters}
+    # path-level $ref parameter + requestBody schema $ref properties
+    assert names == {"page", "name", "tags"}
+    name_param = next(p for p in tool.parameters if p.name == "name")
+    assert name_param.required is True
+    # OpenAPI 3.1 list-valued type collapses to the non-null member.
+    tags_param = next(p for p in tool.parameters if p.name == "tags")
+    assert tags_param.type == "array"

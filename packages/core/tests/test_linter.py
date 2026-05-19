@@ -73,6 +73,13 @@ def test_select_star_with_limit_no_issue() -> None:
     assert not any(i.code in ("UNBOUNDED_SELECT", "SELECT_STAR_NO_LIMIT") for i in issues)
 
 
+def test_limit_lookalike_column_still_flags_unbounded() -> None:
+    """A column named rate_limit must not be mistaken for a real LIMIT clause."""
+    config = _make_connector(sql="SELECT * FROM items ORDER BY rate_limit")
+    issues = lint_connector(config)
+    assert any(i.code == "UNBOUNDED_SELECT" for i in issues)
+
+
 def test_short_parameter_name_is_warn() -> None:
     config = _make_connector(
         parameters=[

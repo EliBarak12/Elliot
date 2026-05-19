@@ -108,3 +108,23 @@ def test_load_results_skips_corrupt_files(tmp_path):
     bad.write_text("NOT JSON")
     results = load_results(tmp_path)
     assert results == []
+
+
+async def test_eval_runner_constructs_without_connector_runtime_import() -> None:
+    """EvalRunner must build using elliot-core's own ToolExecutor — the old
+    code imported elliot_connector_runtime, which elliot-core does not depend
+    on, so constructing an EvalRunner raised ImportError."""
+    from elliot_core.eval_runner import EvalRunner
+    from elliot_core.types.connector import ConnectorConfig
+
+    config = ConnectorConfig(name="X", slug="x", version="1.0.0", tools=[], sources=[])
+    runner = EvalRunner(config)
+    suite = EvalSuite(
+        name="s",
+        connector="x",
+        cases=[EvalCase(id="c1", tool_id="missing_tool", arguments={})],
+    )
+    results = await runner.run_suite(suite)
+    assert len(results) == 1
+    assert results[0].passed is False
+    assert results[0].case_id == "c1"

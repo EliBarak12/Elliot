@@ -70,5 +70,14 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             if auth_header.startswith("Bearer "):
                 provided = auth_header[len("Bearer ") :]
         if not hmac.compare_digest(provided.encode("utf-8"), key.encode("utf-8")):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": "AUTH_FAILED",
+                        "message": "Missing or invalid API key.",
+                        "detail": None,
+                    }
+                },
+                status_code=401,
+            )
         return await call_next(request)

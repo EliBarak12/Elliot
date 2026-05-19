@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class AuthConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     type: Literal["api_key", "bearer", "basic", "oauth2"]
     header_name: str | None = None
     query_param: str | None = None
@@ -13,6 +15,8 @@ class AuthConfig(BaseModel):
 
 
 class PaginationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     strategy: Literal["cursor", "offset", "page", "link_header", "none"] = "none"
     page_size: int = 100
     max_pages: int = 10
@@ -21,6 +25,8 @@ class PaginationConfig(BaseModel):
 
 
 class SourceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     name: str
     type: Literal["rest", "postgres", "mysql", "file"]

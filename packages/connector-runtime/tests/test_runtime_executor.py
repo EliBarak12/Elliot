@@ -81,6 +81,14 @@ def test_interpolate_no_placeholders() -> None:
     assert _interpolate(url, {"user_id": "42"}) == url
 
 
+def test_interpolate_percent_encodes_values() -> None:
+    """Agent-supplied values are encoded so they cannot escape the path."""
+    url = "https://api.example.com/users/{user_id}/posts"
+    result = _interpolate(url, {"user_id": "../admin?force=1"})
+    assert "../admin" not in result
+    assert result == "https://api.example.com/users/..%2Fadmin%3Fforce%3D1/posts"
+
+
 @respx.mock
 async def test_executor_rest_source() -> None:
     respx.get("https://api.example.com/animals").mock(
@@ -129,6 +137,40 @@ async def test_executor_rest_source_row_cap(monkeypatch: pytest.MonkeyPatch) -> 
     # Materialized rows are capped at 3, so the WHERE species='cat' query
     # cannot return more than 3.
     assert len(result.rows) <= 3
+
+
+@respx.mock
+async def test_executor_cursor_pagination_with_data_path() -> None:
+    """Cursor is read from the raw envelope even when data_path narrows the
+    response to a bare list that no longer carries next_cursor."""
+    from elliot_core.types import PaginationConfig
+
+    connector = ConnectorConfig(
+        name="Pets",
+        slug="pets",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="animals",
+                name="Animals API",
+                type="rest",
+                url="https://api.example.com/animals",
+                data_path="items",
+                pagination=PaginationConfig(strategy="cursor", max_pages=5),
+            )
+        ],
+        tools=[CONNECTOR.tools[0]],
+        skills=[],
+    )
+    route = respx.get("https://api.example.com/animals")
+    route.side_effect = [
+        httpx.Response(200, json={"items": [{"id": 1, "species": "cat"}], "next_cursor": "p2"}),
+        httpx.Response(200, json={"items": [{"id": 2, "species": "cat"}]}),
+    ]
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(connector.tools[0], {"species": "cat"})
+    # Without the envelope fix, page 2 is never fetched and only id=1 is seen.
+    assert {r["id"] for r in result.rows} == {1, 2}
 
 
 async def test_executor_no_sql_no_filter_groups_raises() -> None:

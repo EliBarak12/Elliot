@@ -102,12 +102,45 @@ def test_coerce_number():
     assert _coerce("3.14", "number") == 3.14
 
 
+def test_coerce_number_invalid():
+    with pytest.raises(ElliotError) as exc_info:
+        _coerce("abc", "number")
+    assert exc_info.value.code == "INVALID_PARAM_TYPE"
+
+
 def test_coerce_boolean():
     assert _coerce(1, "boolean") is True
 
 
+def test_coerce_boolean_from_string():
+    assert _coerce("true", "boolean") is True
+    assert _coerce("False", "boolean") is False
+    assert _coerce("1", "boolean") is True
+    assert _coerce("off", "boolean") is False
+
+
+def test_coerce_boolean_invalid_string():
+    with pytest.raises(ElliotError) as exc_info:
+        _coerce("maybe", "boolean")
+    assert exc_info.value.code == "INVALID_PARAM_TYPE"
+
+
 def test_coerce_string_default():
     assert _coerce(99, "string") == "99"
+
+
+def test_coerce_and_validate_enforces_enum():
+    tool = _make_read_tool(
+        params=[
+            ParameterDefinition(
+                name="status", type="string", required=True, description="S", enum=["open", "shut"]
+            )
+        ]
+    )
+    assert _coerce_and_validate(tool, {"status": "open"})["status"] == "open"
+    with pytest.raises(ElliotError) as exc_info:
+        _coerce_and_validate(tool, {"status": "sideways"})
+    assert exc_info.value.code == "INVALID_PARAM_VALUE"
 
 
 # ── _coerce_and_validate ──────────────────────────────────────────────────────
@@ -363,3 +396,15 @@ async def test_execute_write_missing_api_mapping():
     with pytest.raises(ElliotError) as exc_info:
         await executor.execute("create_item", {})
     assert exc_info.value.code == "MISSING_API_MAPPING"
+
+
+@pytest.mark.asyncio
+async def test_execute_write_empty_source_ids():
+    """A WRITE tool with no source_ids raises ElliotError, not IndexError."""
+    tool = _make_write_tool()
+    tool.source_ids = []
+    config = _make_config(source=_make_source(url="https://api.example.com"), tools=[tool])
+    executor = ToolExecutor(config)
+    with pytest.raises(ElliotError) as exc_info:
+        await executor.execute("create_item", {"name": "X"})
+    assert exc_info.value.code == "INVALID_TOOL"

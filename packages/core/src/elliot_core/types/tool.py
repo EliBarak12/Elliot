@@ -2,10 +2,17 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+
+# Connector-authored models reject unknown fields so a typo in a saved
+# connector JSON (e.g. "max_row" for "max_rows") surfaces as a validation
+# error instead of being silently dropped.
+_strict = ConfigDict(extra="forbid")
 
 
 class ParameterDefinition(BaseModel):
+    model_config = _strict
+
     name: str
     type: Literal["string", "integer", "number", "boolean", "date"]
     required: bool = True
@@ -15,6 +22,8 @@ class ParameterDefinition(BaseModel):
 
 
 class FilterCondition(BaseModel):
+    model_config = _strict
+
     field: str
     operator: Literal[
         "=", "!=", ">", ">=", "<", "<=", "in_list", "contains", "is_null", "is_not_null"
@@ -24,17 +33,23 @@ class FilterCondition(BaseModel):
 
 
 class FilterGroup(BaseModel):
+    model_config = _strict
+
     logic: Literal["AND", "OR"] = "AND"
     conditions: list[FilterCondition] = []
 
 
 class ReturnField(BaseModel):
+    model_config = _strict
+
     field: str
     alias: str | None = None
     aggregation: Literal["none", "count", "sum", "avg", "min", "max"] = "none"
 
 
 class OrderField(BaseModel):
+    model_config = _strict
+
     field: str
     direction: Literal["ASC", "DESC"] = "ASC"
 
@@ -45,6 +60,8 @@ class ApiRequestMapping(BaseModel):
     Used when category == 'WRITE' or 'ACTION'.
     """
 
+    model_config = _strict
+
     method: Literal["GET", "POST", "PUT", "DELETE", "PATCH"] = "POST"
     path_template: str | None = None  # e.g. "/users/{user_id}"
     query_params: list[str] = []
@@ -53,6 +70,8 @@ class ApiRequestMapping(BaseModel):
 
 
 class ResponseShape(BaseModel):
+    model_config = _strict
+
     max_rows: int = 1000
     rename: dict[str, str] = {}  # old_name -> new_name in output
 
@@ -66,6 +85,8 @@ class QueryResult(BaseModel):
 
 
 class ToolDefinition(BaseModel):
+    model_config = _strict
+
     id: str
     name: str
     description: str
@@ -105,12 +126,16 @@ class ToolDefinition(BaseModel):
 
 
 class SkillStep(BaseModel):
+    model_config = _strict
+
     alias: str
     tool_id: str
     params: dict[str, Any]  # may contain {{skill.input.X}} or {{steps.Y.Z}}
 
 
 class SkillDefinition(BaseModel):
+    model_config = _strict
+
     id: str
     name: str
     description: str

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
+  AlertTriangle,
   ChevronDown,
   ChevronRight,
   Database,
@@ -54,7 +55,7 @@ function sourceIcon(type: string) {
 
 export default function SourcesPage() {
   const queryClient = useQueryClient();
-  const { data: sourcesRaw, isLoading } = useSources();
+  const { data: sourcesRaw, isLoading, isError, refetch } = useSources();
   const sources = Array.isArray(sourcesRaw) ? (sourcesRaw as SourceSummary[]) : [];
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -102,7 +103,21 @@ export default function SourcesPage() {
         </div>
       )}
 
-      {!isLoading && sources.length === 0 && (
+      {!isLoading && isError && (
+        <EmptyState
+          icon={AlertTriangle}
+          title="Couldn't load sources"
+          description="The Elliot MCP plugin didn't respond. Make sure the stack is running, then retry."
+          action={
+            <Button onClick={() => void refetch()} size="sm" variant="outline" className="gap-1.5">
+              <RefreshCw className="h-3.5 w-3.5" />
+              Retry
+            </Button>
+          }
+        />
+      )}
+
+      {!isLoading && !isError && sources.length === 0 && (
         <EmptyState
           icon={Database}
           title="No sources yet"

@@ -7,8 +7,9 @@ import time
 from typing import Any
 
 import structlog
-from sqlalchemy import Column, Float, Integer, String, Text, create_engine, text
+from sqlalchemy import Column, Float, Integer, String, Text, create_engine, event, text
 from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session
 
 log = structlog.get_logger(__name__)
@@ -70,6 +71,8 @@ class ObservationStore:
             pool_pre_ping=True,
             connect_args=connect_args,
         )
+        if db_url.startswith("sqlite"):
+            _enable_sqlite_concurrency(self._engine)
         _Base.metadata.create_all(self._engine)
         self._migrate_agent_identity_columns()
         log.info("observation_store.ready", db_url=db_url.split("@")[-1])
@@ -247,6 +250,25 @@ class ObservationStore:
         if deleted:
             log.info("observation_store.pruned", deleted=deleted)
         return deleted
+
+
+def _enable_sqlite_concurrency(engine: Engine) -> None:
+    """Put SQLite into WAL mode with a busy timeout.
+
+    The default rollback journal serializes readers against a writer and
+    fails a contended write immediately with "database is locked". WAL lets
+    readers and a writer proceed concurrently; busy_timeout makes a blocked
+    writer wait instead of erroring — both are needed once the FastMCP
+    threadpool drives concurrent writes.
+    """
+
+    @event.listens_for(engine, "connect")
+    def _set_pragmas(dbapi_conn: Any, _record: Any) -> None:
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=5000")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.close()
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:

@@ -14,7 +14,7 @@ import type { ToolDefinition } from "@/types/api";
 
 export default function ToolsPage() {
   const queryClient = useQueryClient();
-  const { data: toolsRaw, isLoading } = useTools();
+  const { data: toolsRaw, isLoading, isError, refetch } = useTools();
   const tools = Array.isArray(toolsRaw) ? (toolsRaw as ToolDefinition[]) : [];
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -61,7 +61,23 @@ export default function ToolsPage() {
               </>
             )}
 
-            {!isLoading && tools.length === 0 && (
+            {!isLoading && isError && (
+              <Card className="p-4 text-center">
+                <p className="text-xs text-muted-foreground mb-2">
+                  Couldn&apos;t load tools — the Elliot MCP plugin didn&apos;t respond.
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void refetch()}
+                  className="gap-1.5"
+                >
+                  Retry
+                </Button>
+              </Card>
+            )}
+
+            {!isLoading && !isError && tools.length === 0 && (
               <Card className="p-4 text-center">
                 <p className="text-xs text-muted-foreground mb-2">No tools defined yet.</p>
                 <Button size="sm" variant="outline" onClick={startNew} className="gap-1.5">

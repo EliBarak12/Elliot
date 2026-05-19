@@ -181,6 +181,14 @@ def _app_with_errors() -> FastAPI:
     async def auth_err() -> None:
         raise ElliotError("AUTH_FAILED", "not authorized")
 
+    @app.get("/leaky-detail")
+    async def leaky_detail() -> None:
+        raise ElliotError("INVALID_TOOL", "bad", detail={"password": "hunter2"})
+
+    @app.get("/needs-param")
+    async def needs_param(count: int) -> dict[str, int]:
+        return {"count": count}
+
     return app
 
 
@@ -204,6 +212,28 @@ def test_error_middleware_auth_error_returns_401():
     client = TestClient(_app_with_errors(), raise_server_exceptions=False)
     resp = client.get("/auth-error")
     assert resp.status_code == 401
+
+
+def test_error_middleware_redacts_detail():
+    client = TestClient(_app_with_errors(), raise_server_exceptions=False)
+    resp = client.get("/leaky-detail")
+    assert resp.status_code == 422
+    assert resp.json()["error"]["detail"]["password"] == "***"
+
+
+def test_error_middleware_validation_error_returns_422():
+    """A request-validation failure keeps the structured error shape, not 500."""
+    client = TestClient(_app_with_errors(), raise_server_exceptions=False)
+    resp = client.get("/needs-param")  # required query param 'count' missing
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_error_middleware_404_returns_structured():
+    client = TestClient(_app_with_errors(), raise_server_exceptions=False)
+    resp = client.get("/no-such-route")
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "NOT_FOUND"
 
 
 def test_error_middleware_unknown_code_prefix_returns_500():

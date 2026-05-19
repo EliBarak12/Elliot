@@ -54,3 +54,6 @@ packages/studio/.vite/
 
 # E2E run artifacts (screenshots, captured logs)
 tests/e2e/artifacts/
+
+# Claude Code worktree scratch dir (isolated sub-agent worktrees)
+.claude/worktrees/

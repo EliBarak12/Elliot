@@ -181,6 +181,21 @@ def test_sample_data_missing_table_returns_error(mcp: FastMCP):
     assert "text" in result or "error" in result
 
 
+def test_sample_data_rejects_injection_table_name(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    """A quote-breaking table_name must be rejected as INVALID_IDENTIFIER,
+    and the underlying table must remain intact."""
+    _load_table(session, tmp_path)
+    result = _tool(mcp, "elliot_sample_data")(table_name='x" OR 1=1--')
+    assert "text" in result
+    assert "INVALID_IDENTIFIER" in result["text"]
+    # DB untouched — the legitimate table is still there with all rows.
+    assert "items" in session.engine.get_table_names()
+    rows = session.engine.query('SELECT COUNT(*) AS n FROM "items"')
+    assert rows[0]["n"] == 3
+
+
 # ---------------------------------------------------------------------------
 # elliot_profile_column
 # ---------------------------------------------------------------------------
@@ -211,3 +226,26 @@ def test_explain_query_returns_plan(mcp: FastMCP, session: ElliotSession, tmp_pa
 def test_explain_query_invalid_sql_returns_error(mcp: FastMCP):
     result = _tool(mcp, "elliot_explain_query")(sql="NOT VALID SQL !!!")
     assert "text" in result or "error" in result
+
+
+def test_explain_query_rejects_multi_statement(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    """SQLite still parses both statements when prefixed with EXPLAIN QUERY
+    PLAN, so the same SELECT-only guard used by elliot_query_sql must apply."""
+    _load_table(session, tmp_path)
+    result = _tool(mcp, "elliot_explain_query")(sql='SELECT 1; DROP TABLE "items"')
+    assert "text" in result
+    # validate_tool_sql rejects with one of: "Multiple statements not allowed"
+    # or "Forbidden keyword: DROP" — either is acceptable proof of rejection.
+    assert "VALIDATION_ERROR" in result["text"]
+    assert "items" in session.engine.get_table_names()
+
+
+def test_explain_query_rejects_drop(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    """A bare DROP must be rejected (no SELECT prefix)."""
+    _load_table(session, tmp_path)
+    result = _tool(mcp, "elliot_explain_query")(sql='DROP TABLE "items"')
+    assert "text" in result
+    assert "VALIDATION_ERROR" in result["text"]
+    assert "items" in session.engine.get_table_names()

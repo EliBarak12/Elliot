@@ -278,6 +278,36 @@ def test_preview_source_missing_table_returns_error(mcp: FastMCP):
     assert "text" in result or "error" in result
 
 
+def test_preview_source_rejects_injection_table_name(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    """Quote-breaking table_name must be rejected; legit table untouched."""
+    csv_path = _csv_file(tmp_path)
+    _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(csv_path)},
+        name="items",
+    )
+    result = _tool(mcp, "elliot_preview_source")(table_name='x" OR 1=1--')
+    assert "text" in result
+    assert "INVALID_IDENTIFIER" in result["text"]
+    assert "items" in session.engine.get_table_names()
+
+
+def test_discover_source_rejects_injection_name(mcp: FastMCP, session: ElliotSession):
+    """A hostile name must be rejected at registration with INVALID_IDENTIFIER
+    so it can never become a stored src.table_name."""
+    result = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": "/nonexistent.csv"},
+        name='evil"; DROP TABLE x',
+    )
+    assert "text" in result
+    assert "INVALID_IDENTIFIER" in result["text"]
+    # No source registered at all.
+    assert len(session.sources) == 0
+
+
 # ---------------------------------------------------------------------------
 # elliot_profile_source
 # ---------------------------------------------------------------------------
@@ -348,6 +378,28 @@ def test_remove_source_table_no_longer_previewable(mcp: FastMCP, tmp_path: Path)
 def test_remove_source_not_found_returns_error(mcp: FastMCP):
     result = _tool(mcp, "elliot_remove_source")(source_id="no-such-id")
     assert "text" in result or "error" in result
+
+
+def test_remove_source_rejects_injection_table_name(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    """Defense in depth: even if a legacy session file held a hostile
+    table_name (registration validation skipped), the remove path must
+    refuse rather than f-stringing it into DROP TABLE."""
+    csv_path = _csv_file(tmp_path)
+    disc = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(csv_path)},
+        name="items",
+    )
+    sid = disc["source_id"]
+    # Mutate the stored config after-the-fact to simulate a tampered session.
+    session.sources[sid].table_name = 'items"; DROP TABLE items--'
+    result = _tool(mcp, "elliot_remove_source")(source_id=sid)
+    assert "text" in result
+    assert "INVALID_IDENTIFIER" in result["text"]
+    # Legitimate table was not dropped.
+    assert "items" in session.engine.get_table_names()
 
 
 # ---------------------------------------------------------------------------

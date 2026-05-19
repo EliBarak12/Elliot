@@ -10,6 +10,25 @@ allowed-tools: Bash mcp__elliot__*
 
 You are building an Elliot connector — a JSON definition that wraps a data source in agent-ready MCP tools.
 
+## The tool sequence
+
+Build always follows this order — each tool depends on the one before it:
+
+```
+elliot_set_context      → name the connector + product
+elliot_discover_source  → register the API / DB, materialize its tables
+elliot_query_sql        → inspect the real columns before designing tools
+elliot_create_tool      → define one tool (verb-first description + SQL)
+elliot_preview_tool     → run that tool against sandbox data, verify rows
+elliot_build_connector  → assemble all registered tools into a connector
+elliot_lint_connector   → check the built connector; fix, rebuild, re-lint
+elliot_export_connector → write the connector file to disk
+```
+
+`elliot_lint_connector`, `elliot_run_eval`, and `elliot_export_connector` all
+operate on the connector produced by `elliot_build_connector` — if you skip the
+build step they have nothing to work on.
+
 ## Workspace state
 Existing connectors: !`ls connectors/*.connector.json 2>/dev/null | xargs -I{} basename {} .connector.json | tr '\n' ', ' || echo "(none yet)"`
 Elliot plugin: !`curl -s http://localhost:3000/health 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','unknown'))" 2>/dev/null || echo "not running — start Elliot first: honcho start"`
@@ -80,18 +99,57 @@ ORDER BY mrr DESC
 LIMIT 20
 ```
 
-### 5. Validate
-Call `elliot_lint_connector` — fix every issue it reports before saving.
-Call `elliot_validate_connector` to confirm schema is valid.
+After creating each tool, call `elliot_preview_tool` with its id to run its
+SQL against the sandbox data and confirm it returns sensible rows. Fix the SQL
+before moving on — never leave an unverified tool in the registry.
 
-### 6. Save
-Call `elliot_save_connector` — writes `connectors/<slug>.connector.json`.
+### 5. Build the connector
+Call `elliot_build_connector` with `name`, `slug`, and `description`. This
+assembles every tool you registered into one connector config, held in the
+session. Re-run it whenever you add, change, or remove a tool — lint, eval,
+and export all work off the *built* connector, not the loose tool registry.
 
-### 7. Test in the playground
-Open Studio at http://localhost:5173 and exercise each tool.
-Or call `elliot_run_eval` if an eval suite exists.
+### 6. Lint
+Call `elliot_lint_connector` — it lints the connector you just built and takes
+no arguments. Fix every error and warning, call `elliot_build_connector` again
+to rebuild, then re-lint. Repeat until it reports zero issues.
+
+### 7. Export
+Call `elliot_export_connector` to write the connector to disk. Pass `path`
+(e.g. `connectors/<slug>.connector.json`); it defaults to
+`.elliot/connector.json`.
+
+### 8. Test
+Run `elliot_run_eval` if an eval suite exists, or open Studio at
+http://localhost:5173 to exercise each tool.
+
+## What a good connector looks like
+
+Hold the build to this bar — it is what `elliot_lint_connector` and
+`elliot_quality_scan` measure, and what the audit sub-agents will exercise:
+
+- **One tool per agent job, not per API endpoint.** Fewer, sharper tools beat
+  a thin wrapper around every route. If two endpoints serve one job, expose one
+  tool.
+- **Every description is a contract.** It starts with a verb, says what the
+  tool returns, when to use it, and its key limit — written for an agent that
+  has never seen the API.
+- **Results are sized for a context window.** Every READ tool has a LIMIT and
+  an explicit column list (never `SELECT *`). A typical call should return well
+  under ~1000 tokens.
+- **Parameters are typed and specific.** `user_id` not `user`, `start_date`
+  not `from`; `enum` values for constrained strings; required vs. optional set
+  deliberately.
+- **Errors are actionable.** A failing call tells the agent what to do next —
+  never a bare stack trace.
+- **Annotations are deliberate.** `readOnlyHint` / `destructiveHint` /
+  `openWorldHint` reflect what the tool really does — downstream agents use
+  them to decide whether to confirm before calling.
+- **Clean lint, strong score.** Zero lint errors *and* zero warnings;
+  `elliot_quality_scan` ≥ 80 before you export.
 
 ## Rules
 - Never put API key values in the connector file — only env var names with `{{ env:VAR_NAME }}`
 - Every READ tool needs a LIMIT
-- Lint must pass before saving
+- `elliot_build_connector` must be called before lint, eval, or export
+- Lint must pass before exporting

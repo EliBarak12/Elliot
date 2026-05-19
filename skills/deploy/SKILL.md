@@ -14,36 +14,34 @@ Runtime health: !`curl -s http://localhost:3001/health 2>/dev/null | python3 -c 
 
 ## Deploy pipeline (must complete in order)
 
-### 1. Lint
-Call `elliot_lint_connector`. **Do not proceed if any errors are reported.**
-Fix all issues, re-lint, confirm zero errors.
+### 1. Build
+Call `elliot_build_connector` so the connector reflects the latest tools.
+Lint, eval, and export all operate on this built connector.
 
-### 2. Validate
-Call `elliot_validate_connector`. Confirms schema integrity.
+### 2. Lint
+Call `elliot_lint_connector` (no arguments — it lints the built connector).
+**Do not proceed if any errors are reported.** Fix all issues, call
+`elliot_build_connector` again, re-lint, and confirm zero errors.
 
 ### 3. Eval
 If an eval suite exists: call `elliot_run_eval`.
 All cases must pass. Fix failures before deploying.
 
-### 4. Save
-Call `elliot_save_connector` to write the final connector file.
+### 4. Export
+Call `elliot_export_connector` to write the final connector file. Pass `path`
+(e.g. `connectors/<slug>.connector.json`) or accept the `.elliot/connector.json`
+default.
 
 ### 5. Activate on the runtime
-The connector-runtime auto-loads `*.connector.json` files from the `connectors/` directory with a 30-second TTL cache. After saving:
+Call `elliot_start_runtime`. It launches the connector-runtime subprocess and
+loads the connector you just exported (it defaults to the most recently
+exported connector). Confirm it came up with `elliot_runtime_logs`, and get
+the URL agents should connect to with `elliot_get_connection_config`.
 
-```bash
-# Force cache refresh
-curl -X POST http://localhost:3001/v1/observations/prune
-```
-
-Verify the tools are live:
-```bash
-curl -s http://localhost:3001/v1/health | python3 -m json.tool
-```
-
-### 6. Test via MCP
-The tools are now available as MCP tools at `http://localhost:3001/mcp`.
-Add to Claude Code: the `.mcp.json` in this project already points there.
+### 6. Connect agents
+The tools are now served over MCP by the runtime. Use the URL from
+`elliot_get_connection_config` — `elliot connect --runtime` wires it into
+every coding agent on the machine, or add it to a client by hand.
 
 ## Checklist
 - [ ] Zero lint errors

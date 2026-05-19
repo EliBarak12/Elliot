@@ -56,16 +56,18 @@ shape, and create each tool. Honor the five principles — descriptions are
 verb-first contracts, results are sized, errors are actionable.
 
 ### 5. Scan
-Call `elliot_lint_connector` and fix every issue. The linter now also flags
-generic parameter names, enum candidates, missing pagination, and any tool
-that returns a field the user marked sensitive.
+Call `elliot_build_connector` to assemble the connector, then `elliot_lint_connector`
+and fix every issue. The linter also flags generic parameter names, enum
+candidates, missing pagination, and any tool that returns a field the user
+marked sensitive. For a deeper quality report, call `elliot_quality_scan`.
 
 ### 6. Audit with parallel sub-agents
 Invoke the `audit-connector` prompt. It runs 5 parallel sub-agents that try to
 use the connector for real, captures their failures, and drives a fix loop.
 
-### 7. Save and deploy
-Once the audit passes, call `elliot_save_connector`, then follow `deploy`.
+### 7. Export and deploy
+Once the audit passes, call `elliot_build_connector` then `elliot_export_connector`
+to write the connector file, then follow the `deploy` prompt.
 
 ## Rules
 - Interview before you design. Never skip step 2.

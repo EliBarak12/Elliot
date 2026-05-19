@@ -14,8 +14,10 @@ allowed-tools: Bash mcp__elliot__*
 ## Steps
 
 ### 1. Run lint
-If the user named a specific file, call `elliot_lint_connector` with that slug.
-Otherwise list with `elliot_list_tools` and ask which connector to lint.
+`elliot_lint_connector` lints the connector currently built in the session and
+takes no arguments. If nothing has been built yet, call `elliot_build_connector`
+first (use `elliot_list_tools` to see what tools are registered). To lint an
+existing connector file, load it into the session and build it before linting.
 
 ### 2. Read every issue
 For each issue reported:
@@ -35,10 +37,12 @@ For `token_risk_high` issues: add a LIMIT parameter or reduce return fields.
 For `sql_select_star` issues: replace `SELECT *` with explicit column list.
 
 ### 4. Re-lint
-Call `elliot_lint_connector` again. Repeat until zero errors and zero warnings.
+After editing tools with `elliot_update_tool`, call `elliot_build_connector`
+to rebuild, then `elliot_lint_connector` again. Repeat until zero errors and
+zero warnings.
 
-### 5. Save
-Call `elliot_save_connector` to persist the fixes.
+### 5. Export
+Call `elliot_export_connector` to persist the fixes to disk.
 
 ## Quality bar
 A production-ready connector has:

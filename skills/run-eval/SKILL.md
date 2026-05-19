@@ -36,12 +36,12 @@ cases:
 For each failing case:
 - `no_error: false` — tool threw an error. Fix the source or SQL.
 - `min_rows` not met — check if the source has data and filters are correct.
-- `fields_present` failed — column name mismatch. Fix `return_fields` or rename in `response_shape`.
+- `fields_present` failed — column name mismatch. Fix the tool's SQL `SELECT` or `return_fields` (the projected column list).
 - `max_token_estimate` exceeded — add LIMIT or reduce return fields.
 
 ### 3. Fix and re-run
-After fixing a tool via `elliot_update_tool`, re-run `elliot_run_eval`.
-Repeat until all cases pass.
+After fixing a tool via `elliot_update_tool`, call `elliot_build_connector` to
+rebuild the connector, then re-run `elliot_run_eval`. Repeat until all cases pass.
 
 ### 4. Check quality score
 Call `elliot_quality_scan` for a full connector quality report.

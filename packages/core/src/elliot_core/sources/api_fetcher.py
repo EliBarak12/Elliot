@@ -27,6 +27,33 @@ _MAX_RETRIES = 3
 _MAX_TOTAL_RETRIES = 8
 
 _DEFAULT_MAX_RESULT_ROWS = 10_000
+_DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024  # 64 MB per response body
+
+
+def _max_response_bytes() -> int:
+    """Per-response body-size cap (env ELLIOT_MAX_RESPONSE_BYTES)."""
+    raw = os.environ.get("ELLIOT_MAX_RESPONSE_BYTES", "")
+    try:
+        return max(1024, int(raw)) if raw else _DEFAULT_MAX_RESPONSE_BYTES
+    except ValueError:
+        return _DEFAULT_MAX_RESPONSE_BYTES
+
+
+def _enforce_response_size(resp: httpx.Response, url: str | None) -> None:
+    """Reject an oversized response body before it is parsed/materialized."""
+    cap = _max_response_bytes()
+    declared = resp.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > cap:
+                raise SourceFetchError(
+                    f"Response from {redact_url(url)} declares "
+                    f"{declared} bytes, exceeding the {cap}-byte limit"
+                )
+        except ValueError:
+            pass
+    if len(resp.content) > cap:
+        raise SourceFetchError(f"Response body from {redact_url(url)} exceeds the {cap}-byte limit")
 
 
 def _max_rows() -> int:
@@ -233,6 +260,7 @@ async def fetch_endpoint(config: SourceConfig, secrets: dict[str, str]) -> Fetch
                     f"HTTP {status} from {redact_url(config.url)} after {_MAX_RETRIES} attempts"
                 )
 
+            _enforce_response_size(resp, config.url)
             data = resp.json()
             rows = _extract_rows(data, config.data_path)
             all_rows.extend(rows)

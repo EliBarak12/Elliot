@@ -13,6 +13,20 @@ from elliot_core.paths import PathEscape, ensure_under
 from elliot_core.types.source import FetchResult, SourceConfig
 
 _SIZE_WARN_BYTES = 100 * 1024 * 1024  # 100 MB
+_DEFAULT_MAX_FILE_BYTES = 256 * 1024 * 1024  # 256 MB hard cap
+
+
+def _max_file_bytes() -> int:
+    """Hard upper bound on a file source's size (env ELLIOT_MAX_FILE_BYTES).
+
+    The JSON path loads the whole file into memory, so without a ceiling a
+    very large (or maliciously crafted) file is a DoS vector.
+    """
+    raw = os.environ.get("ELLIOT_MAX_FILE_BYTES", "")
+    try:
+        return max(1024, int(raw)) if raw else _DEFAULT_MAX_FILE_BYTES
+    except ValueError:
+        return _DEFAULT_MAX_FILE_BYTES
 
 
 def _allowed_roots() -> list[Path]:
@@ -116,6 +130,14 @@ def read_file(config: SourceConfig) -> FetchResult:
 
     warnings: list[str] = []
     size = path.stat().st_size
+    max_bytes = _max_file_bytes()
+    if size > max_bytes:
+        raise ElliotError(
+            "FILE_TOO_LARGE",
+            f"File {config.path} is {size // 1_048_576} MB, exceeding the "
+            f"{max_bytes // 1_048_576} MB limit. Raise ELLIOT_MAX_FILE_BYTES "
+            "if this is expected.",
+        )
     if size > _SIZE_WARN_BYTES:
         warnings.append(f"Large file ({size // 1_048_576} MB) — processing may be slow")
 

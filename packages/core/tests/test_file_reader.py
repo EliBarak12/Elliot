@@ -51,6 +51,15 @@ def test_invalid_json_raises(tmp_path: Path):
     assert exc_info.value.code == "FILE_PARSE_ERROR"
 
 
+def test_oversized_file_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ELLIOT_MAX_FILE_BYTES", "1024")
+    big = tmp_path / "big.json"
+    big.write_text("[" + ",".join(['{"x":1}'] * 500) + "]")
+    with pytest.raises(ElliotError) as exc_info:
+        read_file(_cfg(str(big), "json"))
+    assert exc_info.value.code == "FILE_TOO_LARGE"
+
+
 def test_empty_file_warning(tmp_path: Path):
     empty = tmp_path / "empty.csv"
     empty.write_text("id,name\n")

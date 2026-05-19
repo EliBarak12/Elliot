@@ -51,10 +51,22 @@ def deduplicate_names(names: list[str]) -> list[str]:
     seen: dict[str, int] = {}
     result: list[str] = []
     for name in names:
-        if name not in seen:
-            seen[name] = 0
-            result.append(name)
-        else:
-            seen[name] += 1
-            result.append(f"{name}_{seen[name] + 1}")
+        result.append(disambiguate(name, seen))
     return result
+
+
+def disambiguate(name: str, seen: dict[str, int]) -> str:
+    """Return ``name`` (first use) or ``name_2``, ``name_3``, ... on collision.
+
+    ``seen`` is mutated in place — the caller owns the disambiguation
+    table, so the same instance can be threaded through the row-level
+    flattener and the column-meta builder. This guarantees that a key
+    collision is resolved to the same suffix in both layers, preventing
+    silent data loss where a row would carry the value under one name
+    while the schema declared it under another.
+    """
+    if name not in seen:
+        seen[name] = 0
+        return name
+    seen[name] += 1
+    return f"{name}_{seen[name] + 1}"

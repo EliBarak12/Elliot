@@ -194,7 +194,7 @@ Once you've built a connector, package it as a standalone plugin that installs i
 elliot export-plugin my-domain.connector.json
 ```
 
-This scaffolds a `my-domain-plugin/` folder with the Codex and Claude Code manifests, marketplaces, and an `.mcp.json` that serves the connector over stdio (`elliot-mcp --connector`). Install it with `/plugin marketplace add <folder>` (Claude Code) or `codex plugin marketplace add <folder>` (Codex).
+This scaffolds a `my-domain-plugin/` folder with the Codex and Claude Code manifests, marketplaces, an `.mcp.json` that serves the connector over stdio (`elliot-mcp --connector`), and a `skills/` directory. The MCP server is named after the connector slug, so its tools are `mcp__<slug>__<tool-id>`; the generated skills — a usage guide plus one per connector workflow — already reference that prefix. Install it with `/plugin marketplace add <folder>` (Claude Code) or `codex plugin marketplace add <folder>` (Codex).
 
 ## Project layout
 

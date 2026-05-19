@@ -17,6 +17,33 @@ _CONNECTOR = {
     "description": "Read-only access to Acme widgets.",
 }
 
+_CONNECTOR_WITH_SKILL = {
+    "name": "Acme API",
+    "slug": "acme-api",
+    "version": "2.1.0",
+    "description": "Read-only access to Acme widgets.",
+    "tools": [
+        {
+            "id": "list_widgets",
+            "name": "List Widgets",
+            "description": "Return every widget in the catalog",
+            "category": "READ",
+            "source_ids": [],
+            "sql": "SELECT id, name FROM widgets LIMIT 50",
+            "parameters": [],
+        }
+    ],
+    "skills": [
+        {
+            "id": "daily-report",
+            "name": "Daily Report",
+            "description": "Generate the daily widget report",
+            "steps": [{"alias": "widgets", "tool_id": "list_widgets", "params": {}}],
+            "input_parameters": [],
+        }
+    ],
+}
+
 
 def _write_connector(tmp_path: Path, data: dict | None = None) -> Path:
     path = tmp_path / "acme.connector.json"
@@ -37,6 +64,7 @@ def test_export_writes_all_plugin_files(tmp_path: Path):
         ".claude-plugin/marketplace.json",
         ".codex-plugin/plugin.json",
         ".agents/plugins/marketplace.json",
+        "skills/acme-api-guide/SKILL.md",
         "README.md",
     }
     for path in written:
@@ -95,6 +123,34 @@ def test_codex_plugin_manifest_has_inline_mcp_and_interface(tmp_path: Path):
     assert server["command"] == "elliot-mcp"
     assert data["interface"]["displayName"] == "Acme API"
     assert data["interface"]["category"] == "Productivity"
+    # Codex discovers bundled skills via the manifest `skills` path.
+    assert data["skills"] == "./skills/"
+
+
+def test_usage_skill_is_generated_with_tool_prefix(tmp_path: Path):
+    """Every export ships a usage skill that references mcp__<slug>__* tools."""
+    connector = _write_connector(tmp_path)
+    out = tmp_path / "out"
+    export_plugin(connector, out)
+    skill = (out / "skills" / "acme-api-guide" / "SKILL.md").read_text(encoding="utf-8")
+    assert skill.startswith("---\n")
+    assert "allowed-tools: mcp__acme-api__*" in skill
+    assert "mcp__acme-api__<tool-id>" in skill
+
+
+def test_workflow_skill_generated_from_connector_skill(tmp_path: Path):
+    """A connector `skills` workflow becomes its own SKILL.md in the plugin."""
+    connector = _write_connector(tmp_path, _CONNECTOR_WITH_SKILL)
+    out = tmp_path / "out"
+    export_plugin(connector, out)
+    skill = (out / "skills" / "daily-report" / "SKILL.md").read_text(encoding="utf-8")
+    assert "name: daily-report" in skill
+    assert "## Steps" in skill
+    # The step must point at the connector tool under the slug-named server.
+    assert "mcp__acme-api__list_widgets" in skill
+    # The usage skill must list the connector's tool too.
+    guide = (out / "skills" / "acme-api-guide" / "SKILL.md").read_text(encoding="utf-8")
+    assert "mcp__acme-api__list_widgets" in guide
 
 
 def test_codex_marketplace_uses_local_source(tmp_path: Path):

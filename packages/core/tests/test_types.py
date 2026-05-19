@@ -179,3 +179,51 @@ def test_unknown_field_on_tool_is_rejected():
 def test_unknown_field_on_source_is_rejected():
     with pytest.raises(PydanticValidationError):
         SourceConfig(id="s", name="S", type="rest", url="https://x", typo_field=1)
+
+
+# --- tool.sql safety validator (defense in depth) -------------------------
+
+
+def test_tool_definition_rejects_attach_sql():
+    """An ATTACH statement smuggled into tool.sql must fail Pydantic
+    validation at connector-load time — even before the executor sees it."""
+    with pytest.raises(PydanticValidationError) as exc_info:
+        ToolDefinition(
+            **{
+                **SIMPLE_TOOL,
+                "sql": "ATTACH DATABASE '/tmp/x' AS evil",
+            }
+        )
+    assert "rejected" in str(exc_info.value)
+
+
+def test_tool_definition_rejects_multiple_statements():
+    with pytest.raises(PydanticValidationError):
+        ToolDefinition(
+            **{
+                **SIMPLE_TOOL,
+                "sql": "SELECT 1; ATTACH DATABASE '/tmp/x' AS evil",
+            }
+        )
+
+
+def test_tool_definition_rejects_pragma_sql():
+    with pytest.raises(PydanticValidationError):
+        ToolDefinition(
+            **{
+                **SIMPLE_TOOL,
+                "sql": "PRAGMA journal_mode = WAL",
+            }
+        )
+
+
+def test_tool_definition_accepts_plain_select():
+    """Happy path: legitimate SELECT tools still load."""
+    t = ToolDefinition(
+        **{
+            **SIMPLE_TOOL,
+            "sql": "SELECT id, name FROM products WHERE id = :id",
+            "parameters": [{"name": "id", "type": "integer"}],
+        }
+    )
+    assert t.sql is not None

@@ -408,3 +408,77 @@ async def test_execute_write_empty_source_ids():
     with pytest.raises(ElliotError) as exc_info:
         await executor.execute("create_item", {"name": "X"})
     assert exc_info.value.code == "INVALID_TOOL"
+
+
+# ── Defense in depth: runtime SQL guard for tool.sql ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_execute_read_full_runtime_rejects_dangerous_sql():
+    """If a ToolDefinition slips past field validation (e.g. via
+    model_construct), the executor's runtime check must reject ATTACH/PRAGMA
+    SQL before SQLite ever sees it."""
+    rows = [{"id": 1, "name": "Widget"}]
+    source = SourceConfig(id="src", name="items", type="file", path="x.json")
+    source.table_name = "items"
+    # Bypass field_validator by constructing without validation.
+    tool = ToolDefinition.model_construct(
+        id="evil",
+        name="evil",
+        description="evil",
+        category="READ",
+        source_ids=["src"],
+        sql="SELECT * FROM items; ATTACH DATABASE '/tmp/pwn' AS p;",
+        parameters=[],
+        filter_groups=[],
+        return_fields=[],
+        having=[],
+        order_by=[],
+        limit=100,
+        rest_query_params=[],
+        api_mapping=None,
+        response_shape=ResponseShape(),
+        output_schema=None,
+        run_async=False,
+    )
+    from elliot_core.types.connector import ConnectorConfig
+
+    config = ConnectorConfig.model_construct(
+        name="t", slug="t", version="1.0.0", sources=[source], tools=[tool]
+    )
+    executor = ToolExecutor(config, fetch_source=_fake_fetch(rows))
+    with pytest.raises(ElliotError) as exc_info:
+        await executor.execute("evil", {})
+    assert exc_info.value.code == "INVALID_TOOL"
+    assert "rejected" in exc_info.value.message
+
+
+# ── SSRF on WRITE path ───────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_execute_write_rejects_metadata_url():
+    """WRITE tools must not be able to POST to the cloud metadata endpoint."""
+    tool = _make_write_tool()
+    config = _make_config(
+        source=_make_source(url="http://169.254.169.254/latest/meta-data/"),
+        tools=[tool],
+    )
+    executor = ToolExecutor(config)
+    with pytest.raises(ElliotError) as exc_info:
+        await executor.execute("create_item", {"name": "X"})
+    assert exc_info.value.code == "SSRF_BLOCKED"
+
+
+@pytest.mark.asyncio
+async def test_execute_write_rejects_loopback_url():
+    """`http://localhost:22/` resolves to loopback and must be denied."""
+    tool = _make_write_tool()
+    config = _make_config(
+        source=_make_source(url="http://localhost:22"),
+        tools=[tool],
+    )
+    executor = ToolExecutor(config)
+    with pytest.raises(ElliotError) as exc_info:
+        await executor.execute("create_item", {"name": "X"})
+    assert exc_info.value.code == "SSRF_BLOCKED"

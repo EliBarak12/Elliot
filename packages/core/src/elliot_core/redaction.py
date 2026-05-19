@@ -16,6 +16,7 @@ log line. Use ``redact_audit_arguments`` whenever you serialize a raw
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -75,6 +76,25 @@ _SENSITIVE_SUBSTRINGS = (
 _REDACTED = "***"
 _MAX_VALUE_LEN = 256
 
+# High-confidence secret-shaped value patterns. These catch a secret that
+# slipped in under a benign key name (e.g. {"note": "Bearer sk-live-..."}),
+# which pure key-name matching misses. Kept conservative to avoid redacting
+# legitimate data.
+_SECRET_VALUE_PATTERNS = (
+    re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+"),  # JWT
+    re.compile(r"\b(?:sk|pk|rk)[-_](?:live|test)[-_][A-Za-z0-9]{8,}"),  # Stripe-style
+    re.compile(r"\bsk-[A-Za-z0-9]{16,}"),  # OpenAI-style
+    re.compile(r"\bgh[posru]_[A-Za-z0-9]{20,}"),  # GitHub token
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"),  # Slack token
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),  # AWS access key id
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),  # PEM private key
+)
+
+
+def _value_looks_secret(value: str) -> bool:
+    """True if a string value matches a known secret token pattern."""
+    return any(p.search(value) for p in _SECRET_VALUE_PATTERNS)
+
 
 def _is_sensitive_key(key: Any) -> bool:
     """Return True if ``key`` names a secret-bearing field.
@@ -127,11 +147,14 @@ def _redact_query(qs: str) -> str:
 def redact_value(value: Any) -> Any:
     """Recursively redact obviously-sensitive values inside arbitrary data.
 
-    Strings are returned as-is unless they're enormous (truncated). Dicts
-    have any key matching ``_SENSITIVE_KEYS`` replaced with the placeholder.
-    Lists are walked element-wise.
+    Strings matching a known secret-token pattern are replaced; otherwise
+    they're returned as-is unless enormous (truncated). Dicts have any key
+    matching ``_SENSITIVE_KEYS`` replaced with the placeholder. Lists are
+    walked element-wise.
     """
     if isinstance(value, str):
+        if _value_looks_secret(value):
+            return _REDACTED
         return value if len(value) <= _MAX_VALUE_LEN else value[:_MAX_VALUE_LEN] + "…[truncated]"
     if isinstance(value, dict):
         return {

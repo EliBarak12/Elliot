@@ -18,7 +18,6 @@ from elliot_mcp_plugin.session import ElliotSession
 log = structlog.get_logger(__name__)
 
 session = ElliotSession(cwd=os.environ.get("ELLIOT_WORKSPACE", "."))
-session.load()
 
 mcp = create_elliot_server(session)
 # Initialize the session manager by calling streamable_http_app once at module level
@@ -31,6 +30,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # ELLIOT_ENV is production/staging; otherwise log a warning. The helper
     # itself decides which.
     enforce_auth_configured("mcp-plugin")
+    # Load session state at startup, not import time, so merely importing
+    # this module (tests, tooling) performs no disk I/O.
+    session.load()
     async with mcp.session_manager.run():
         yield
     session.save()

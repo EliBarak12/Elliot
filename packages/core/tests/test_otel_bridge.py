@@ -98,7 +98,7 @@ def test_processor_starts_span_on_start_event():
 
     proc(None, "info", _make_event("tool.call.start", connector="my-connector", category="READ"))
     mock_tracer.start_span.assert_called_once()
-    assert mock_tracer.start_span.call_args[0][0] == "mcp.tool.call"
+    assert mock_tracer.start_span.call_args[0][0] == "execute_tool search_users"
 
 
 def test_processor_ends_span_on_complete_event():
@@ -115,9 +115,9 @@ def test_processor_ends_span_on_complete_event():
     proc(None, "info", _make_event("tool.call.complete", output_tokens=120, input_tokens=40))
 
     mock_span.end.assert_called_once()
-    mock_span.set_attribute.assert_any_call("tool.output_tokens", 120)
-    mock_span.set_attribute.assert_any_call("tool.input_tokens", 40)
-    mock_span.set_attribute.assert_any_call("tool.is_error", False)
+    mock_span.set_attribute.assert_any_call("gen_ai.usage.output_tokens", 120)
+    mock_span.set_attribute.assert_any_call("gen_ai.usage.input_tokens", 40)
+    mock_span.set_status.assert_called_once_with("OK")
 
 
 def test_processor_ends_span_with_error():
@@ -136,8 +136,8 @@ def test_processor_ends_span_with_error():
     )
 
     mock_span.end.assert_called_once()
-    mock_span.set_attribute.assert_any_call("tool.is_error", True)
-    mock_span.set_attribute.assert_any_call("tool.error_code", "EXEC_TIMEOUT")
+    mock_span.set_attribute.assert_any_call("error.type", "EXEC_TIMEOUT")
+    mock_span.set_status.assert_called_once_with("ERROR", "timeout")
 
 
 def test_processor_end_without_start_is_noop():
@@ -168,6 +168,28 @@ def test_processor_ignores_unrelated_events():
     proc(None, "info", _make_event("session.opened"))
     mock_tracer.start_span.assert_not_called()
     mock_span.end.assert_not_called()
+
+
+def test_processor_sweeps_orphaned_spans():
+    """A span whose end event never arrives is ended by the orphan sweep."""
+    mock_otel_pkg, mock_trace, mock_tracer, mock_span = _build_mock_otel()
+    second_span = MagicMock()
+    mock_tracer.start_span.side_effect = [mock_span, second_span]
+
+    with patch.dict(
+        sys.modules, {"opentelemetry": mock_otel_pkg, "opentelemetry.trace": mock_trace}
+    ):
+        import elliot_core.otel_bridge as bridge_mod
+
+        proc = bridge_mod.build_otel_processor()
+
+    # Each start event calls time.time() twice (sweep + store).
+    with patch.object(bridge_mod.time, "time", side_effect=[0.0, 0.0, 1000.0, 1000.0]):
+        proc(None, "info", _make_event("tool.call.start"))
+        proc(None, "info", {"event": "tool.call.start", "tool_id": "other", "session_id": "s2"})
+
+    # The first span outlived _ORPHAN_TTL_S and was force-ended by the sweep.
+    mock_span.end.assert_called_once()
 
 
 def test_processor_uses_tool_name_fallback():

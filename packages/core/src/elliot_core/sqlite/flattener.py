@@ -3,9 +3,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from elliot_core.sqlite.column_namer import deduplicate_names, safe_name
+import structlog
+
+from elliot_core.sqlite.column_namer import disambiguate, safe_name
 from elliot_core.sqlite.type_inferrer import infer_column_type
 from elliot_core.types.sqlite import ColumnMeta, FlattenedTable, FlattenResult, FlattenWarning
+
+log = structlog.get_logger(__name__)
 
 MAX_DEPTH = 5
 MAX_ARRAY_ROWS = 1000
@@ -94,7 +98,16 @@ def _flatten_obj(
     (assigned by the caller before recursing); list-of-objects fields
     pass it down as ``parent_id`` so each child row can reference its
     specific parent. Nested-object fields inline into this row, so they
-    don't get their own id/parent_id."""
+    don't get their own id/parent_id.
+
+    A per-row ``seen`` map disambiguates column-name collisions on the
+    fly: two source keys that normalize to the same SQL-safe column name
+    (``"my-col"`` and ``"my_col"`` → both ``"my_col"``) or a nested
+    field whose flat form collides with a sibling top-level key (``a.b``
+    vs ``a_b``) are emitted as ``my_col`` and ``my_col_2`` so no value
+    is silently overwritten. ``_build_columns`` will encounter both row
+    keys directly and schema/row stay aligned.
+    """
     if not isinstance(obj, dict):
         return {"value": _scalar(obj)}
 
@@ -110,8 +123,15 @@ def _flatten_obj(
 
     visited = visited | {id(obj)}
     row: dict[str, Any] = {}
+    # ``seen`` tracks every key already added to this row dict. Every write
+    # goes through ``_assign_key`` which calls ``disambiguate`` against this
+    # same map — so a collision produces ``foo_2`` / ``foo_3`` and never
+    # overwrites a value. ``_build_columns`` reads row keys directly, so
+    # schema and row stay aligned automatically.
+    seen: dict[str, int] = {}
+    collisions: list[str] = []
     if parent_id is not None:
-        row["_parent_id"] = parent_id
+        _assign_key(row, seen, "_parent_id", parent_id, collisions)
 
     for key, value in obj.items():
         col = safe_name(key)
@@ -123,13 +143,54 @@ def _flatten_obj(
             depth,
             visited,
             row,
+            seen,
+            collisions,
             child_tables,
             warnings,
             my_id=my_id,
             counters=counters,
         )
 
+    if collisions:
+        # Count-only — never log the values (PII / secrets sacred-cow).
+        log.warning(
+            "flatten.column_collision_disambiguated",
+            path=warning_path,
+            table=table_name,
+            collisions=len(collisions),
+        )
+
     return row
+
+
+def _assign_key(
+    row: dict[str, Any],
+    seen: dict[str, int],
+    desired: str,
+    value: Any,
+    collisions: list[str],
+) -> str:
+    """Insert ``value`` under ``desired`` (or a disambiguated suffix on
+    collision) and return the actual key used.
+
+    This is the *only* place that writes into ``row``. Centralizing it
+    means every code path — top-level scalar, nested-object inlined
+    sub-key, array-of-primitives JSON column, fallback ``json.dumps`` —
+    goes through the same disambiguation table. There is no way to
+    silently overwrite an earlier value.
+
+    The same ``seen`` dict is later inspected by ``_build_columns`` (via
+    the row keys themselves) so schema and row keys stay aligned by
+    construction.
+    """
+    actual = disambiguate(desired, seen)
+    row[actual] = value
+    if actual != desired:
+        # Track collisions for a single aggregated warning per row.
+        # Append the *desired* (not actual) name — caller logs counts
+        # only, never the column names or values.
+        collisions.append(desired)
+    return actual
 
 
 def _process_field(
@@ -140,6 +201,8 @@ def _process_field(
     depth: int,
     visited: frozenset[int],
     row: dict[str, Any],
+    seen: dict[str, int],
+    collisions: list[str],
     child_tables: dict[str, list[dict[str, Any]]],
     warnings: list[FlattenWarning],
     *,
@@ -149,7 +212,7 @@ def _process_field(
     field_path = f"{warning_path}.{col}"
 
     if value is None or isinstance(value, (str, int, float, bool)):
-        row[col] = _scalar(value)
+        _assign_key(row, seen, col, _scalar(value), collisions)
 
     elif isinstance(value, dict):
         if depth >= MAX_DEPTH:
@@ -160,7 +223,7 @@ def _process_field(
                     message=f"Depth limit {MAX_DEPTH} exceeded at {field_path}, serialized as TEXT",
                 )
             )
-            row[col] = json.dumps(value)
+            _assign_key(row, seen, col, json.dumps(value), collisions)
         elif len(value) > _MAX_INLINE_KEYS:
             warnings.append(
                 FlattenWarning(
@@ -172,7 +235,7 @@ def _process_field(
                     ),
                 )
             )
-            row[col] = json.dumps(value)
+            _assign_key(row, seen, col, json.dumps(value), collisions)
         elif id(value) in visited:
             warnings.append(
                 FlattenWarning(
@@ -181,7 +244,7 @@ def _process_field(
                     message=f"Circular reference at {field_path}",
                 )
             )
-            row[col] = "[Circular]"
+            _assign_key(row, seen, col, "[Circular]", collisions)
         else:
             child_table_name = f"{table_name}_{col}"
             # Nested *object* (not array) — its fields inline into the
@@ -200,8 +263,11 @@ def _process_field(
                 my_id=my_id,
                 counters=counters,
             )
+            # Inlined sub-keys go through ``_assign_key`` too, so a
+            # flat form (``a_b``) that collides with a sibling top-level
+            # key gets disambiguated rather than silently overwriting.
             for sub_key, sub_val in sub.items():
-                row[f"{col}_{sub_key}"] = sub_val
+                _assign_key(row, seen, f"{col}_{sub_key}", sub_val, collisions)
 
     elif isinstance(value, list):
         child_name = f"{table_name}_{col}"
@@ -211,7 +277,7 @@ def _process_field(
                 child_tables[child_name] = []
         elif all(isinstance(item, (str, int, float, bool, type(None))) for item in value):
             # Rule 3: array of primitives → JSON TEXT
-            row[col] = json.dumps(value)
+            _assign_key(row, seen, col, json.dumps(value), collisions)
         else:
             # Rule 4: array of objects → child table
             items: list[Any] = value
@@ -252,12 +318,20 @@ def _process_field(
                 child_tables[child_name].append(child_row)
     else:
         try:
-            row[col] = json.dumps(value)
+            _assign_key(row, seen, col, json.dumps(value), collisions)
         except (TypeError, ValueError):
-            row[col] = str(value)
+            _assign_key(row, seen, col, str(value), collisions)
 
 
 def _build_columns(rows: list[dict[str, Any]]) -> list[ColumnMeta]:
+    """Build column metadata directly from row keys.
+
+    Row keys are already disambiguated by ``_assign_key`` during
+    flattening (one source of truth), so we deliberately DO NOT run
+    ``deduplicate_names`` here — doing so would re-suffix already-
+    suffixed keys (``foo_2`` → ``foo_2_2``) and re-introduce the silent
+    drift between schema and row dicts that this module guards against.
+    """
     if not rows:
         return []
     keys: list[str] = []
@@ -265,10 +339,9 @@ def _build_columns(rows: list[dict[str, Any]]) -> list[ColumnMeta]:
         for k in row:
             if k not in keys:
                 keys.append(k)
-    deduped = deduplicate_names(keys)
     columns: list[ColumnMeta] = []
-    for original, name in zip(keys, deduped, strict=True):
-        samples = [row.get(original) for row in rows]
+    for name in keys:
+        samples = [row.get(name) for row in rows]
         sqlite_type = infer_column_type(samples)
         nullable = any(s is None for s in samples)
         columns.append(ColumnMeta(name=name, sqlite_type=sqlite_type, nullable=nullable))

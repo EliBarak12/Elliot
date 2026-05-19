@@ -820,7 +820,10 @@ def create_app(
     connector_path: str | None = None,
     secrets: dict[str, str] | None = None,
 ) -> FastAPI:
-    connector_path = connector_path or os.environ.get("ELLIOT_CONNECTOR", "connector.json")
+    # Default MUST match where elliot_export_connector writes and where
+    # elliot_start_runtime points (.elliot/connector.json) — otherwise the
+    # runtime looks in the wrong place and starts with no connector.
+    connector_path = connector_path or os.environ.get("ELLIOT_CONNECTOR", ".elliot/connector.json")
     secrets = secrets or {}
     audit_path = os.environ.get("ELLIOT_AUDIT_LOG", ".elliot/audit.ndjson")
     sessions_path = os.environ.get("ELLIOT_SESSIONS_LOG", ".elliot/sessions.ndjson")
@@ -829,12 +832,41 @@ def create_app(
     try:
         config = _cache.get(connector_path)
     except ConnectorLoadError:
-        # Connector not yet available — return a minimal app so the module can be imported.
-        _app = FastAPI()
+        # No connector at this path yet. Return a minimal app so the module
+        # still imports — but mount /mcp so clients get an actionable 503
+        # instead of a bare 404, and re-check the connector on every /health
+        # call so an operator can see once one becomes available.
+        _app = FastAPI(redirect_slashes=False)
+        _path = connector_path or ""
+
+        def _no_connector_error() -> dict[str, dict[str, str]]:
+            return {
+                "error": {
+                    "code": "RUNTIME_NO_CONNECTOR",
+                    "message": (
+                        f"The connector runtime has no connector loaded (looked for "
+                        f"'{_path}'). Build and export a connector with "
+                        f"elliot_build_connector + elliot_export_connector, then start "
+                        f"the runtime with elliot_start_runtime."
+                    ),
+                }
+            }
 
         @_app.get("/health")
         async def _health() -> dict[str, str]:
-            return {"status": "no_connector", "connector": connector_path or ""}
+            try:
+                _cache.get(_path)
+            except ConnectorLoadError:
+                return {"status": "no_connector", "connector": _path}
+            # A connector has appeared since startup — the runtime must be
+            # restarted (elliot_start_runtime) to actually serve it.
+            return {"status": "connector_available", "connector": _path}
+
+        @_app.api_route("/mcp", methods=["GET", "POST", "DELETE", "OPTIONS"])
+        @_app.api_route("/mcp/", methods=["GET", "POST", "DELETE", "OPTIONS"])
+        @_app.api_route("/mcp/{rest:path}", methods=["GET", "POST", "DELETE", "OPTIONS"])
+        async def _mcp_unavailable() -> JSONResponse:
+            return JSONResponse(status_code=503, content=_no_connector_error())
 
         return _app
 

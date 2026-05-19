@@ -903,3 +903,40 @@ def test_read_tool_does_not_require_confirmation_even_when_enabled(
     assert "confirm" not in sig.parameters
     # No exception
     asyncio.run(tool.fn())
+
+
+# ---------------------------------------------------------------------------
+# No-connector fallback app
+# ---------------------------------------------------------------------------
+
+
+def test_no_connector_app_health_reports_missing(tmp_path: Path) -> None:
+    """When the connector path does not exist, /health says no_connector."""
+    missing = tmp_path / "absent" / "connector.json"
+    app = create_app(connector_path=str(missing), secrets={})
+    client = TestClient(app)
+    body = client.get("/health").json()
+    assert body["status"] == "no_connector"
+    assert body["connector"] == str(missing)
+
+
+def test_no_connector_app_mcp_returns_503_not_404(tmp_path: Path) -> None:
+    """The /mcp endpoint must exist even with no connector — clients should
+    get an actionable 503, never a bare 404 that looks like a broken URL."""
+    missing = tmp_path / "absent" / "connector.json"
+    app = create_app(connector_path=str(missing), secrets={})
+    client = TestClient(app)
+    resp = client.post("/mcp/", json={"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "RUNTIME_NO_CONNECTOR"
+
+
+def test_no_connector_app_health_flips_when_connector_appears(tmp_path: Path) -> None:
+    """Once a connector is written to the watched path, /health surfaces it."""
+    path = tmp_path / "later.connector.json"
+    app = create_app(connector_path=str(path), secrets={})
+    client = TestClient(app)
+    assert client.get("/health").json()["status"] == "no_connector"
+
+    path.write_text(json.dumps(MINIMAL_CONNECTOR))
+    assert client.get("/health").json()["status"] == "connector_available"

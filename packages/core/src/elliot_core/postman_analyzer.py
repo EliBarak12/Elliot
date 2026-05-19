@@ -50,13 +50,17 @@ def analyze_postman(collection: dict[str, Any] | str) -> ProposedConnector:
     title = str(info.get("name", "My API"))
     slug = _slugify(title)
 
+    # Collection-level variables ({{baseUrl}}, {{apiVersion}}, ...) are
+    # substituted into URLs so requests resolve to real paths/hosts.
+    variables = _collection_variables(data)
+
     requests: list[dict[str, Any]] = []
     _walk_items(data.get("item", []), requests)
 
     tools: list[ProposedTool] = []
     seen: set[str] = set()
     for req in requests:
-        tool = _build_tool(req)
+        tool = _build_tool(req, variables)
         if tool is None:
             continue
         tool_id = tool.id
@@ -67,13 +71,13 @@ def analyze_postman(collection: dict[str, Any] | str) -> ProposedConnector:
         seen.add(tool.id)
         tools.append(tool)
 
-    base_url = _detect_base_url(requests)
+    base_url = _detect_base_url(requests, variables)
     source = ProposedSource(
         id="api",
         name=title,
         type="rest",
         base_url=base_url,
-        auth_hint=_detect_auth(data),
+        auth_hint=_detect_auth(data, requests),
     )
 
     warnings: list[str] = []
@@ -110,14 +114,32 @@ def _walk_items(items: list[Any], out: list[dict[str, Any]]) -> None:
             out.append(item)
 
 
-def _build_tool(item: dict[str, Any]) -> ProposedTool | None:
+def _collection_variables(data: dict[str, Any]) -> dict[str, str]:
+    """Build a {name: value} map from the collection's variable array."""
+    out: dict[str, str] = {}
+    for v in data.get("variable", []) or []:
+        if isinstance(v, dict) and v.get("key"):
+            out[str(v["key"])] = str(v.get("value", ""))
+    return out
+
+
+def _resolve_vars(text: str, variables: dict[str, str]) -> str:
+    """Substitute {{var}} placeholders; unknown placeholders are left intact."""
+
+    def _repl(m: re.Match[str]) -> str:
+        return variables.get(m.group(1).strip(), m.group(0))
+
+    return re.sub(r"\{\{\s*([^}]+?)\s*\}\}", _repl, text)
+
+
+def _build_tool(item: dict[str, Any], variables: dict[str, str]) -> ProposedTool | None:
     request = item["request"]
     method = str(request.get("method", "GET")).upper()
     if method not in _CATEGORY_BY_METHOD:
         return None
 
     url = request.get("url", {})
-    raw_url, path, query_keys, path_vars = _parse_url(url)
+    raw_url, path, query_keys, path_vars = _parse_url(url, variables)
     name = str(item.get("name") or f"{method} {path}").strip()
     tool_id = _to_snake(name) or _to_snake(f"{method}_{path}")
     description = _ensure_verb_first(_request_description(request, item, method, path))
@@ -168,18 +190,18 @@ def _build_tool(item: dict[str, Any]) -> ProposedTool | None:
     )
 
 
-def _parse_url(url: Any) -> tuple[str, str, list[str], list[str]]:
+def _parse_url(url: Any, variables: dict[str, str]) -> tuple[str, str, list[str], list[str]]:
     """Return (raw_url, path, query_keys, path_variable_names)."""
     if isinstance(url, str):
-        raw = url
+        raw = _resolve_vars(url, variables)
         path = _path_from_raw(raw)
         return raw, path, [], _path_vars_from_path(path)
     if not isinstance(url, dict):
         return "", "", [], []
-    raw = str(url.get("raw", ""))
+    raw = _resolve_vars(str(url.get("raw", "")), variables)
     segments = url.get("path", [])
     if isinstance(segments, list):
-        path = "/" + "/".join(str(s) for s in segments)
+        path = "/" + "/".join(_resolve_vars(str(s), variables) for s in segments)
     else:
         path = _path_from_raw(raw)
     query_keys = [
@@ -248,27 +270,35 @@ def _request_description(
     return desc or f"{method} {path}"
 
 
-def _detect_base_url(requests: list[dict[str, Any]]) -> str:
+def _detect_base_url(requests: list[dict[str, Any]], variables: dict[str, str]) -> str:
     for item in requests:
         url = item["request"].get("url", {})
         raw = url if isinstance(url, str) else str(url.get("raw", ""))
-        match = re.match(r"(https?://[^/]+)", raw)
+        match = re.match(r"(https?://[^/]+)", _resolve_vars(raw, variables))
         if match:
             return match.group(1)
     return ""
 
 
-def _detect_auth(collection: dict[str, Any]) -> str | None:
-    auth = collection.get("auth", {})
-    if not isinstance(auth, dict):
-        return None
-    auth_type = auth.get("type")
-    if auth_type == "bearer":
-        return "bearer"
-    if auth_type == "apikey":
-        return "api_key"
-    if auth_type == "basic":
-        return "basic"
+_AUTH_TYPE_HINT = {"bearer": "bearer", "apikey": "api_key", "basic": "basic", "oauth2": "oauth2"}
+
+
+def _auth_hint_from_block(auth: Any) -> str | None:
+    if isinstance(auth, dict):
+        return _AUTH_TYPE_HINT.get(str(auth.get("type", "")))
+    return None
+
+
+def _detect_auth(collection: dict[str, Any], requests: list[dict[str, Any]]) -> str | None:
+    # Collection-level auth is the common case; fall back to the first
+    # request that declares its own auth block.
+    hint = _auth_hint_from_block(collection.get("auth"))
+    if hint:
+        return hint
+    for item in requests:
+        hint = _auth_hint_from_block(item.get("request", {}).get("auth"))
+        if hint:
+            return hint
     return None
 
 

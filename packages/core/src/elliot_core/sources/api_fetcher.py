@@ -48,7 +48,27 @@ def _pinned_hosts(url: str, ips: list[str]) -> dict[str, str] | None:
     return {host: ips[0]} if (host and ips) else None
 
 
-_ENV_VAR_NAME = __import__("re").compile(r"^[A-Z][A-Z0-9_]*$")
+_ENV_VAR_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def _retry_after_seconds(value: str | None, fallback: float) -> float:
+    """Parse a Retry-After header, which may be a delay in seconds or an
+    HTTP-date. Falls back to ``fallback`` for missing/unparseable values."""
+    if not value:
+        return fallback
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+
+        when = parsedate_to_datetime(value)
+    except (ValueError, TypeError):
+        return fallback
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return max(0.0, (when - datetime.now(UTC)).total_seconds())
 
 
 def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
@@ -67,8 +87,6 @@ def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
       ``elliot_core.secrets.resolve_secrets`` has already replaced a
       ``{{ env:VAR }}`` template at load time with the resolved value.
     """
-    import os
-
     if key.startswith("{{ env:") and key.endswith(" }}"):
         env_var = key[len("{{ env:") : -len(" }}")].strip()
         return secrets.get(env_var) or secrets.get(env_var.lower()) or os.environ.get(env_var, "")
@@ -202,7 +220,9 @@ async def fetch_endpoint(config: SourceConfig, secrets: dict[str, str]) -> Fetch
                             f"fetching {redact_url(config.url)}"
                         )
                     retry_budget -= 1
-                    delay = min(float(resp.headers.get("Retry-After", 2**attempt)), 30)
+                    delay = min(
+                        _retry_after_seconds(resp.headers.get("Retry-After"), 2**attempt), 30
+                    )
                     await asyncio.sleep(delay)
                     continue
                 break
@@ -243,7 +263,11 @@ async def fetch_endpoint(config: SourceConfig, secrets: dict[str, str]) -> Fetch
                     break
                 page += 1
             elif pagination.strategy == "cursor":
-                cursor = data.get("next_cursor") or data.get(pagination.cursor_field or "cursor")
+                cursor = (
+                    data.get("next_cursor") or data.get(pagination.cursor_field or "cursor")
+                    if isinstance(data, dict)
+                    else None
+                )
                 if not cursor:
                     break
             elif pagination.strategy == "link_header":

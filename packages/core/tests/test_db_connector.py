@@ -41,6 +41,14 @@ def _make_engine_mock(rows: list[dict[str, object]]) -> MagicMock:
 _PATCH_ENGINE = "sqlalchemy.create_engine"
 
 
+@pytest.fixture(autouse=True)
+def _clear_engine_cache() -> None:
+    """Engines are cached by DSN; clear the cache so each test sees its own mock."""
+    from elliot_core.sources import db_connector
+
+    db_connector._engine_cache.clear()
+
+
 class TestQueryDatabase:
     def test_table_generates_select_sql(self) -> None:
         from elliot_core.sources.db_connector import query_database
@@ -134,33 +142,31 @@ class TestQueryDatabase:
         ):
             query_database(source, {})
 
-    def test_engine_dispose_called_on_success(self) -> None:
+    def test_engine_cached_and_reused_across_queries(self) -> None:
+        """The Engine is created once per DSN and reused, not rebuilt per query."""
         from elliot_core.sources.db_connector import query_database
 
         source = _pg_source(url="postgresql://localhost/test", table="users")
         engine = _make_engine_mock([{"id": 1}])
 
-        with patch(_PATCH_ENGINE, return_value=engine):
+        with patch(_PATCH_ENGINE, return_value=engine) as ce:
+            query_database(source, {})
             query_database(source, {})
 
-        engine.dispose.assert_called_once()
+        ce.assert_called_once()
 
-    def test_engine_dispose_called_on_failure(self) -> None:
+    def test_create_engine_failure_raises_source_fetch_error(self) -> None:
+        """A bad DSN that makes create_engine raise surfaces as SourceFetchError,
+        not a NameError from a finally block referencing an unbound engine."""
         from elliot_core.sources.db_connector import query_database
 
         source = _pg_source(url="postgresql://localhost/test", table="users")
-        engine_mock = MagicMock()
-        conn_mock = MagicMock()
-        conn_mock.__enter__ = MagicMock(return_value=conn_mock)
-        conn_mock.__exit__ = MagicMock(return_value=False)
-        conn_mock.execute.side_effect = Exception("timeout")
-        engine_mock.connect.return_value = conn_mock
-        engine_mock.dispose = MagicMock()
 
-        with patch(_PATCH_ENGINE, return_value=engine_mock), pytest.raises(SourceFetchError):
+        with (
+            patch(_PATCH_ENGINE, side_effect=Exception("bad dsn")),
+            pytest.raises(SourceFetchError, match="Query failed"),
+        ):
             query_database(source, {})
-
-        engine_mock.dispose.assert_called_once()
 
     def test_mysql_source_uses_same_code_path(self) -> None:
         from elliot_core.sources.db_connector import query_database

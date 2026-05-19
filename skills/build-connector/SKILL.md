@@ -52,13 +52,35 @@ Use `elliot_query_sql` to run sample queries and understand what columns exist.
 Do this before designing tools — never guess field names.
 
 ### 4. Design tools (one per agent operation)
+
+**Design domain tools, not endpoint wrappers.** A tool should answer a real
+question the user's product cares about — "revenue by month", "customers at
+churn risk", "open tickets for this account" — not just mirror one API route
+or one table. Name and shape each tool around the *job*, not the data layout.
+
+**Cover the whole source.** Walk every table, endpoint, and file that
+`elliot_discover_source` surfaced and make sure the tool set reaches every
+entity and operation an agent would realistically need across the user's API,
+database, or files. A connector that exposes only the first table is
+incomplete — map the full domain.
+
+**Make tools calculate and aggregate — don't dump rows.** When the agent's
+real question is "how many", "what's the total", "what's the average", "which
+are the top N", or "break this down by X", answer it *inside the tool* with
+SQL `COUNT`, `SUM`, `AVG`, `MIN`/`MAX`, `GROUP BY`, and `ORDER BY ... LIMIT`.
+Return the computed answer, not the raw table. An aggregation tool is both
+more useful to the agent and far cheaper in tokens than a row dump it would
+have to count itself. Pair a few raw "list/get" tools with several
+aggregation/metric tools so the agent rarely has to post-process data.
+
 For each tool call `elliot_create_tool`:
-- `description` MUST start with a verb: "List", "Search", "Get", "Create", "Update", "Delete"
+- `description` MUST start with a verb: "List", "Search", "Get", "Count", "Summarize", "Create", "Update", "Delete"
 - Include: what it returns, when to use it, key constraints
 - Set `limit` to 20–50 for list tools — never return all rows unfiltered
-- Use `category`: READ for queries, WRITE for inserts/updates, ACTION for operations
+- Use `category`: READ for queries (including aggregations), WRITE for inserts/updates, ACTION for operations
 - Add typed `parameters` with clear names (prefer `user_id` over `user`, `start_date` over `from`)
 - For constrained strings, add `enum` values
+- Prefer returning a small computed result (counts, totals, grouped rows) over a large raw set
 
 **SQL conventions** — the runtime executes against in-memory SQLite:
 - Reference parameters with a **colon prefix**: `WHERE plan = :plan` — declare
@@ -89,7 +111,7 @@ For each tool call `elliot_create_tool`:
 Example good description:
 > "Search customers by name or email. Use before create_customer to avoid duplicates. Returns id, name, email, plan. Max 20 results."
 
-Example good SQL:
+Example good SQL — a raw list tool:
 ```sql
 SELECT id, name, email, plan
 FROM "users"
@@ -97,6 +119,20 @@ WHERE (:plan IS NULL OR plan = :plan)
   AND status = 'active'
 ORDER BY mrr DESC
 LIMIT 20
+```
+
+Example good SQL — an aggregation tool (`Summarize revenue by plan`). It
+returns one short row per plan instead of every user, so the agent gets the
+answer directly:
+```sql
+SELECT plan,
+       COUNT(*)        AS customers,
+       SUM(mrr)        AS total_mrr,
+       ROUND(AVG(mrr)) AS avg_mrr
+FROM "users"
+WHERE status = 'active'
+GROUP BY plan
+ORDER BY total_mrr DESC
 ```
 
 After creating each tool, call `elliot_preview_tool` with its id to run its
@@ -128,15 +164,23 @@ http://localhost:5173 to exercise each tool.
 Hold the build to this bar — it is what `elliot_lint_connector` and
 `elliot_quality_scan` measure, and what the audit sub-agents will exercise:
 
-- **One tool per agent job, not per API endpoint.** Fewer, sharper tools beat
-  a thin wrapper around every route. If two endpoints serve one job, expose one
-  tool.
+- **Domain tools, not endpoint or table wrappers.** Each tool answers a real
+  question the product cares about or performs a real operation. "Summarize
+  revenue by plan" beats "dump the users table". If two endpoints serve one
+  job, expose one tool.
+- **The set covers the whole source.** The tools span every entity and
+  operation an agent would realistically need across the user's API, database,
+  or files — not just the first table the discovery surfaced.
+- **Calculation and aggregation live in the tools.** Counts, totals, averages,
+  top-N, and grouped breakdowns are computed in SQL and returned ready to use,
+  so the agent gets answers instead of raw data to post-process.
 - **Every description is a contract.** It starts with a verb, says what the
   tool returns, when to use it, and its key limit — written for an agent that
   has never seen the API.
 - **Results are sized for a context window.** Every READ tool has a LIMIT and
-  an explicit column list (never `SELECT *`). A typical call should return well
-  under ~1000 tokens.
+  an explicit column list (never `SELECT *`); aggregation tools return a
+  handful of computed rows. A typical call should return well under ~1000
+  tokens.
 - **Parameters are typed and specific.** `user_id` not `user`, `start_date`
   not `from`; `enum` values for constrained strings; required vs. optional set
   deliberately.

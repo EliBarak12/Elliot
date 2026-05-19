@@ -45,10 +45,15 @@ Ask these questions, one topic at a time, in plain language. Wait for answers.
 Record the answers with `elliot_record_product_intent`.
 
 ### 3. Propose the tool set
-Map each job-to-be-done to one tool. Cross-check against the imported
-collection and the intent. Present the proposed tool list to the user with a
-one-line rationale per tool, and **confirm with them** before building. Drop
-anything agents don't need — fewer, sharper tools beat many.
+Map each job-to-be-done to one **domain tool** — named for the job, not the
+API route. Where a job is a question ("how many", "what's the total", "top
+accounts", "breakdown by month"), propose an aggregation tool that computes
+the answer in SQL rather than a tool that dumps raw rows. Make sure the set
+spans the whole source — every entity and operation agents need across the
+user's API, DB, or files. Cross-check against the imported collection and the
+intent. Present the proposed tool list to the user with a one-line rationale
+per tool, and **confirm with them** before building. Drop anything agents
+don't need — fewer, sharper tools beat many.
 
 ### 4. Build the connector
 Follow the `build-connector` prompt to discover the source, explore the data

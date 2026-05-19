@@ -12,10 +12,20 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from elliot_core.auth_middleware import ApiKeyMiddleware, enforce_auth_configured
 from elliot_core.http_middleware import AgentIdentityMiddleware
+from elliot_mcp_plugin import __version__
 from elliot_mcp_plugin.server import create_elliot_server
 from elliot_mcp_plugin.session import ElliotSession
 
 log = structlog.get_logger(__name__)
+
+# Static service identity returned by the unauthenticated health endpoints.
+# Docker compose runs `curl -f http://localhost:3000/healthz` as the plugin
+# healthcheck (see docker-compose.yml); without this route compose would hang
+# `depends_on: condition: service_healthy` and Studio would never start. We
+# expose both `/healthz` (Kubernetes/compose convention) and `/health` (the
+# shape the connector-runtime already serves) so the Studio monitor can probe
+# either service uniformly.
+_SERVICE_NAME = "mcp-plugin"
 
 session = ElliotSession(cwd=os.environ.get("ELLIOT_WORKSPACE", "."))
 
@@ -62,5 +72,24 @@ app.add_middleware(
     ],
     allow_methods=["GET", "POST", "OPTIONS", "DELETE"],
 )
+
+
+@app.get("/healthz")
+@app.get("/health")
+async def healthz() -> dict[str, str]:
+    """Liveness probe — unauthenticated, no session/connector dependency.
+
+    Returns 200 + a small JSON document the moment the ASGI app is up. Used by
+    the docker-compose healthcheck (`curl -f http://localhost:3000/healthz`)
+    and by Studio's service monitor. Must not touch the ElliotSession,
+    connectors, or any external dependency: a liveness probe answers
+    "is this process accepting connections" and nothing more.
+
+    The ApiKeyMiddleware bypass list (`elliot_core.auth_middleware._BYPASS_PATHS`)
+    already contains both `/healthz` and `/health`, so this route is reachable
+    with no `X-Elliot-Key` header even when `ELLIOT_API_KEY` is set.
+    """
+    return {"status": "ok", "service": _SERVICE_NAME, "version": __version__}
+
 
 app.mount("/mcp", _mcp_app)

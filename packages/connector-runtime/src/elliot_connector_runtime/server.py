@@ -21,6 +21,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 
@@ -357,20 +358,22 @@ def _register_tool(
     run_async: bool = getattr(td, "run_async", False)
     require_confirmation = is_destructive and _require_destructive_confirmation()
 
-    def _observe(
+    def _observe_blocking(
         tool_id: str,
         arguments: dict[str, Any],
         result_rows: list[dict[str, Any]],
         duration_ms: float,
         error: str | None,
         session_id: str | None,
+        identity: Any,
     ) -> None:
-        """Record one tool call to audit log, session tracker, and observation store."""
+        """Record one tool call to audit log, session tracker, and observation
+        store. All three do blocking I/O (file appends, synchronous SQLAlchemy
+        writes), so this runs in a worker thread — never on the event loop."""
         row_count = len(result_rows)
         if audit is not None:
             with contextlib.suppress(Exception):
                 audit.record(tool_id, arguments, row_count, duration_ms, error=error)
-        identity = get_current_agent_identity()
         identity_payload = _identity_payload(identity)
         agent_hint = _agent_hint_from_identity(identity)
         token_estimate = 0
@@ -422,6 +425,28 @@ def _register_tool(
                     # SessionTracker lifecycle), so the observation-store
                     # rollup reflects a completed run, not a single call.
 
+    async def _observe(
+        tool_id: str,
+        arguments: dict[str, Any],
+        result_rows: list[dict[str, Any]],
+        duration_ms: float,
+        error: str | None,
+        session_id: str | None,
+    ) -> None:
+        """Capture the request-scoped agent identity, then offload the blocking
+        audit/tracker/observation-store writes to a worker thread."""
+        identity = get_current_agent_identity()
+        await run_in_threadpool(
+            _observe_blocking,
+            tool_id,
+            arguments,
+            result_rows,
+            duration_ms,
+            error,
+            session_id,
+            identity,
+        )
+
     async def _handler(**kwargs: Any) -> dict[str, Any]:
         import time
 
@@ -471,7 +496,7 @@ def _register_tool(
                     ),
                     {"tool_id": td.id, "category": td.category},
                 )
-                _observe(td.id, kwargs, [], 0.0, str(exc), session_id)
+                await _observe(td.id, kwargs, [], 0.0, str(exc), session_id)
                 error_content = to_mcp_error_content(exc)
                 raise ValueError(error_content["text"])
         else:
@@ -503,7 +528,7 @@ def _register_tool(
         try:
             result = await executor.execute(td, kwargs)
             duration_ms = round((time.monotonic() - t0) * 1000, 1)
-            _observe(td.id, kwargs, result.rows, duration_ms, None, session_id)
+            await _observe(td.id, kwargs, result.rows, duration_ms, None, session_id)
             if ctx is not None:
                 with contextlib.suppress(Exception):
                     await ctx.info(
@@ -528,7 +553,7 @@ def _register_tool(
                 if isinstance(exc, ElliotError)
                 else ElliotError("TOOL_EXECUTION_ERROR", str(exc))
             )
-            _observe(td.id, kwargs, [], duration_ms, str(elliot_exc), session_id)
+            await _observe(td.id, kwargs, [], duration_ms, str(elliot_exc), session_id)
             error_content = to_mcp_error_content(elliot_exc)
             if ctx is not None:
                 with contextlib.suppress(Exception):
@@ -966,31 +991,37 @@ def create_app(
             )
             for ev in payload.events
         ]
-        tracker.append_ingested(
-            session_id,
-            identity,
-            events,
-            user_prompt=payload.user_prompt,
-            final_output=payload.final_output,
-        )
-        with contextlib.suppress(Exception):
-            store.open_session(
+
+        def _persist() -> None:
+            """Tracker + observation-store writes are blocking I/O — keep them
+            off the event loop so a large ingest can't stall the server."""
+            tracker.append_ingested(
                 session_id,
-                agent_hint=payload.harness,
-                connector_slug=slug,
-                agent_identity=identity,
+                identity,
+                events,
+                user_prompt=payload.user_prompt,
+                final_output=payload.final_output,
             )
-            for ev in payload.events:
-                store.write_tool_call(
-                    session_id=session_id,
-                    tool_id=ev.tool_id,
-                    arguments=ev.arguments,
-                    result_row_count=ev.result_rows,
-                    result_token_estimate=ev.result_token_estimate,
-                    duration_ms=ev.duration_ms,
-                    error=ev.error,
+            with contextlib.suppress(Exception):
+                store.open_session(
+                    session_id,
+                    agent_hint=payload.harness,
                     connector_slug=slug,
+                    agent_identity=identity,
                 )
+                for ev in payload.events:
+                    store.write_tool_call(
+                        session_id=session_id,
+                        tool_id=ev.tool_id,
+                        arguments=ev.arguments,
+                        result_row_count=ev.result_rows,
+                        result_token_estimate=ev.result_token_estimate,
+                        duration_ms=ev.duration_ms,
+                        error=ev.error,
+                        connector_slug=slug,
+                    )
+
+        await run_in_threadpool(_persist)
         return {"status": "ok", "session_id": session_id, "events": len(events)}
 
     @app.get("/v1/metrics/token-efficiency")

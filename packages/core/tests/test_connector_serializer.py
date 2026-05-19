@@ -79,3 +79,27 @@ def test_to_openai_function_required_params():
     )
     fn = to_openai_function(tool)
     assert "name" in fn["function"]["parameters"]["required"]
+
+
+def test_to_openai_function_strict_mode_lists_all_params_required():
+    """OpenAI strict mode rejects a schema unless every property is required;
+    optional params are expressed as nullable instead."""
+    tool = ToolDefinition(
+        id="search",
+        name="Search",
+        description="Search the catalog for items",
+        category="READ",
+        source_ids=["src"],
+        sql="SELECT 1",
+        parameters=[
+            ParameterDefinition(name="q", type="string", required=True, description="Query"),
+            ParameterDefinition(name="limit", type="integer", required=False, description="Limit"),
+        ],
+    )
+    params = to_openai_function(tool)["function"]["parameters"]
+    assert set(params["required"]) == {"q", "limit"}
+    # The optional param is nullable; the required one is not.
+    assert params["properties"]["limit"]["type"] == ["integer", "null"]
+    assert params["properties"]["q"]["type"] == "string"
+    # strict mode forbids `default`.
+    assert "default" not in params["properties"]["limit"]

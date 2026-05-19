@@ -183,7 +183,13 @@ def lint_connector(
             )
 
         sql_upper = (tool.sql or "").upper()
-        if "SELECT *" in sql_upper and "LIMIT" not in sql_upper and "WHERE" not in sql_upper:
+        # Word-boundary matching: a plain substring check treats a column named
+        # RATE_LIMIT or WHERE_CLAUSE as a real LIMIT / WHERE clause and
+        # suppresses the warning.
+        has_limit = bool(re.search(r"\bLIMIT\b", sql_upper))
+        has_where = bool(re.search(r"\bWHERE\b", sql_upper))
+        has_select_star = bool(re.search(r"\bSELECT\s+\*", sql_upper))
+        if has_select_star and not has_limit and not has_where:
             issues.append(
                 LintIssue(
                     severity="ERROR",
@@ -193,7 +199,7 @@ def lint_connector(
                     suggestion="Add LIMIT 50 or add a required/optional filter parameter.",
                 )
             )
-        elif "SELECT *" in sql_upper and "LIMIT" not in sql_upper:
+        elif has_select_star and not has_limit:
             issues.append(
                 LintIssue(
                     severity="WARN",
@@ -262,7 +268,7 @@ def lint_connector(
             tool.category == "READ"
             and tool.sql
             and _is_list_tool(tool.id)
-            and "LIMIT" not in (tool.sql or "").upper()
+            and not re.search(r"\bLIMIT\b", (tool.sql or "").upper())
             and not any(p.name.lower() in _PAGINATION_HINTS for p in tool.parameters)
         ):
             issues.append(

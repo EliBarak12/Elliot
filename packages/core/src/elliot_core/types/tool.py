@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 # Connector-authored models reject unknown fields so a typo in a saved
 # connector JSON (e.g. "max_row" for "max_rows") surfaces as a validation
@@ -123,6 +123,30 @@ class ToolDefinition(BaseModel):
     response_shape: ResponseShape = ResponseShape()
     output_schema: dict[str, Any] | None = None
     run_async: bool = False
+
+    @model_validator(mode="after")
+    def _validate_sql_is_safe_select(self) -> ToolDefinition:
+        # Reject malformed / dangerous SQL (ATTACH, PRAGMA, multiple statements,
+        # load_extension, …) at connector-load time so an attacker-authored
+        # connector cannot escape the read-only sandbox at runtime. Duplicates
+        # the runtime check in ToolExecutor._execute_read_full — defense in
+        # depth: model validation can be bypassed (model_construct), so the
+        # runtime path validates again before handing SQL to SQLite.
+        #
+        # Scope: READ tools only. WRITE/ACTION tools execute via api_mapping
+        # against the upstream HTTP API (not against the SQLite snapshot), and
+        # may carry a SQL hint (e.g. a DELETE statement that documents intent)
+        # that the SELECT-only validator would reject. The runtime executor
+        # never feeds WRITE tool.sql to SQLite, so the load-time guard would
+        # be over-strict there.
+        if self.sql is None or self.category != "READ":
+            return self
+        from elliot_core.sqlite.query_runner import validate_tool_sql
+
+        ok, reason = validate_tool_sql(self.sql)
+        if not ok:
+            raise ValueError(f"tool.sql rejected: {reason}")
+        return self
 
 
 class SkillStep(BaseModel):

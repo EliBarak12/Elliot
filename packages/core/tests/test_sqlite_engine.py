@@ -181,3 +181,50 @@ def test_load_result_rolls_back_when_child_table_fails(
     tables = engine.get_table_names()
     assert "projects" not in tables
     assert not any("tags" in t for t in tables)
+
+
+# ── Authorizer: deny ATTACH / DETACH / triggers / unknown pragmas ───────────
+
+
+def test_authorizer_blocks_attach(engine: SQLiteEngine):
+    """Even a bare ATTACH issued directly on the connection must be denied —
+    if validate_tool_sql is ever bypassed (mocked, model_construct, …) the
+    authorizer is the last line of defense."""
+    import sqlite3
+
+    with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+        engine._conn.execute("ATTACH DATABASE ':memory:' AS evil")
+
+
+def test_authorizer_blocks_detach(engine: SQLiteEngine):
+    import sqlite3
+
+    with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+        engine._conn.execute("DETACH DATABASE evil")
+
+
+def test_authorizer_blocks_create_trigger(engine: SQLiteEngine):
+    """CREATE TRIGGER lets a connector smuggle writes / side effects past a
+    READ-only contract — explicitly denied."""
+    import sqlite3
+
+    engine.load_result(flatten([{"id": 1}], "t"))
+    with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+        engine._conn.execute('CREATE TRIGGER trg AFTER INSERT ON "t" BEGIN SELECT 1; END')
+
+
+def test_authorizer_blocks_unknown_pragma(engine: SQLiteEngine):
+    import sqlite3
+
+    with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+        engine._conn.execute("PRAGMA writable_schema = ON")
+
+
+def test_authorizer_allows_engine_pragmas(engine: SQLiteEngine):
+    """The allowlist must keep the engine's own bootstrap + introspection
+    pragmas working (foreign_keys, table_info)."""
+    engine.load_result(flatten([{"id": 1}], "things"))
+    # table_info is invoked by get_table_schema(); foreign_keys was set in
+    # __init__ before this test ran without raising.
+    schema = engine.get_table_schema("things")
+    assert any(c["name"] == "id" for c in schema)

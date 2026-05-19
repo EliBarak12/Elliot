@@ -205,3 +205,51 @@ def test_analyze_resolves_param_and_body_refs() -> None:
     # OpenAPI 3.1 list-valued type collapses to the non-null member.
     tags_param = next(p for p in tool.parameters if p.name == "tags")
     assert tags_param.type == "array"
+
+
+# ── _fetch_spec SSRF guard (resolve+validate+pin in one step) ────────────────
+
+
+def test_fetch_spec_rejects_loopback_url() -> None:
+    """`http://127.0.0.1/` must be rejected as SSRF — even though the host
+    is a literal IP. Closes the DNS-rebind window between validate_url and
+    the request."""
+    from elliot_core.http import SSRFError
+    from elliot_core.openapi_analyzer import _fetch_spec
+
+    with pytest.raises(SSRFError):
+        _fetch_spec("http://127.0.0.1/openapi.json")
+
+
+def test_fetch_spec_rejects_metadata_url() -> None:
+    from elliot_core.http import SSRFError
+    from elliot_core.openapi_analyzer import _fetch_spec
+
+    with pytest.raises(SSRFError):
+        _fetch_spec("http://169.254.169.254/latest/openapi.json")
+
+
+def test_fetch_spec_accepts_public_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Happy path: a legitimate public host still works (mocked at the
+    transport layer because the test suite disables host pinning so respx
+    matches by hostname)."""
+    import json as _json
+
+    import httpx
+    import respx
+
+    from elliot_core.openapi_analyzer import _fetch_spec
+
+    spec_payload = {
+        "openapi": "3.0.0",
+        "info": {"title": "API", "version": "1.0.0"},
+        "paths": {},
+    }
+    with respx.mock(assert_all_called=False) as router:
+        router.get("https://api.example.com/openapi.json").mock(
+            return_value=httpx.Response(200, json=spec_payload)
+        )
+        parsed = _fetch_spec("https://api.example.com/openapi.json")
+    assert parsed["info"]["title"] == "API"
+    # Round-trip through json so the test catches any mutation
+    assert _json.loads(_json.dumps(parsed)) == spec_payload

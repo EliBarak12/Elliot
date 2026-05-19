@@ -148,6 +148,17 @@ class ToolExecutor:
                 engine.load_result(flatten(fetch_result.rows, table_name))
 
             if tool.sql:
+                # Defense in depth: ToolDefinition's field_validator runs the
+                # same check at load time, but a model assembled via
+                # model_construct() (e.g. by an in-process caller) skips
+                # validators. Re-check here so SQLite never sees an ATTACH /
+                # PRAGMA / multi-statement payload from this codepath.
+                from elliot_core.sqlite.query_runner import validate_tool_sql
+
+                ok, reason = validate_tool_sql(tool.sql)
+                if not ok:
+                    log.error("tool.sql.rejected", tool_id=tool.id, reason=reason)
+                    raise ElliotError("INVALID_TOOL", f"tool.sql rejected: {reason}")
                 sql = tool.sql
                 sql_params = {p.name: params.get(p.name) for p in tool.parameters}
             else:
@@ -203,14 +214,33 @@ class ToolExecutor:
         query = {k: params[k] for k in mapping.query_params if k in params}
         body = {k: params[k] for k in mapping.body_params if k in params}
 
+        from urllib.parse import urlsplit
+
         import httpx
 
+        from elliot_core.http import SSRFError, safe_client, validate_url
         from elliot_core.sources.api_fetcher import _build_auth_headers
 
         headers = _build_auth_headers(source, self._secrets)
 
+        # SSRF: the connector-supplied base URL plus the templated path may
+        # target a private / metadata host. Validate once, then pin the
+        # connection to the vetted IP so a DNS rebind between check and
+        # connect cannot redirect the socket. Mirrors the READ/HTTP source
+        # path in elliot_core.sources.api_fetcher.
         try:
-            async with httpx.AsyncClient(timeout=source.timeout_ms / 1000) as client:
+            ips = validate_url(url)
+        except SSRFError as exc:
+            log.error("tool.write.ssrf_blocked", tool_id=tool.id, exc_info=True)
+            raise ElliotError("SSRF_BLOCKED", exc.message) from exc
+        host = urlsplit(url).hostname or ""
+        pinned_hosts = {host: ips[0]} if (host and ips) else None
+
+        try:
+            async with safe_client(
+                timeout=source.timeout_ms / 1000,
+                pinned_hosts=pinned_hosts,
+            ) as client:
                 resp = await client.request(
                     method=mapping.method,
                     url=url,
@@ -231,7 +261,7 @@ class ToolExecutor:
         except ElliotError:
             raise
         except Exception as exc:
-            log.error("tool.write.failed", tool_id=tool.id, error=str(exc))
+            log.error("tool.write.failed", tool_id=tool.id, error=str(exc), exc_info=True)
             raise ElliotError("API_REQUEST_FAILED", str(exc)) from exc
 
         return ToolResult(

@@ -154,6 +154,37 @@ def validate_url(url: str, *, allow_private: bool | None = None) -> list[str]:
     return validated
 
 
+class _PinnedSyncTransport(httpx.HTTPTransport):
+    """Sync counterpart of :class:`_PinnedTransport`.
+
+    Used by :func:`safe_get_sync` for code paths that are not yet async
+    (notably :func:`elliot_core.openapi_analyzer._fetch_spec`, which is
+    called from sync builder flows). The rewrite logic is identical to the
+    async transport: connect to the validated IP, keep ``Host`` header and
+    TLS SNI on the original hostname.
+    """
+
+    def __init__(self, host_to_ip: dict[str, str], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._host_to_ip = {h.lower(): ip for h, ip in host_to_ip.items()}
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        if os.environ.get("ELLIOT_HTTP_DISABLE_PINNING", "").strip():
+            return super().handle_request(request)
+        original_host = request.url.host
+        pinned_ip = self._host_to_ip.get(original_host.lower())
+        if pinned_ip is None:
+            raise SSRFError(
+                f"host '{original_host}' was not pre-validated for this client",
+                url=str(request.url),
+            )
+        request.url = request.url.copy_with(host=pinned_ip)
+        request.extensions = {**request.extensions, "sni_hostname": original_host}
+        if "host" not in {k.lower() for k in request.headers}:
+            request.headers["Host"] = original_host
+        return super().handle_request(request)
+
+
 class _PinnedTransport(httpx.AsyncHTTPTransport):
     """Transport that pins connections to a pre-validated IP address.
 
@@ -232,6 +263,39 @@ def safe_client(
         headers=headers or {},
         transport=transport,
     )
+
+
+def safe_get_sync(
+    url: str,
+    *,
+    timeout: float = 10.0,
+    allow_private: bool | None = None,
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
+    """Synchronous SSRF-safe GET. Validates the URL then pins the connection.
+
+    Closes the DNS-rebind window that ``validate_url(...) ; httpx.get(...)``
+    has — between the lookup and the request httpx re-resolves the host, so
+    an attacker DNS server can swap the answer to a private address. This
+    helper pins the connect-time address to the IP that validation already
+    vetted, while keeping the original hostname for Host/SNI.
+
+    Used by sync code paths (e.g. :func:`openapi_analyzer._fetch_spec`); for
+    async callers prefer :func:`safe_request`.
+    """
+    ips = validate_url(url, allow_private=allow_private)
+    host = urlsplit(url).hostname or ""
+    transport: httpx.BaseTransport | None = None
+    if host and ips:
+        transport = _PinnedSyncTransport({host: ips[0]})
+    connect_timeout = min(timeout, 5.0)
+    with httpx.Client(
+        timeout=httpx.Timeout(timeout, connect=connect_timeout),
+        follow_redirects=False,
+        headers=headers or {},
+        transport=transport,
+    ) as client:
+        return client.get(url)
 
 
 async def safe_request(

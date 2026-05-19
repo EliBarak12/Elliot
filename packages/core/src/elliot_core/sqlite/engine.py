@@ -10,6 +10,64 @@ from elliot_core.errors import ElliotError
 from elliot_core.sql import safe_ident
 from elliot_core.types.sqlite import FlattenedTable, FlattenResult
 
+# SQLite authorizer action codes that the engine refuses unconditionally.
+# Even if validate_tool_sql / safe_ident were bypassed, a sqlite3 authorizer
+# fires *during* statement preparation, so it catches ATTACH / DETACH / CREATE
+# TRIGGER inside a single statement that smuggled past the regex guard.
+_DENIED_ACTIONS: frozenset[int] = frozenset(
+    {
+        sqlite3.SQLITE_ATTACH,
+        sqlite3.SQLITE_DETACH,
+        sqlite3.SQLITE_CREATE_TRIGGER,
+        sqlite3.SQLITE_CREATE_TEMP_TRIGGER,
+        sqlite3.SQLITE_DROP_TRIGGER,
+        sqlite3.SQLITE_DROP_TEMP_TRIGGER,
+    }
+)
+
+# Pragmas the engine itself issues during normal operation. Anything outside
+# this allowlist is denied — a tool's SQL has no business toggling
+# journal_mode, schema_version, foreign_keys, or anything else at query time.
+_ALLOWED_PRAGMAS: frozenset[str] = frozenset(
+    {
+        "foreign_keys",
+        "table_info",
+        "table_xinfo",
+        "index_list",
+        "index_info",
+        "index_xinfo",
+        "foreign_key_list",
+        "database_list",
+    }
+)
+
+
+def _authorizer(
+    action: int,
+    arg1: str | None,
+    arg2: str | None,
+    _db_name: str | None,
+    _source: str | None,
+) -> int:
+    """sqlite3 ``set_authorizer`` callback. Returns DENY / OK per action.
+
+    Fires for every SQL action during prepare/step, so a single-statement
+    ``SELECT ... ATTACH ...`` (if such a parse were possible) or a smuggled
+    ``CREATE TRIGGER`` inside an otherwise valid statement is rejected
+    before any row reaches the application. The pragma allowlist keeps the
+    engine's own ``PRAGMA foreign_keys = ON`` and ``PRAGMA table_info(...)``
+    working while denying everything else (e.g. ``PRAGMA writable_schema``,
+    ``PRAGMA temp_store``).
+    """
+    if action in _DENIED_ACTIONS:
+        return sqlite3.SQLITE_DENY
+    if action == sqlite3.SQLITE_PRAGMA:
+        pragma = (arg1 or "").lower()
+        if pragma not in _ALLOWED_PRAGMAS:
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+    return sqlite3.SQLITE_OK
+
 
 def _bindable(value: Any) -> Any:
     """Coerce a Python value to something sqlite3 can bind as a `?` parameter."""
@@ -45,6 +103,10 @@ class SQLiteEngine:
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # Install the authorizer before any other statement so even
+        # initialization is subject to the deny-by-default policy. The
+        # bootstrap PRAGMA below is in `_ALLOWED_PRAGMAS`.
+        self._conn.set_authorizer(_authorizer)
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.commit()
 

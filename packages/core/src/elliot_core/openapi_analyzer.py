@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-import httpx
 import structlog
 from pydantic import BaseModel
 
@@ -207,10 +206,12 @@ def _request_body_params(
 
 def _fetch_spec(url: str) -> dict[str, Any]:
     # SSRF guard: the URL ultimately comes from agent / connector-builder input.
-    from elliot_core.http import validate_url
+    # ``safe_get_sync`` resolves+validates+pins in one step so DNS rebinding
+    # between validate_url() and the request cannot redirect the socket to a
+    # private / metadata address.
+    from elliot_core.http import safe_get_sync
 
-    validate_url(url)
-    r = httpx.get(url, timeout=10, follow_redirects=False)
+    r = safe_get_sync(url, timeout=10)
     r.raise_for_status()
     try:
         parsed: Any = r.json()

@@ -1,6 +1,10 @@
 // TypeScript types mirroring the Python Pydantic models in elliot-core.
 // These are used as type-only imports to avoid pulling Node.js modules into the browser build.
 
+import type { FilterGroup } from "@/components/tools/FilterGroupBuilder";
+import type { ReturnField } from "@/components/tools/ReturnFieldSelector";
+import type { ApiRequestMapping } from "@/components/tools/ApiMappingForm";
+
 export interface ParameterDefinition {
   name: string;
   type: "string" | "integer" | "number" | "boolean" | "date";
@@ -26,6 +30,9 @@ export interface ToolDefinition {
   source_ids: string[];
   sql: string | null;
   parameters: ParameterDefinition[];
+  filter_groups?: FilterGroup[];
+  return_fields?: ReturnField[];
+  api_mapping?: ApiRequestMapping | null;
 }
 
 export interface SkillStep {

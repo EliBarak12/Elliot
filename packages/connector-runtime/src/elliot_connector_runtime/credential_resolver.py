@@ -69,11 +69,30 @@ class ExecutorPool:
     def requires_user_auth(self) -> bool:
         return bool(self._per_user_sources)
 
-    async def get_executor(self, user_id: str | None) -> ToolExecutor:
+    def _shared(self) -> ToolExecutor:
+        if self._shared_executor is None:
+            self._shared_executor = self._factory(self._config, self._base_secrets)
+        return self._shared_executor
+
+    async def get_executor(
+        self, user_id: str | None, needed_source_ids: list[str] | None = None
+    ) -> ToolExecutor:
         if not self._per_user_sources:
-            if self._shared_executor is None:
-                self._shared_executor = self._factory(self._config, self._base_secrets)
-            return self._shared_executor
+            return self._shared()
+
+        # Only the per-user sources THIS tool actually reads gate the call. A
+        # tool that touches only public / file / shared-auth sources needs no
+        # connect step, even if other sources in the connector are per_user.
+        # needed_source_ids=None means "the tool declares no sources" -> the
+        # executor materialises every source, so all per_user sources gate it.
+        if needed_source_ids is None:
+            needed_pu = list(self._per_user_sources)
+        else:
+            wanted = set(needed_source_ids)
+            needed_pu = [s for s in self._per_user_sources if s.id in wanted]
+
+        if not needed_pu:
+            return self._shared()
 
         if not user_id:
             raise ElliotError(
@@ -88,8 +107,9 @@ class ExecutorPool:
 
         async with self._lock:
             user_secrets, missing = await self._resolve_user_secrets(user_id)
-            if missing:
-                raise self._auth_required(user_id, missing)
+            blocking = [s for s in missing if s in needed_pu]
+            if blocking:
+                raise self._auth_required(user_id, blocking)
             prev = self._user_execs.get(user_id)
             if prev is None or prev[0] != user_secrets:
                 executor = self._factory(self._config, user_secrets)

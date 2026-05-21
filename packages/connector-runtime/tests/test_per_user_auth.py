@@ -160,6 +160,36 @@ async def test_pool_no_user_identity_raises() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pool_tool_using_only_public_source_needs_no_auth() -> None:
+    """A mixed connector: a tool touching only the file/public source is served
+    without any connect step, even though another source is per_user."""
+    file_src = SourceConfig(id="docs", name="Docs", type="file", path="d.csv", format="csv")
+    config = ConnectorConfig(
+        name="Mixed",
+        slug="mixed",
+        version="1.0.0",
+        sources=[_oauth_source(), file_src],
+        tools=[],
+    )
+
+    def factory(config: ConnectorConfig, secrets: dict[str, str]) -> object:  # type: ignore[return-value]
+        return object()
+
+    pool = ExecutorPool(
+        config,
+        {"CID": "c", "CSECRET": "s"},
+        vault=CredentialVault(":memory:"),
+        executor_factory=factory,  # type: ignore[arg-type]
+    )
+    # tool reads only the public file source -> served without a user / connect
+    assert await pool.get_executor(None, ["docs"]) is not None
+    # tool reads the per_user source -> auth required
+    with pytest.raises(ElliotError) as ei:
+        await pool.get_executor("alice", ["mail"])
+    assert ei.value.code == "AUTH_REQUIRED"
+
+
+@pytest.mark.asyncio
 async def test_pool_injects_per_user_token_into_executor_secrets() -> None:
     vault = CredentialVault(":memory:")
     vault.put(StoredCredential("alice", "mailbox", "mail", "oauth2", "alice-token"))

@@ -516,7 +516,9 @@ def _register_tool(
         active_executor = executor
         if executor_pool is not None:
             try:
-                active_executor = await executor_pool.get_executor(get_current_user_id())
+                active_executor = await executor_pool.get_executor(
+                    get_current_user_id(), td.source_ids or None
+                )
             except ElliotError as exc:
                 await _observe(td.id, kwargs, [], 0.0, str(exc), session_id)
                 error_content = to_mcp_error_content(exc)

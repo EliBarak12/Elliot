@@ -1,0 +1,7 @@
+[1] GET /mcp unauthenticated -> 401
+[2] discovered AS: http://127.0.0.1:9710/authorize
+[3] registered client_id=elliot-client-rnPLFNv2m-bEKPBA
+[4] browser landed on upstream MailBox consent (chained from /authorize)
+[5] client received Elliot authorization code (len=32)
+[6] exchanged for Elliot access token (len=42)
+[7] /mcp tools=['list_messages', 'elliot_get_task'] ; list_messages -> 3 messages

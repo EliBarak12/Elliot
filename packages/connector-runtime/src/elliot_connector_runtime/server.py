@@ -41,6 +41,7 @@ from .cache import ConnectorCache
 from .credential_resolver import ExecutorPool
 from .executor import ToolExecutor
 from .loader import ConnectorLoadError
+from .mcp_oauth import MCPAuthMiddleware, TokenStore, register_mcp_oauth
 from .oauth_routes import register_oauth_routes
 from .oauth_store import CredentialVault
 from .observation_store import ObservationStore
@@ -961,9 +962,22 @@ def create_app(
     # Bind the parsed AX agent identity to a contextvar so tool handlers can
     # attribute calls to a specific client/model rather than a generic 'mcp'.
     app.add_middleware(AgentIdentityMiddleware)
-    # Bind the end-user id (auth boundary 1) so per-user credential resolution
-    # can key the vault on the calling user.
-    app.add_middleware(UserIdentityMiddleware)
+    # End-user identity (auth boundary 1). Two modes:
+    #   * Default: trust an X-Elliot-User header (gateway / manual config).
+    #   * ELLIOT_MCP_OAUTH=1: Elliot is the MCP OAuth authorization server, so a
+    #     client like Claude shows a native Connect button; the bearer it mints
+    #     carries the user id and a 401 challenge advertises the metadata. The
+    #     same Connect chains the upstream per-user connect (boundary 2).
+    mcp_oauth_enabled = os.environ.get("ELLIOT_MCP_OAUTH", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    token_store = TokenStore() if mcp_oauth_enabled else None
+    if token_store is not None:
+        app.add_middleware(MCPAuthMiddleware, store=token_store)
+    else:
+        app.add_middleware(UserIdentityMiddleware)
     studio_origin = os.environ.get("ELLIOT_STUDIO_ORIGIN", "http://localhost:5173")
     app.add_middleware(
         CORSMiddleware,
@@ -983,6 +997,9 @@ def create_app(
     )
     # Per-user OAuth connect/callback endpoints (auth boundary 2).
     register_oauth_routes(app, config, secrets, vault, pool)
+    # MCP OAuth authorization server (auth boundary 1) + chained upstream connect.
+    if token_store is not None:
+        register_mcp_oauth(app, config, secrets, vault, pool, token_store)
     app.mount("/mcp", _mcp_app)
 
     openai_router = APIRouter(prefix="/v1")

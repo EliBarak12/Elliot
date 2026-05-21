@@ -57,3 +57,4 @@ tests/e2e/artifacts/
 
 # Per-user auth demo runtime artifacts
 examples/**/.vault.db
+examples/**/.vault_oauth.db

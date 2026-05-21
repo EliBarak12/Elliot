@@ -1,12 +1,14 @@
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   ArrowUpRight,
   CheckCircle2,
   Circle,
   Database,
   FlaskConical,
   Package,
+  RefreshCw,
   Wrench,
   Zap,
 } from "lucide-react";
@@ -40,12 +42,18 @@ export default function Dashboard() {
   const session = sessionRaw as SessionState | undefined;
 
   // Recent activity is *tool invocations*, which execute on the runtime — so
-  // read the runtime's audit log, not the plugin's build-action log. Falls
-  // back to an empty list when the runtime is not up yet.
-  const { data: auditRaw } = useQuery({
+  // read the runtime's audit log, not the plugin's build-action log. Let the
+  // error surface (don't swallow it): a down runtime must look different from
+  // an idle one, otherwise a broken deploy reads as "no activity yet".
+  const {
+    data: auditRaw,
+    isError: auditError,
+    refetch: refetchAudit,
+  } = useQuery({
     queryKey: ["recent-tool-calls"],
-    queryFn: () => httpJson<AuditEntry[]>("/v1/audit?n=10").catch(() => [] as AuditEntry[]),
+    queryFn: () => httpJson<AuditEntry[]>("/v1/audit?n=10"),
     refetchInterval: 10_000,
+    retry: 1,
   });
   const auditEntries = Array.isArray(auditRaw) ? (auditRaw as AuditEntry[]) : [];
 
@@ -178,7 +186,25 @@ export default function Dashboard() {
           </div>
         </CardHeader>
         <CardContent className="px-0 pb-0">
-          {auditEntries.length === 0 ? (
+          {auditError ? (
+            <div className="px-5 pb-5 pt-2 text-center">
+              <AlertTriangle className="mx-auto mb-2 h-5 w-5 text-destructive" />
+              <p className="text-sm font-medium text-foreground">Runtime unavailable</p>
+              <p className="mt-0.5 text-sm text-muted-foreground">
+                Couldn&apos;t reach the connector runtime to read the audit log. Make sure the
+                stack is running, then retry.
+              </p>
+              <Button
+                onClick={() => void refetchAudit()}
+                size="sm"
+                variant="outline"
+                className="mt-3 gap-1.5"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Retry
+              </Button>
+            </div>
+          ) : auditEntries.length === 0 ? (
             <div className="px-5 pb-5 pt-2 text-center">
               <p className="text-sm text-muted-foreground">
                 No activity yet. Try a tool in the{" "}

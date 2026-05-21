@@ -15,6 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { FeedbackPanel } from "@/components/FeedbackPanel";
 import { cn } from "@/lib/utils";
 
 function tokenTone(tokens: number): string {
@@ -339,6 +340,8 @@ export default function AgentConsole() {
           ))}
         </CardContent>
       </Card>
+
+      <FeedbackPanel />
     </div>
   );
 }

@@ -251,6 +251,38 @@ def _agent_hint_from_identity(identity: AgentIdentity | None) -> str:
     return label if label and label != "unknown" else "mcp"
 
 
+def _current_session_and_identity(mcp: FastMCP) -> tuple[str | None, dict[str, Any] | None]:
+    """Best-effort (session_id, identity) for the in-flight MCP request.
+
+    Mirrors the correlation logic in ``_register_tool``'s handler: prefer the
+    stable ``mcp-session-id`` header, fall back to the per-call request id, and
+    enrich the contextvar identity with ``clientInfo`` from the handshake.
+    """
+    session_id: str | None = None
+    client_name: str | None = None
+    client_version: str | None = None
+    with contextlib.suppress(Exception):
+        ctx = mcp.get_context()
+        with contextlib.suppress(Exception):
+            session_id = ctx.request_id
+        with contextlib.suppress(Exception):
+            request = ctx.request_context.request
+            if request is not None:
+                mcp_session_id = request.headers.get("mcp-session-id")
+                if mcp_session_id:
+                    session_id = mcp_session_id
+        with contextlib.suppress(Exception):
+            client_params = ctx.session.client_params
+            if client_params is not None and client_params.clientInfo is not None:
+                client_name = client_params.clientInfo.name
+                client_version = client_params.clientInfo.version
+    identity = get_current_agent_identity()
+    if client_name:
+        with contextlib.suppress(Exception):
+            identity = merge_client_info(identity, client_name, client_version)
+    return session_id, _identity_payload(identity)
+
+
 def _result_truncated(result: Any) -> bool:
     """Whether the executor capped this result at ELLIOT_MAX_RESULT_ROWS.
 
@@ -328,6 +360,8 @@ def create_runtime_server(
     _register_resources(mcp, cfg, executor, json)
     _register_prompts(mcp, cfg)
     _register_task_tool(mcp, task_store)
+    if store is not None:
+        _register_feedback_tool(mcp, store, connector_slug)
 
     return mcp
 
@@ -626,6 +660,92 @@ def _register_task_tool(mcp: FastMCP, task_store: TaskStore) -> None:
                 "Tasks expire after 1 hour. Check the task_id and retry."
             )
         return record.to_dict()
+
+
+_FEEDBACK_OUTCOMES = ("success", "failure", "partial")
+
+
+def _register_feedback_tool(
+    mcp: FastMCP,
+    store: ObservationStore,
+    connector_slug: str | None,
+) -> None:
+    """Register ``elliot_feedback`` — a built-in tool present on every connector.
+
+    The agent calls it to tell the connector author how a tool behaved: why it
+    was chosen, what was passed in and returned, and whether the call succeeded,
+    failed, or only partly worked. Feedback is persisted to the observation
+    store and surfaced in Studio's Agent Console.
+    """
+    from elliot_core.errors import ElliotError, to_mcp_error_content
+
+    annotations = ToolAnnotations(
+        title="Submit agent feedback",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    )
+
+    @mcp.tool(
+        name="elliot_feedback",
+        title="Submit agent feedback",
+        description=(
+            "Report how one of this connector's tools worked so the connector "
+            "author can improve it. Call after using a tool when the result is "
+            "worth noting — a clean success, a failure, or a partial result. "
+            "Args: tool_id (the tool you used); outcome (one of 'success', "
+            "'failure', 'partial'); why_chosen (why you picked this tool); "
+            "input_summary (the input you passed); output_summary (what you got "
+            "back); detail (failure description or any notes)."
+        ),
+        annotations=annotations,
+    )
+    async def elliot_feedback(
+        tool_id: str,
+        outcome: str,
+        why_chosen: str = "",
+        input_summary: str = "",
+        output_summary: str = "",
+        detail: str = "",
+    ) -> dict[str, Any]:
+        normalized = (outcome or "").strip().lower()
+        if normalized not in _FEEDBACK_OUTCOMES:
+            exc = ElliotError(
+                "VALIDATION_INVALID_OUTCOME",
+                (f"outcome must be one of {list(_FEEDBACK_OUTCOMES)}; got {outcome!r}."),
+                {"field": "outcome", "allowed": list(_FEEDBACK_OUTCOMES)},
+            )
+            raise ValueError(to_mcp_error_content(exc)["text"])
+
+        session_id, identity = _current_session_and_identity(mcp)
+
+        def _persist() -> None:
+            store.write_feedback(
+                tool_id=tool_id,
+                outcome=normalized,
+                session_id=session_id,
+                connector_slug=connector_slug,
+                why_chosen=why_chosen,
+                input_summary=input_summary,
+                output_summary=output_summary,
+                detail=detail,
+                agent_identity=identity,
+            )
+
+        try:
+            await run_in_threadpool(_persist)
+        except Exception as exc:
+            elliot_exc = ElliotError("FEEDBACK_WRITE_FAILED", str(exc))
+            raise ValueError(to_mcp_error_content(elliot_exc)["text"]) from exc
+
+        log.info("agent.feedback.recorded", tool_id=tool_id, outcome=normalized)
+        return {
+            "status": "recorded",
+            "tool_id": tool_id,
+            "outcome": normalized,
+            "message": "Feedback recorded for the connector author.",
+        }
 
 
 _REDACTED = "***"
@@ -1084,6 +1204,11 @@ def create_app(
         """Per-harness rollup — how Claude Code / Codex / Cursor / MCP traffic
         each exercise this connector."""
         return {"harnesses": store.harness_breakdown()}
+
+    @app.get("/v1/feedback")
+    async def get_feedback(n: int = 50, connector_slug: str | None = None) -> dict[str, Any]:
+        """Agent feedback submitted via the built-in elliot_feedback tool."""
+        return {"feedback": store.recent_feedback(n, connector_slug=connector_slug)}
 
     @app.post("/v1/observations/prune")
     async def prune_observations() -> dict[str, int]:

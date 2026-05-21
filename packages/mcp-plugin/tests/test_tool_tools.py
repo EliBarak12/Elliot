@@ -144,6 +144,9 @@ def test_list_tools_after_create(mcp: FastMCP, session: ElliotSession, tmp_path:
     result = _tool(mcp, "elliot_list_tools")()
     assert result["count"] == 1
     assert result["tools"][0]["id"] == "list_orders"
+    # SQL is stored in session.tool_sql, not on the model — the list endpoint
+    # must merge it in so the Studio editor can render the query.
+    assert result["tools"][0]["sql"] == 'SELECT * FROM "orders"'
 
 
 # ---------------------------------------------------------------------------

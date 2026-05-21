@@ -1,6 +1,15 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+// The embedded TraceHookPanel talks to the plugin over MCP; stub the client so
+// the console test never opens a real connection.
+vi.mock("@/lib/mcp-client", () => ({
+  callTool: vi.fn().mockResolvedValue({ runtime_url: "http://localhost:3001", harnesses: [] }),
+  getMcpClient: vi.fn(),
+  listTools: vi.fn().mockResolvedValue([]),
+}));
+
 import AgentConsole from "@/pages/AgentConsole";
 
 const SESSION_OK = {

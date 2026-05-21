@@ -5,7 +5,28 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from elliot_core.trace.installer import default_settings_path, install, uninstall
+from elliot_core.trace.installer import (
+    default_settings_path,
+    install,
+    is_installed,
+    uninstall,
+)
+
+
+def test_is_installed_reflects_install_state(tmp_path: Path) -> None:
+    settings = tmp_path / "settings.json"
+    assert is_installed("claude-code", settings_path=settings) is False
+    install("claude-code", settings_path=settings, python="python3")
+    assert is_installed("claude-code", settings_path=settings) is True
+    uninstall("claude-code", settings_path=settings)
+    assert is_installed("claude-code", settings_path=settings) is False
+
+
+def test_is_installed_codex_block(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.toml"
+    assert is_installed("codex", settings_path=cfg) is False
+    install("codex", settings_path=cfg, python="python3")
+    assert is_installed("codex", settings_path=cfg) is True
 
 
 def test_default_settings_paths() -> None:

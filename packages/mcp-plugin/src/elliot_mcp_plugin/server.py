@@ -99,6 +99,7 @@ def create_elliot_server(session: Any) -> FastMCP:
     from elliot_mcp_plugin.tools.sql_tools import register_sql_tools
     from elliot_mcp_plugin.tools.studio_tools import register_studio_tools
     from elliot_mcp_plugin.tools.tool_tools import register_tool_tools
+    from elliot_mcp_plugin.tools.trace_tools import register_trace_tools
 
     instructions = (
         "Elliot turns any API or database into agent-ready MCP tools. You are the "
@@ -144,6 +145,7 @@ def create_elliot_server(session: Any) -> FastMCP:
     register_eval_tools(mcp, session)
     register_onboarding_tools(mcp, session)
     register_audit_tools(mcp, session)
+    register_trace_tools(mcp, session)
     register_prompts(mcp)
     register_resources(mcp)
     return mcp

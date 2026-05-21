@@ -95,6 +95,13 @@ jobs:
       - uses: pypa/gh-action-pip-audit@v1.1.0
         with:
           inputs: requirements-audit.txt
+          # PYSEC-2025-183 (CVE-2025-45768): a DISPUTED advisory against pyjwt,
+          # pulled in transitively by `mcp` (mcp -> pyjwt[crypto]). The upstream
+          # maintainers reject it — key length is chosen by the calling app, not
+          # the library — and no fix version exists to upgrade to. Elliot does
+          # not sign JWTs with caller-controlled key lengths, so this does not
+          # apply to us. Re-evaluate if a fixed pyjwt is ever published.
+          ignore-vulns: PYSEC-2025-183
 
   audit-js:
     name: Audit (JS deps)

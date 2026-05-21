@@ -95,6 +95,14 @@ jobs:
       - uses: pypa/gh-action-pip-audit@v1.1.0
         with:
           inputs: requirements-audit.txt
+          # PYSEC-2025-183 (pyjwt, pulled in transitively via mcp[crypto]) has
+          # no fix version and is disputed by the supplier: the "weak
+          # encryption" finding is about key length, which is chosen by the
+          # consuming application, not the library. Elliot does not use pyjwt
+          # to sign/verify tokens, so there is nothing to harden here. Revisit
+          # if an upstream fix ships or mcp drops the dependency.
+          ignore-vulns: |
+            PYSEC-2025-183
 
   audit-js:
     name: Audit (JS deps)

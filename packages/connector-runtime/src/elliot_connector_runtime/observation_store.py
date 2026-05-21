@@ -54,6 +54,29 @@ class _ToolCall(_Base):
     connector_slug = Column(String(128))
 
 
+class _AgentFeedback(_Base):
+    """Free-form feedback an agent submits about a connector's tools.
+
+    Written by the built-in ``elliot_feedback`` tool exposed on every running
+    connector. Lets the connector author see, per tool, why the agent chose it,
+    what it passed and got back, and whether the call succeeded or failed.
+    """
+
+    __tablename__ = "agent_feedback"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(128), index=True)
+    ts = Column(Float, nullable=False, index=True)
+    connector_slug = Column(String(128), index=True)
+    tool_id = Column(String(128), index=True)
+    outcome = Column(String(32), index=True)  # success | failure | partial
+    why_chosen = Column(Text)
+    input_summary = Column(Text)
+    output_summary = Column(Text)
+    detail = Column(Text)
+    agent_client = Column(String(64))
+    agent_model = Column(String(128))
+
+
 class ObservationStore:
     """
     Dual-backend store: SQLite (default) or MySQL via ELLIOT_DB_URL.
@@ -137,6 +160,38 @@ class ObservationStore:
             )
             db.commit()
 
+    def write_feedback(
+        self,
+        tool_id: str,
+        outcome: str,
+        session_id: str | None = None,
+        connector_slug: str | None = None,
+        why_chosen: str = "",
+        input_summary: str = "",
+        output_summary: str = "",
+        detail: str = "",
+        agent_identity: dict[str, Any] | None = None,
+    ) -> None:
+        identity = agent_identity or {}
+        with Session(self._engine) as db:
+            db.add(
+                _AgentFeedback(
+                    session_id=session_id,
+                    ts=time.time(),
+                    connector_slug=connector_slug,
+                    tool_id=tool_id,
+                    outcome=outcome,
+                    why_chosen=why_chosen or None,
+                    input_summary=input_summary or None,
+                    output_summary=output_summary or None,
+                    detail=detail or None,
+                    agent_client=identity.get("client"),
+                    agent_model=identity.get("model"),
+                )
+            )
+            db.commit()
+        log.info("agent_feedback.written", tool_id=tool_id, outcome=outcome)
+
     def open_session(
         self,
         session_id: str,
@@ -195,6 +250,16 @@ class ObservationStore:
             rows = q.limit(n).all()
         return [_row_to_dict(r) for r in rows]
 
+    def recent_feedback(
+        self, n: int = 50, connector_slug: str | None = None
+    ) -> list[dict[str, Any]]:
+        with Session(self._engine) as db:
+            q = db.query(_AgentFeedback).order_by(_AgentFeedback.ts.desc())
+            if connector_slug:
+                q = q.filter(_AgentFeedback.connector_slug == connector_slug)
+            rows = q.limit(n).all()
+        return [_row_to_dict(r) for r in rows]
+
     def token_efficiency(self) -> list[dict[str, Any]]:
         with Session(self._engine) as db:
             rows = db.execute(
@@ -245,8 +310,9 @@ class ObservationStore:
         with Session(self._engine) as db:
             r1 = db.query(_ToolCall).filter(_ToolCall.ts < cutoff).delete()
             r2 = db.query(_AgentSession).filter(_AgentSession.started_at < cutoff).delete()
+            r3 = db.query(_AgentFeedback).filter(_AgentFeedback.ts < cutoff).delete()
             db.commit()
-        deleted = r1 + r2
+        deleted = r1 + r2 + r3
         if deleted:
             log.info("observation_store.pruned", deleted=deleted)
         return deleted

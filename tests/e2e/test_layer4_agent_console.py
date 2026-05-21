@@ -56,6 +56,28 @@ _CONSUMER_CALLS: list[tuple[str, dict]] = [
     ("list_active_enterprise_customers", {}),  # repeat → redundant signal
 ]
 
+# After using the tools, the consumer reports back via the built-in
+# elliot_feedback tool that is added to every connector. These do NOT count as
+# observed tool calls — the feedback handler writes to the feedback table only.
+_FEEDBACK_CALLS: list[dict] = [
+    {
+        "tool_id": "list_active_enterprise_customers",
+        "outcome": "success",
+        "why_chosen": "It returns the full enterprise customer list in one call.",
+        "input_summary": "no parameters",
+        "output_summary": "Returned the active enterprise customers.",
+        "detail": "Description was clear and unambiguous; worked first try.",
+    },
+    {
+        "tool_id": "customer_order_history",
+        "outcome": "partial",
+        "why_chosen": "Needed each customer's orders to summarise their revenue.",
+        "input_summary": "customer_id=1, then 3",
+        "output_summary": "Orders returned, but there was no per-order total field.",
+        "detail": "Consider adding an order_total so I don't have to sum client-side.",
+    },
+]
+
 
 @pytest.fixture(scope="module")
 def console_stack(api_base_url: str) -> Iterator[StackEndpoints]:
@@ -113,6 +135,10 @@ def consumer_session(console_stack: StackEndpoints, api_base_url: str) -> StackE
             for tool, args in _CONSUMER_CALLS:
                 with contextlib.suppress(AssertionError):
                     await call_tool_json(runtime_session, tool, args)
+            # Report back on the tools just used via the built-in feedback tool.
+            for feedback_args in _FEEDBACK_CALLS:
+                with contextlib.suppress(AssertionError):
+                    await call_tool_json(runtime_session, "elliot_feedback", feedback_args)
 
     asyncio.run(_consume())
     return console_stack
@@ -135,6 +161,23 @@ def test_consumer_calls_group_into_one_session(consumer_session: StackEndpoints)
     signal_types = {s["type"] for s in session["signals"]}
     assert "redundant" in signal_types
     assert "→" in session["summary"]
+
+
+def test_agent_feedback_reaches_the_feed(consumer_session: StackEndpoints) -> None:
+    """The built-in elliot_feedback tool persists the agent's reports, and
+    /v1/feedback serves them back for the connector author to read."""
+    feedback = httpx.get(f"{RUNTIME_URL}/v1/feedback", timeout=10).json()["feedback"]
+    assert len(feedback) == len(_FEEDBACK_CALLS)
+
+    by_tool = {f["tool_id"]: f for f in feedback}
+    assert "list_active_enterprise_customers" in by_tool
+    assert "customer_order_history" in by_tool
+    assert {f["outcome"] for f in feedback} == {"success", "partial"}
+
+    success = by_tool["list_active_enterprise_customers"]
+    assert success["connector_slug"] == CONNECTOR_SLUG
+    assert success["why_chosen"].startswith("It returns the full enterprise")
+    assert "worked first try" in success["detail"]
 
 
 def test_sessions_stream_serves_sse_snapshot(consumer_session: StackEndpoints) -> None:
@@ -213,6 +256,13 @@ def test_agent_console_screenshot(consumer_session: StackEndpoints) -> None:
             if events.count() > 0:
                 events.first.click()
             page.wait_for_timeout(900)
+            # Expand every agent-feedback row so the screenshot shows the
+            # reasoning / input / output / detail the agent reported.
+            feedback_rows = page.get_by_test_id("feedback-row")
+            feedback_rows.first.wait_for(state="visible", timeout=10_000)
+            for i in range(feedback_rows.count()):
+                feedback_rows.nth(i).click()
+            page.wait_for_timeout(600)
             page.screenshot(path=str(shot), full_page=True)
 
             # Metrics page — the per-harness breakdown lives here.

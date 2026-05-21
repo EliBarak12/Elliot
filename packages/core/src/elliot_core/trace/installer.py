@@ -136,6 +136,22 @@ def install(harness: str, *, settings_path: Path | None = None, python: str | No
     return path
 
 
+def is_installed(harness: str, *, settings_path: Path | None = None) -> bool:
+    """Whether the Elliot trace hook is present in ``harness``'s config.
+
+    Every harness writes the same marker (the hook-adapter module path) into
+    its command string, so a substring check works across the JSON (Claude
+    Code / Cursor) and TOML (Codex) formats alike.
+    """
+    path = settings_path or default_settings_path(harness)
+    if not path.exists():
+        return False
+    try:
+        return _MARKER in path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
 def uninstall(harness: str, *, settings_path: Path | None = None) -> Path:
     """Remove the trace hook for ``harness``. Returns the config path."""
     path = settings_path or default_settings_path(harness)

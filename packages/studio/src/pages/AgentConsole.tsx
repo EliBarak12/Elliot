@@ -15,6 +15,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { FeedbackPanel } from "@/components/FeedbackPanel";
+import { TraceHookPanel } from "@/components/TraceHookPanel";
 import { cn } from "@/lib/utils";
 
 function tokenTone(tokens: number): string {
@@ -255,7 +257,7 @@ export default function AgentConsole() {
     <div className="space-y-6">
       <PageHeader
         title="Agent Console"
-        description="Live trace of agent sessions — prompts, reasoning, tool calls, tokens, errors."
+        description="Live trace of agent sessions — prompts, reasoning, tool calls, tokens, errors. Install the trace hook below to capture prompts and reasoning from local runs."
         actions={
           <div className="flex items-center gap-3">
             <Badge variant="success" className="gap-1.5">
@@ -277,6 +279,8 @@ export default function AgentConsole() {
           </div>
         }
       />
+
+      <TraceHookPanel />
 
       {largeTokenSessions.length > 0 && (
         <Card className="border-warning/40 bg-warning/5">
@@ -339,6 +343,8 @@ export default function AgentConsole() {
           ))}
         </CardContent>
       </Card>
+
+      <FeedbackPanel />
     </div>
   );
 }

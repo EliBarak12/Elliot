@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 from sqlalchemy.orm import Session
 
-from elliot_connector_runtime.observation_store import ObservationStore, _ToolCall
+from elliot_connector_runtime.observation_store import (
+    ObservationStore,
+    _AgentFeedback,
+    _ToolCall,
+)
 
 
 @pytest.fixture()
@@ -179,6 +183,48 @@ def test_error_recorded_correctly(store: ObservationStore) -> None:
 
 def test_empty_token_efficiency(store: ObservationStore) -> None:
     assert store.token_efficiency() == []
+
+
+def test_write_and_read_feedback(store: ObservationStore) -> None:
+    store.write_feedback(
+        tool_id="list_animals",
+        outcome="success",
+        session_id="s1",
+        connector_slug="pets",
+        why_chosen="I needed the full animal list to answer the question",
+        input_summary="species=dog",
+        output_summary="3 rows returned",
+        detail="worked first try",
+        agent_identity={"client": "claude-code", "model": "claude-opus-4-7"},
+    )
+    feedback = store.recent_feedback(10)
+    assert len(feedback) == 1
+    row = feedback[0]
+    assert row["tool_id"] == "list_animals"
+    assert row["outcome"] == "success"
+    assert row["why_chosen"].startswith("I needed")
+    assert row["input_summary"] == "species=dog"
+    assert row["output_summary"] == "3 rows returned"
+    assert row["agent_client"] == "claude-code"
+    assert row["agent_model"] == "claude-opus-4-7"
+
+
+def test_recent_feedback_filters_by_connector(store: ObservationStore) -> None:
+    store.write_feedback(tool_id="t", outcome="success", connector_slug="alpha")
+    store.write_feedback(tool_id="t", outcome="failure", connector_slug="beta")
+    only_beta = store.recent_feedback(10, connector_slug="beta")
+    assert len(only_beta) == 1
+    assert only_beta[0]["outcome"] == "failure"
+    assert len(store.recent_feedback(10)) == 2
+
+
+def test_prune_deletes_old_feedback(store: ObservationStore) -> None:
+    with Session(store._engine) as db:
+        db.add(_AgentFeedback(ts=1.0, tool_id="old", outcome="success"))
+        db.commit()
+    deleted = store.prune()
+    assert deleted >= 1
+    assert store.recent_feedback(10) == []
 
 
 def test_sqlite_uses_wal_mode(store: ObservationStore) -> None:

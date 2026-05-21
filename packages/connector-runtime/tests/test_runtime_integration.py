@@ -703,6 +703,125 @@ def test_prune_endpoint(client: TestClient) -> None:
     assert "deleted" in resp.json()
 
 
+def test_feedback_endpoint_returns_list(client: TestClient) -> None:
+    resp = client.get("/v1/feedback")
+    assert resp.status_code == 200
+    assert resp.json()["feedback"] == []
+
+
+def test_feedback_tool_registered_and_records(tmp_path: Path) -> None:
+    """Every running connector exposes a built-in elliot_feedback tool; calling
+    it persists the agent's report to the observation store with the right
+    connector slug and agent identity."""
+    import asyncio
+
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.observation_store import ObservationStore as _Store
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.agent_identity import (
+        AgentIdentity,
+        reset_current_agent_identity,
+        set_current_agent_identity,
+    )
+
+    cfg_path = tmp_path / "pets.connector.json"
+    cfg_path.write_text(json.dumps(MINIMAL_CONNECTOR))
+    store = _Store(f"sqlite:///{tmp_path / 'obs.db'}")
+
+    config = ConnectorCache().get(cfg_path)
+    executor = ToolExecutor(config, secrets={})
+    mcp = create_runtime_server(config, executor, store=store)
+
+    class _Ctx:
+        request_id = "fb-req-1"
+
+        async def info(self, *a, **k):  # type: ignore[no-untyped-def]
+            pass
+
+        async def warning(self, *a, **k):  # type: ignore[no-untyped-def]
+            pass
+
+    mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
+
+    tool = mcp._tool_manager.get_tool("elliot_feedback")
+    assert tool is not None
+
+    identity = AgentIdentity(client="claude-code", model="claude-opus-4-7")
+    token = set_current_agent_identity(identity)
+    try:
+        result = asyncio.run(
+            tool.fn(
+                tool_id="list_animals",
+                outcome="Success",  # mixed case must be normalised
+                why_chosen="It returns every animal in one call",
+                input_summary="no params",
+                output_summary="1 row",
+                detail="clean",
+            )
+        )
+    finally:
+        reset_current_agent_identity(token)
+
+    assert result["status"] == "recorded"
+    assert result["outcome"] == "success"
+
+    feedback = store.recent_feedback(10)
+    assert len(feedback) == 1
+    assert feedback[0]["tool_id"] == "list_animals"
+    assert feedback[0]["outcome"] == "success"
+    assert feedback[0]["connector_slug"] == "pets"
+    assert feedback[0]["agent_client"] == "claude-code"
+
+
+def test_feedback_tool_rejects_invalid_outcome(tmp_path: Path) -> None:
+    import asyncio
+
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.observation_store import ObservationStore as _Store
+    from elliot_connector_runtime.server import create_runtime_server
+
+    cfg_path = tmp_path / "pets.connector.json"
+    cfg_path.write_text(json.dumps(MINIMAL_CONNECTOR))
+    store = _Store(f"sqlite:///{tmp_path / 'obs.db'}")
+    config = ConnectorCache().get(cfg_path)
+    executor = ToolExecutor(config, secrets={})
+    mcp = create_runtime_server(config, executor, store=store)
+
+    class _Ctx:
+        request_id = "fb-req-2"
+
+        async def info(self, *a, **k):  # type: ignore[no-untyped-def]
+            pass
+
+        async def warning(self, *a, **k):  # type: ignore[no-untyped-def]
+            pass
+
+    mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
+    tool = mcp._tool_manager.get_tool("elliot_feedback")
+    assert tool is not None
+
+    with pytest.raises(ValueError, match="VALIDATION_INVALID_OUTCOME"):
+        asyncio.run(tool.fn(tool_id="list_animals", outcome="great"))
+    assert store.recent_feedback(10) == []
+
+
+def test_feedback_tool_absent_without_store(tmp_path: Path) -> None:
+    """Without an observation store the feedback tool is not registered — it has
+    nowhere to persist to, so we don't advertise a tool that can't deliver."""
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+
+    cfg_path = tmp_path / "pets.connector.json"
+    cfg_path.write_text(json.dumps(MINIMAL_CONNECTOR))
+    config = ConnectorCache().get(cfg_path)
+    executor = ToolExecutor(config, secrets={})
+    mcp = create_runtime_server(config, executor)
+    assert mcp._tool_manager.get_tool("elliot_feedback") is None
+
+
 def test_agent_identity_middleware_registered(app) -> None:
     """The AX identity middleware must be wired so tool handlers can attribute
     calls to the actual client/model rather than a generic 'mcp' bucket.

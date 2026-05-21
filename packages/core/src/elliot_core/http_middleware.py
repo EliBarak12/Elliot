@@ -15,6 +15,11 @@ from .agent_identity import (
     reset_current_agent_identity,
     set_current_agent_identity,
 )
+from .user_identity import (
+    parse_user_id,
+    reset_current_user_id,
+    set_current_user_id,
+)
 
 log = structlog.get_logger("http")
 
@@ -95,9 +100,38 @@ class AgentIdentityMiddleware:
                 reset_current_agent_identity(token)
 
 
+class UserIdentityMiddleware:
+    """Bind the end-user id (auth boundary 1) to a contextvar per request.
+
+    Pure ASGI (not BaseHTTPMiddleware) so the contextvar survives into FastMCP
+    tool handlers, which run in the same task. The user id is read from the
+    ``X-Elliot-User`` header; per-user credential resolution downstream keys the
+    vault on it.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = {
+            k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])
+        }
+        user_id = parse_user_id(headers)
+        token = set_current_user_id(user_id)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            with contextlib.suppress(LookupError, ValueError):
+                reset_current_user_id(token)
+
+
 _RegisteredCallNext = Callable[[Request], Awaitable[Response]]
 __all__ = [
     "RequestLoggingMiddleware",
     "AgentIdentityMiddleware",
+    "UserIdentityMiddleware",
     "_RegisteredCallNext",
 ]

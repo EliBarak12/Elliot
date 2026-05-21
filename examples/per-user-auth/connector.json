@@ -1,0 +1,61 @@
+{
+  "name": "MailBox",
+  "slug": "mailbox",
+  "version": "1.0.0",
+  "description": "Per-user MailBox connector. Each end user connects their own account via OAuth; tools act in that user's scope.",
+  "instructions": "Tools read the connected user's mailbox. If a tool returns AUTH_REQUIRED, open the connect URL it provides, finish the login, then retry.",
+  "sources": [
+    {
+      "id": "mail",
+      "name": "MailBox API",
+      "type": "rest",
+      "url": "http://127.0.0.1:9700/messages",
+      "auth": {
+        "type": "oauth2",
+        "scope": "per_user",
+        "secret_key": "access_token",
+        "oauth2": {
+          "authorization_url": "http://127.0.0.1:9700/authorize",
+          "token_url": "http://127.0.0.1:9700/token",
+          "scopes": ["mail.read"],
+          "client_id_secret": "{{ env:MAILBOX_CLIENT_ID }}",
+          "client_secret_secret": "{{ env:MAILBOX_CLIENT_SECRET }}"
+        }
+      },
+      "data_path": "messages"
+    }
+  ],
+  "tools": [
+    {
+      "id": "list_messages",
+      "name": "List Messages",
+      "description": "List messages in the connected user's mailbox, newest first.",
+      "category": "READ",
+      "source_ids": ["mail"],
+      "parameters": [
+        {
+          "name": "subject_contains",
+          "type": "string",
+          "required": false,
+          "description": "Only return messages whose subject contains this text"
+        }
+      ],
+      "filter_groups": [
+        {
+          "logic": "AND",
+          "conditions": [
+            {
+              "field": "subject",
+              "operator": "contains",
+              "parameter_name": "subject_contains"
+            }
+          ]
+        }
+      ],
+      "return_fields": [],
+      "order_by": [],
+      "limit": 100
+    }
+  ],
+  "skills": []
+}

@@ -1,0 +1,6 @@
+[1] tools/list -> ['list_messages', 'elliot_get_task']
+[2] alice calls list_messages (not connected) -> isError=True: Error executing tool list_messages: [AUTH_REQUIRED] Connect your account to use this connector. Open the following URL(s) in a browser, complete the login, then retry the tool — MailBox API: open http://127.0.0.1:9710/oauth/start/mail?user=alice
+[3] alice opens connect URL: http://127.0.0.1:9710/oauth/start/mail?user=alice
+[4] alice calls list_messages (connected) -> count=3
+[5] bob (not connected) -> AUTH_REQUIRED; opens http://127.0.0.1:9710/oauth/start/mail?user=bob
+[6] bob calls list_messages (connected) -> count=2

@@ -33,12 +33,16 @@ from elliot_core.agent_identity import (
 )
 from elliot_core.auth_middleware import ApiKeyMiddleware, enforce_auth_configured
 from elliot_core.error_middleware import register_error_handlers
-from elliot_core.http_middleware import AgentIdentityMiddleware
+from elliot_core.http_middleware import AgentIdentityMiddleware, UserIdentityMiddleware
+from elliot_core.user_identity import get_current_user_id
 
 from .audit import AuditLog
 from .cache import ConnectorCache
+from .credential_resolver import ExecutorPool
 from .executor import ToolExecutor
 from .loader import ConnectorLoadError
+from .oauth_routes import register_oauth_routes
+from .oauth_store import CredentialVault
 from .observation_store import ObservationStore
 from .protocols.openai import register_openai_routes
 from .session_tracker import SessionTracker
@@ -285,6 +289,7 @@ def create_runtime_server(
     audit: AuditLog | None = None,
     tracker: SessionTracker | None = None,
     store: ObservationStore | None = None,
+    executor_pool: ExecutorPool | None = None,
 ) -> FastMCP:
     """
     Build a FastMCP server whose tool list mirrors the connector's ToolDefinitions.
@@ -323,6 +328,7 @@ def create_runtime_server(
             tracker=tracker,
             store=store,
             connector_slug=connector_slug,
+            executor_pool=executor_pool,
         )
 
     _register_resources(mcp, cfg, executor, json)
@@ -341,6 +347,7 @@ def _register_tool(
     tracker: SessionTracker | None = None,
     store: ObservationStore | None = None,
     connector_slug: str | None = None,
+    executor_pool: ExecutorPool | None = None,
 ) -> None:
     from elliot_core.errors import ElliotError, to_mcp_error_content
     from elliot_core.types import ToolDefinition
@@ -502,10 +509,23 @@ def _register_tool(
         else:
             kwargs.pop("confirm", None)
 
+        # Per-user auth (boundary 2): resolve the executor bound to THIS end
+        # user's upstream credential. For shared-auth connectors this returns
+        # the single shared executor. A missing/expired credential surfaces as
+        # an actionable AUTH_REQUIRED error carrying the connect URL.
+        active_executor = executor
+        if executor_pool is not None:
+            try:
+                active_executor = await executor_pool.get_executor(get_current_user_id())
+            except ElliotError as exc:
+                await _observe(td.id, kwargs, [], 0.0, str(exc), session_id)
+                error_content = to_mcp_error_content(exc)
+                raise ValueError(error_content["text"]) from exc
+
         if run_async:
 
             async def _work() -> dict[str, Any]:
-                result = await executor.execute(td, kwargs)
+                result = await active_executor.execute(td, kwargs)
                 payload: dict[str, Any] = {
                     "rows": result.rows,
                     "count": len(result.rows),
@@ -526,7 +546,7 @@ def _register_tool(
 
         t0 = time.monotonic()
         try:
-            result = await executor.execute(td, kwargs)
+            result = await active_executor.execute(td, kwargs)
             duration_ms = round((time.monotonic() - t0) * 1000, 1)
             await _observe(td.id, kwargs, result.rows, duration_ms, None, session_id)
             if ctx is not None:
@@ -875,7 +895,16 @@ def create_app(
     tracker = SessionTracker(sessions_path)
     store = ObservationStore(db_url)
 
-    mcp = create_runtime_server(config, executor, audit=audit, tracker=tracker, store=store)
+    # Per-user auth: a vault + executor pool serve per-user credentials. The
+    # pool is a no-op passthrough for connectors whose sources are all
+    # shared-auth, so single-tenant connectors behave exactly as before.
+    vault_path = os.environ.get("ELLIOT_VAULT_DB", ".elliot/credentials.db")
+    vault = CredentialVault(vault_path)
+    pool = ExecutorPool(config, secrets, vault=vault)
+
+    mcp = create_runtime_server(
+        config, executor, audit=audit, tracker=tracker, store=store, executor_pool=pool
+    )
 
     _mcp_app = mcp.streamable_http_app()
 
@@ -930,6 +959,9 @@ def create_app(
     # Bind the parsed AX agent identity to a contextvar so tool handlers can
     # attribute calls to a specific client/model rather than a generic 'mcp'.
     app.add_middleware(AgentIdentityMiddleware)
+    # Bind the end-user id (auth boundary 1) so per-user credential resolution
+    # can key the vault on the calling user.
+    app.add_middleware(UserIdentityMiddleware)
     studio_origin = os.environ.get("ELLIOT_STUDIO_ORIGIN", "http://localhost:5173")
     app.add_middleware(
         CORSMiddleware,
@@ -944,8 +976,11 @@ def create_app(
             # MCP TS SDK >=1.10 sends Mcp-Protocol-Version on every call;
             # without it the browser preflight fails.
             "Mcp-Protocol-Version",
+            "X-Elliot-User",
         ],
     )
+    # Per-user OAuth connect/callback endpoints (auth boundary 2).
+    register_oauth_routes(app, config, secrets, vault, pool)
     app.mount("/mcp", _mcp_app)
 
     openai_router = APIRouter(prefix="/v1")

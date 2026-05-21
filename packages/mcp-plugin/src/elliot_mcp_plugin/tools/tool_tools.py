@@ -171,9 +171,18 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             # if the agent's MCP client spawned its own plugin process and
             # writes to the same workspace.
             session.refresh_from_disk()
+            # SQL lives in session.tool_sql, not on the model (see
+            # elliot_create_tool), so merge it in just like elliot_get_tool —
+            # otherwise the Studio editor renders an empty query field.
+            tools = []
+            for t in session.registry.get_all():
+                dumped = t.model_dump()
+                if dumped.get("sql") is None:
+                    dumped["sql"] = session.tool_sql.get(t.id)
+                tools.append(dumped)
             return {
-                "tools": [t.model_dump() for t in session.registry.get_all()],
-                "count": len(session.registry.get_all()),
+                "tools": tools,
+                "count": len(tools),
             }
         except Exception as exc:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))

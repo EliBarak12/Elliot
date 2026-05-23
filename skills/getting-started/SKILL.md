@@ -66,7 +66,7 @@ Every Elliot tool you create or modify must honor these:
 
 Call these any time you need to refresh what's available:
 
-- `prompts/list` — every workflow Elliot ships (getting-started, onboard-product, discover-source, build-connector, lint-connector, run-eval, audit-connector, deploy).
+- `prompts/list` — every workflow Elliot ships (getting-started, onboard-product, discover-source, build-connector, lint-connector, run-eval, audit-connector, deploy, observe-agent-runs, compose-skill).
 - `resources/list` — connector templates, error reference, principles, install instructions.
 - `tools/list` — the Elliot MCP tools (all prefixed `elliot_`).
 

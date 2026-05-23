@@ -4,7 +4,7 @@
     "name": "Eli Barak",
     "url": "https://github.com/EliBarak12"
   },
-  "description": "Turn any API or database into agent-ready MCP tools. The Elliot marketplace ships the platform plugin (8 skills + MCP server + connector templates).",
+  "description": "Turn any API or database into agent-ready MCP tools. The Elliot marketplace ships the platform plugin (10 skills + MCP server + connector templates).",
   "version": "1.0.0",
   "plugins": [
     {
@@ -13,7 +13,7 @@
         "source": "url",
         "url": "https://github.com/EliBarak12/Elliot.git"
       },
-      "description": "Elliot platform plugin: 8 skills (getting-started, onboard-product, discover-source, build-connector, lint-connector, audit-connector, run-eval, deploy) plus the Elliot MCP server. Use this to design, validate, deploy, and observe agent-ready connectors for any data source.",
+      "description": "Elliot platform plugin: 10 skills (getting-started, onboard-product, discover-source, build-connector, lint-connector, audit-connector, run-eval, deploy, observe-agent-runs, compose-skill) plus the Elliot MCP server. Use this to design, validate, deploy, and observe agent-ready connectors for any data source.",
       "version": "1.0.0",
       "keywords": ["mcp", "connectors", "agent-tools", "api", "database"]
     }

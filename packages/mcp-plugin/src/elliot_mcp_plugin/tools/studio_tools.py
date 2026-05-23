@@ -22,13 +22,37 @@ AUDIT_PATH = os.environ.get("ELLIOT_AUDIT_LOG", ".elliot/audit.ndjson")
 def register_studio_tools(mcp: FastMCP, session: ElliotSession) -> None:
     @mcp.tool()
     def elliot_session_summary() -> dict:  # type: ignore[type-arg]
-        """Return a summary of the current session: sources, tools, skills, and context."""
-        return {
-            "sources": len(session.sources),
-            "tools": len(session.registry.get_all()),
-            "skills": len(session.registry.get_all_skills()),
-            "product_context": (session.product_context.name if session.product_context else None),
-        }
+        """Return a summary of the current session: sources, tools, skills, context, runtime, connector.
+
+        Superset of the historical summary shape. Returns both the legacy keys
+        (``sources`` / ``tools`` / ``skills``) and the canonical ones used by
+        ``elliot_get_session_state`` (``source_count`` / ``tool_count`` /
+        ``skill_count`` + ``runtime_running`` + ``connector_built``). Picks up
+        any state written to disk by a separate plugin process — call this as
+        the connection-probe in `getting-started`.
+        """
+        try:
+            session.refresh_from_disk()
+            return {
+                # Legacy keys (kept for backward compat with older skills/agents).
+                "sources": len(session.sources),
+                "tools": len(session.registry.get_all()),
+                "skills": len(session.registry.get_all_skills()),
+                # Canonical keys — same shape as elliot_get_session_state.
+                "source_count": len(session.sources),
+                "tool_count": len(session.registry.get_all()),
+                "skill_count": len(session.registry.get_all_skills()),
+                "product_context": (
+                    session.product_context.model_dump() if session.product_context else None
+                ),
+                "runtime_running": (
+                    session.runtime_process is not None and session.runtime_process.poll() is None
+                ),
+                "connector_built": session.connector is not None,
+            }
+        except Exception as exc:
+            log.error("studio.session_summary.failed", error=str(exc), exc_info=True)
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
     def studio_get_connector_info() -> dict:  # type: ignore[type-arg]

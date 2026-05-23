@@ -89,7 +89,6 @@ def create_elliot_server(session: Any) -> FastMCP:
     from elliot_mcp_plugin.prompts import register_prompts
     from elliot_mcp_plugin.resources import register_resources
     from elliot_mcp_plugin.tools.audit_tools import register_audit_tools
-    from elliot_mcp_plugin.tools.builder_tools import register_builder_tools
     from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
     from elliot_mcp_plugin.tools.context_tools import register_context_tools
     from elliot_mcp_plugin.tools.eval_tools import register_eval_tools
@@ -140,7 +139,6 @@ def create_elliot_server(session: Any) -> FastMCP:
     register_skill_tools(mcp, session)
     register_context_tools(mcp, session)
     register_connector_tools(mcp, session)
-    register_builder_tools(mcp, session)
     register_studio_tools(mcp, session)
     register_eval_tools(mcp, session)
     register_onboarding_tools(mcp, session)

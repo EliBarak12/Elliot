@@ -5,13 +5,44 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict
 
 
+class OAuth2Config(BaseModel):
+    """Per-user OAuth 2.1 (authorization-code + PKCE) settings for a source.
+
+    Describes the *upstream* provider's endpoints and the connector author's
+    OAuth app credentials. The author's client id/secret are app-level and use
+    ``{{ env:VAR }}`` placeholders; the per-user access/refresh tokens are
+    never part of the connector file — Elliot mints and stores them per end
+    user at connect time.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    authorization_url: str
+    token_url: str
+    scopes: list[str] = []
+    client_id_secret: str  # {{ env:VAR }} — author/app-level
+    client_secret_secret: str  # {{ env:VAR }} — author/app-level
+    # Where the upstream sends the user identity, if the connector wants it
+    # surfaced; optional and unused by the token-injection path.
+    userinfo_url: str | None = None
+
+
 class AuthConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["api_key", "bearer", "basic", "oauth2"]
+    # "shared": one credential resolved from {{ env:VAR }}, same for every
+    # caller (the original behaviour). "per_user": each end user supplies or
+    # authorises their own credential, which Elliot stores in a per-user vault
+    # keyed by (user_id, connector, source) and injects per request.
+    scope: Literal["shared", "per_user"] = "shared"
     header_name: str | None = None
     query_param: str | None = None
-    secret_key: str  # resolved via {{ env:VAR }} at load time
+    # For shared auth: a {{ env:VAR }} template / env name. For per_user auth:
+    # the vault slot name under which the resolved per-user token is injected.
+    secret_key: str
+    # Required when type == "oauth2"; describes the upstream OAuth provider.
+    oauth2: OAuth2Config | None = None
 
 
 class PaginationConfig(BaseModel):

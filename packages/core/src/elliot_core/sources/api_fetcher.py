@@ -127,7 +127,7 @@ def _build_auth_headers(config: SourceConfig, secrets: dict[str, str]) -> dict[s
         return {}
     auth = config.auth
     secret = _resolve_secret(auth.secret_key, secrets)
-    if auth.type == "bearer":
+    if auth.type in ("bearer", "oauth2"):
         return {"Authorization": f"Bearer {secret}"}
     if auth.type == "api_key" and auth.header_name:
         return {auth.header_name: secret}

@@ -587,7 +587,10 @@ def _build_auth_headers(auth: AuthConfig, secrets: dict[str, str]) -> dict[str, 
     if auth.type == "api_key":
         header = auth.header_name or "X-Api-Key"
         return {header: secret_val}
-    if auth.type == "bearer":
+    if auth.type in ("bearer", "oauth2"):
+        # oauth2: the per-user access token has been injected into `secrets`
+        # under auth.secret_key by the credential resolver; carry it as a
+        # standard bearer token on every upstream request.
         return {"Authorization": f"Bearer {secret_val}"}
     if auth.type == "basic":
         import base64

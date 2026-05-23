@@ -54,3 +54,7 @@ packages/studio/.vite/
 
 # E2E run artifacts (screenshots, captured logs)
 tests/e2e/artifacts/
+
+# Per-user auth demo runtime artifacts
+examples/**/.vault.db
+examples/**/.vault_oauth.db

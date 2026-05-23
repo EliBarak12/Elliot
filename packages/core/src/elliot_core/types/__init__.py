@@ -1,5 +1,11 @@
 from elliot_core.types.connector import ConnectorConfig
-from elliot_core.types.source import AuthConfig, FetchResult, PaginationConfig, SourceConfig
+from elliot_core.types.source import (
+    AuthConfig,
+    FetchResult,
+    OAuth2Config,
+    PaginationConfig,
+    SourceConfig,
+)
 from elliot_core.types.tool import (
     ApiRequestMapping,
     FilterCondition,
@@ -22,6 +28,7 @@ __all__ = [
     "FetchResult",
     "FilterCondition",
     "FilterGroup",
+    "OAuth2Config",
     "OrderField",
     "PaginationConfig",
     "ParameterDefinition",

@@ -107,6 +107,77 @@ class LintIssue:
     suggestion: str
 
 
+def _is_env_placeholder(value: str) -> bool:
+    return value.startswith("{{ env:") and value.endswith(" }}")
+
+
+def _is_bare_env_name(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z][A-Z0-9_]*", value))
+
+
+def _lint_source_auth(config: ConnectorConfig) -> list[LintIssue]:
+    """Validate auth blocks so per-user / distributable connectors are safe.
+
+    A published connector must ship NO literal secrets, declare an oauth2 block
+    when it uses OAuth, and treat the per-user secret_key as a vault slot rather
+    than an env-resolved value.
+    """
+    issues: list[LintIssue] = []
+    for source in config.sources:
+        auth = source.auth
+        if auth is None:
+            continue
+        where = f"source '{source.id}'"
+
+        if auth.type == "oauth2" and auth.oauth2 is None:
+            issues.append(
+                LintIssue(
+                    severity="ERROR",
+                    code="AUTH_OAUTH2_MISSING_CONFIG",
+                    tool_id=None,
+                    message=f"{where} uses type 'oauth2' but has no 'oauth2' config block.",
+                    suggestion="Add oauth2 with authorization_url, token_url, scopes and {{ env }} client creds.",
+                )
+            )
+
+        if auth.oauth2 is not None:
+            for field_name in ("client_id_secret", "client_secret_secret"):
+                val = getattr(auth.oauth2, field_name)
+                if not _is_env_placeholder(val) and not _is_bare_env_name(val):
+                    issues.append(
+                        LintIssue(
+                            severity="WARN",
+                            code="AUTH_OAUTH2_CLIENT_NOT_ENV",
+                            tool_id=None,
+                            message=f"{where} oauth2.{field_name} is a literal value, not an env reference.",
+                            suggestion="Use {{ env:VAR }} so the OAuth app secret is never shipped in the connector.",
+                        )
+                    )
+
+        if auth.scope == "per_user":
+            if auth.type == "oauth2" and _is_env_placeholder(auth.secret_key):
+                issues.append(
+                    LintIssue(
+                        severity="WARN",
+                        code="AUTH_PER_USER_SLOT_IS_ENV",
+                        tool_id=None,
+                        message=f"{where} is per_user oauth2 but secret_key is an env placeholder.",
+                        suggestion="For per_user auth, secret_key is a vault slot name (e.g. 'access_token'), not {{ env }}.",
+                    )
+                )
+        elif not _is_env_placeholder(auth.secret_key) and not _is_bare_env_name(auth.secret_key):
+            issues.append(
+                LintIssue(
+                    severity="WARN",
+                    code="AUTH_LITERAL_SECRET",
+                    tool_id=None,
+                    message=f"{where} secret_key looks like a hardcoded secret.",
+                    suggestion="Use {{ env:VAR }} so the connector file ships no secrets.",
+                )
+            )
+    return issues
+
+
 def _starts_with_verb(description: str) -> bool:
     first_word = description.strip().split()[0].lower().rstrip(".,:")
     return first_word in _VERBS
@@ -143,6 +214,9 @@ def lint_connector(
                 suggestion="Keep the 5-15 tools agents actually need; drop or merge the rest.",
             )
         )
+
+    # ── source auth checks (per-user / OAuth distribution safety) ────────────
+    issues.extend(_lint_source_auth(config))
 
     seen_ids: set[str] = set()
     for tool in config.tools:

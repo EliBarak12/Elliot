@@ -473,6 +473,78 @@ def _cmd_connect(args: argparse.Namespace) -> None:
     print()
 
 
+def _cmd_kpi(args: argparse.Namespace) -> None:
+    """Print the weekly PMF brief defined in SCOPE.md.
+
+    Pulls retention, Sean Ellis distribution, and per-tool success rate from
+    the observation store and reports against the three evidence gates we
+    track before declaring product-market fit.
+    """
+    db_url = os.environ.get("ELLIOT_DB_URL", "sqlite:///.elliot/observations.db")
+
+    try:
+        from elliot_connector_runtime.observation_store import ObservationStore
+        from elliot_connector_runtime.pmf import kpi_brief
+    except ImportError as exc:
+        print(f"elliot-connector-runtime is not installed: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    store = ObservationStore(db_url)
+    brief = kpi_brief(store, window_days=args.window)
+
+    if args.json:
+        print(json.dumps(brief, indent=2, default=str))
+        return
+
+    r = brief["retention"]
+    s = brief["sean_ellis"]
+    gates = brief["gates"]
+
+    print()
+    print(f"Elliot KPI brief — last {brief['window_days']} days")
+    print("─" * 56)
+    print()
+    print("Retention")
+    print(f"  active installations:     {r['active_installations']}")
+    print(f"  active on 2+ days:        {r['repeat_installations']}")
+    print(f"  active agents (client+model): {r['active_agents']}")
+    print(f"  median active days:       {r['active_days_median']:.1f}")
+    print(f"  total sessions:           {r['total_sessions']}")
+    print(f"  total tool calls:         {r['total_tool_calls']}")
+    print(f"  error rate:               {r['error_rate']:.1%}")
+    print()
+    print(f"Sean Ellis (last {s['window_days']} days)")
+    print(f"  responses:                {s['responses']}")
+    print(f"  very disappointed:        {s['very_disappointed']}")
+    print(f"  somewhat disappointed:    {s['somewhat_disappointed']}")
+    print(f"  not disappointed:         {s['not_disappointed']}")
+    print(f"  share very disappointed:  {s['very_disappointed_share']:.0%}")
+    print()
+    print("Tool success rate")
+    tools = brief["tools"]
+    if not tools:
+        print("  (no tools with 20+ calls in the window)")
+    else:
+        for t in tools[:10]:
+            print(f"  {t['tool_id']:<32} {t['calls']:>5} calls   {t['success_rate']:.0%} success")
+    print(f"  median success rate:      {brief['median_tool_success_rate']:.0%}")
+    print()
+    print("Evidence gates (SCOPE.md §4)")
+    for label, key in [
+        ("≥10 repeat installations", "active_installations_ge_10"),
+        ("Sean Ellis ≥40%", "sean_ellis_ge_40pct"),
+        ("median success ≥90%", "median_success_ge_90pct"),
+    ]:
+        icon = "✓" if gates[key] else "✗"
+        print(f"  {icon} {label}")
+    print()
+    if brief["pmf_reached"]:
+        print("  All gates met. PMF threshold reached — see SCOPE.md §4.")
+    else:
+        print("  PMF not yet reached. Keep going; do not expand scope.")
+    print()
+
+
 def _cmd_trace(args: argparse.Namespace) -> None:
     """Install/remove the harness hook that streams local agent runs to Elliot."""
     from elliot_core.trace import SUPPORTED_HARNESSES
@@ -547,6 +619,15 @@ def main() -> None:
         help="Register only the runtime URL (skip the plugin URL).",
     )
 
+    kpi_cmd = sub.add_parser(
+        "kpi",
+        help="Weekly PMF brief — retention, Sean Ellis, success rate (SCOPE.md §4)",
+    )
+    kpi_cmd.add_argument("--window", type=int, default=14, help="Window size in days (default: 14)")
+    kpi_cmd.add_argument(
+        "--json", action="store_true", help="Output the brief as JSON instead of text"
+    )
+
     trace_cmd = sub.add_parser(
         "trace",
         help="Install hooks so a local agent's runs show in the Agent Console",
@@ -577,6 +658,8 @@ def main() -> None:
         _cmd_status(args)
     elif args.command == "connect":
         _cmd_connect(args)
+    elif args.command == "kpi":
+        _cmd_kpi(args)
     elif args.command == "trace":
         _cmd_trace(args)
     else:

@@ -48,8 +48,23 @@ Call `elliot_discover_source`. Collect from the user:
 - Pagination style if REST: `cursor`, `offset`, `page`, `link_header`, or `none`
 
 ### 3. Explore the data shape
-Use `elliot_query_sql` to run sample queries and understand what columns exist.
-Do this before designing tools — never guess field names.
+First, see what's loaded — call `elliot_list_sources` for a roster of every
+discovered source (table name, row count, columns).
+
+Then explore the data:
+- `elliot_query_sql` — run ad-hoc SELECTs to understand what columns exist.
+- `elliot_sample_data(table_name, limit=10)` — random rows (useful for edge
+  cases, not just the first N).
+- `elliot_profile_source(table_name)` — column statistics: min, max, nulls,
+  distinct count, top 5 values. Use this when you're about to add an enum
+  parameter and need to know the real set of values.
+- `elliot_profile_column(table_name, column_name)` — same stats for one
+  column only, when you only care about that one.
+
+Do this before designing tools — never guess field names. If you loaded the
+wrong source, drop it with `elliot_remove_source(source_id)` and re-discover.
+If the upstream changed and you want fresh data, call
+`elliot_refresh_source(source_id)`.
 
 ### 4. Design tools (one per agent operation)
 
@@ -134,6 +149,13 @@ WHERE status = 'active'
 GROUP BY plan
 ORDER BY total_mrr DESC
 ```
+
+Before saving a tool, dry-run its SQL with `elliot_validate_sql(sql)` —
+it catches syntax errors, multi-statement attacks, and forbidden operations
+(DDL, ATTACH, PRAGMA) without executing. If a tool runs slow once preview-loaded,
+call `elliot_explain_query(sql)` to see SQLite's query plan. To validate a full
+tool definition without committing it to the registry, call
+`elliot_validate_tool(tool_dict)` — same shape as `elliot_create_tool` but no save.
 
 After creating each tool, call `elliot_preview_tool` with its id to run its
 SQL against the sandbox data and confirm it returns sensible rows. Fix the SQL

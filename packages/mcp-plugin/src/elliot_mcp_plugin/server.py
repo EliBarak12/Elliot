@@ -89,7 +89,6 @@ def create_elliot_server(session: Any) -> FastMCP:
     from elliot_mcp_plugin.prompts import register_prompts
     from elliot_mcp_plugin.resources import register_resources
     from elliot_mcp_plugin.tools.audit_tools import register_audit_tools
-    from elliot_mcp_plugin.tools.builder_tools import register_builder_tools
     from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
     from elliot_mcp_plugin.tools.context_tools import register_context_tools
     from elliot_mcp_plugin.tools.eval_tools import register_eval_tools
@@ -140,7 +139,6 @@ def create_elliot_server(session: Any) -> FastMCP:
     register_skill_tools(mcp, session)
     register_context_tools(mcp, session)
     register_connector_tools(mcp, session)
-    register_builder_tools(mcp, session)
     register_studio_tools(mcp, session)
     register_eval_tools(mcp, session)
     register_onboarding_tools(mcp, session)
@@ -148,7 +146,65 @@ def create_elliot_server(session: Any) -> FastMCP:
     register_trace_tools(mcp, session)
     register_prompts(mcp)
     register_resources(mcp)
+    _hide_studio_tools_from_other_agents(mcp)
     return mcp
+
+
+_STUDIO_ONLY_PREFIX = "studio_"
+_STUDIO_CLIENT_NAME = "elliot-studio"
+
+
+def _is_studio_client() -> bool:
+    """Return True iff the current request's agent identity is Studio's.
+
+    Identity is bound to a contextvar by ``AgentIdentityMiddleware`` for HTTP
+    requests; stdio sessions have no header and therefore no identity, which
+    we treat as "not Studio" so the diagnostic tools stay hidden from CLI use.
+    """
+    from elliot_core.agent_identity import get_current_agent_identity
+
+    identity = get_current_agent_identity()
+    if identity is None or not identity.client:
+        return False
+    return identity.client.lower() == _STUDIO_CLIENT_NAME
+
+
+def _hide_studio_tools_from_other_agents(mcp: FastMCP) -> None:
+    """Filter ``studio_*`` tools out of ``tools/list`` and ``call_tool`` for
+    non-Studio agents.
+
+    The four diagnostic tools in ``studio_tools.py`` (``studio_get_connector_info``,
+    ``studio_get_audit_log``, ``studio_get_metrics``, ``studio_run_sql``) power
+    the Studio UI. Exposing them to every coding agent connected to ``:3000/mcp``
+    pollutes ``tools/list`` and — for ``studio_run_sql`` — hands out a raw SQL
+    execution channel. Wrap the FastMCP tool manager so the rest of the surface
+    stays visible to agents while Studio still gets everything.
+    """
+    tool_manager = mcp._tool_manager
+    original_list = tool_manager.list_tools
+    original_call = tool_manager.call_tool
+
+    def filtered_list() -> Any:
+        tools = original_list()
+        if _is_studio_client():
+            return tools
+        return [t for t in tools if not t.name.startswith(_STUDIO_ONLY_PREFIX)]
+
+    async def filtered_call(
+        name: str,
+        arguments: dict[str, Any],
+        context: Any = None,
+        convert_result: bool = False,
+    ) -> Any:
+        if name.startswith(_STUDIO_ONLY_PREFIX) and not _is_studio_client():
+            raise ElliotError(
+                "TOOL_NOT_FOUND",
+                f"Unknown tool: {name}",
+            )
+        return await original_call(name, arguments, context, convert_result)
+
+    tool_manager.list_tools = filtered_list  # type: ignore[method-assign]
+    tool_manager.call_tool = filtered_call  # type: ignore[method-assign]
 
 
 async def run_stdio(config: ConnectorConfig, secrets: dict[str, str]) -> None:

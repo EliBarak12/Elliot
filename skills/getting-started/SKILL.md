@@ -16,13 +16,18 @@ Elliot is a local service. The MCP plugin URL (`http://localhost:3000/mcp/`) won
 
 ### Quick check
 
-Try calling `elliot_session_summary`. Three possible outcomes:
+Try calling `elliot_get_session_state`. Three possible outcomes:
 
 | Outcome | What it means | What to do |
 |---|---|---|
-| Returns a result | Server is running ✓ | Skip to the workflow section below |
+| Returns a result with counts | Server is running ✓ | Skip to the workflow section below |
 | MCP transport error / connection refused | Server isn't running | Walk the user through starting it (next section) |
 | `tools/list` doesn't include any `elliot_*` tools | Plugin isn't installed at all | Tell the user to run `/plugin install elliot@elliot` first |
+
+`elliot_get_session_state` returns counts of sources / tools / skills plus
+`connector_built` and `runtime_running` — it's the canonical "what's in this
+session" probe. (`elliot_session_summary` and `studio_get_connector_info` exist
+as thinner / Studio-flavoured variants of the same idea.)
 
 ### If the server isn't running, tell the user
 
@@ -61,7 +66,7 @@ Every Elliot tool you create or modify must honor these:
 
 Call these any time you need to refresh what's available:
 
-- `prompts/list` — every workflow Elliot ships (getting-started, onboard-product, discover-source, build-connector, lint-connector, run-eval, audit-connector, deploy).
+- `prompts/list` — every workflow Elliot ships (getting-started, onboard-product, discover-source, build-connector, lint-connector, run-eval, audit-connector, deploy, observe-agent-runs, compose-skill).
 - `resources/list` — connector templates, error reference, principles, install instructions.
 - `tools/list` — the Elliot MCP tools (all prefixed `elliot_`).
 

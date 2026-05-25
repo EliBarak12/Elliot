@@ -33,10 +33,17 @@ Call `elliot_export_connector` to write the final connector file. Pass `path`
 default.
 
 ### 5. Activate on the runtime
-Call `elliot_start_runtime`. It launches the connector-runtime subprocess and
-loads the connector you just exported (it defaults to the most recently
-exported connector). Confirm it came up with `elliot_runtime_logs`, and get
-the URL agents should connect to with `elliot_get_connection_config`.
+Call `elliot_start_runtime` to launch the connector-runtime subprocess. It
+loads the connector from (in order): the `connector_path` arg you pass, the
+`ELLIOT_CONNECTOR` env var, or the workspace default `.elliot/connector.json`.
+
+If you exported to a non-default path in step 4 (e.g. `connectors/<slug>.connector.json`),
+pass it explicitly: `elliot_start_runtime(connector_path="connectors/<slug>.connector.json")`.
+Otherwise the runtime will load the wrong (or no) connector.
+
+Confirm it came up with `elliot_runtime_logs`, and get the URL agents should
+connect to with `elliot_get_connection_config`. To stop it later, call
+`elliot_stop_runtime`.
 
 ### 6. Connect agents
 The tools are now served over MCP by the runtime. Use the URL from

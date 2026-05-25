@@ -44,6 +44,17 @@ zero warnings.
 ### 5. Export
 Call `elliot_export_connector` to persist the fixes to disk.
 
+## Debugging tools
+
+When a tool's SQL fails or returns the wrong shape, use these before guessing:
+- `elliot_profile_source(table_name)` — min/max/null/distinct/top-5 for every
+  column. Tells you whether your WHERE clause is over-filtering or your enum
+  values are stale.
+- `elliot_profile_column(table_name, column_name)` — same stats for one column.
+- `elliot_explain_query(sql)` — SQLite `EXPLAIN QUERY PLAN` output. Use when
+  a tool is slow or you're worried about a missing index.
+- `elliot_validate_sql(sql)` — syntax + safety check without executing.
+
 ## Quality bar
 A production-ready connector has:
 - Zero lint errors

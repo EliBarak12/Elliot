@@ -78,7 +78,7 @@ def test_remove_source_drops_table(mcp: FastMCP, session: ElliotSession, csv_fil
     )
     assert len(session.engine.get_table_names()) == 1
 
-    _tool(mcp, "elliot_remove_source")(source_id=disc["source_id"])
+    _tool(mcp, "studio_remove_source")(source_id=disc["source_id"])
     assert len(session.engine.get_table_names()) == 0
 
     lst = _tool(mcp, "elliot_list_sources")()

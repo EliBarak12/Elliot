@@ -138,8 +138,9 @@ Invoke `prompts/get name=build-connector` to continue.
 
 - `elliot_refresh_source(source_id)` — re-fetch from the origin (use after
   the upstream changes).
-- `elliot_remove_source(source_id)` — drop the source and its SQLite table
-  (use when you loaded the wrong thing or want to start over).
+- Removing a source is a user-driven action: ask the user to click "Remove"
+  on the Studio Sources page (or Cloud dashboard) when you loaded the wrong
+  thing or want to start over.
 
 ## Failure handling
 

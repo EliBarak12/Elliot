@@ -146,12 +146,22 @@ def create_elliot_server(session: Any) -> FastMCP:
     register_trace_tools(mcp, session)
     register_prompts(mcp)
     register_resources(mcp)
-    _hide_studio_tools_from_other_agents(mcp)
+    _hide_destructive_tools_from_other_agents(mcp)
     return mcp
 
 
-_STUDIO_ONLY_PREFIX = "studio_"
 _STUDIO_CLIENT_NAME = "elliot-studio"
+
+# Tools that are visible only to the Studio UI / Cloud dashboard, never to
+# coding agents. Read-only Studio panels (logs, metrics, connector info, raw
+# SELECT) are intentionally NOT in this list — agents benefit from seeing
+# their own session, audit trail, and being able to validate tools. The
+# denylist is strictly destructive actions that should be human-confirmed.
+_DESTRUCTIVE_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "studio_remove_source",
+    }
+)
 
 
 def _is_studio_client() -> bool:
@@ -159,7 +169,7 @@ def _is_studio_client() -> bool:
 
     Identity is bound to a contextvar by ``AgentIdentityMiddleware`` for HTTP
     requests; stdio sessions have no header and therefore no identity, which
-    we treat as "not Studio" so the diagnostic tools stay hidden from CLI use.
+    we treat as "not Studio" so destructive tools stay hidden from CLI use.
     """
     from elliot_core.agent_identity import get_current_agent_identity
 
@@ -169,16 +179,16 @@ def _is_studio_client() -> bool:
     return identity.client.lower() == _STUDIO_CLIENT_NAME
 
 
-def _hide_studio_tools_from_other_agents(mcp: FastMCP) -> None:
-    """Filter ``studio_*`` tools out of ``tools/list`` and ``call_tool`` for
+def _hide_destructive_tools_from_other_agents(mcp: FastMCP) -> None:
+    """Filter destructive tools out of ``tools/list`` and ``call_tool`` for
     non-Studio agents.
 
-    The four diagnostic tools in ``studio_tools.py`` (``studio_get_connector_info``,
-    ``studio_get_audit_log``, ``studio_get_metrics``, ``studio_run_sql``) power
-    the Studio UI. Exposing them to every coding agent connected to ``:3000/mcp``
-    pollutes ``tools/list`` and — for ``studio_run_sql`` — hands out a raw SQL
-    execution channel. Wrap the FastMCP tool manager so the rest of the surface
-    stays visible to agents while Studio still gets everything.
+    Read-only Studio diagnostics (``studio_get_connector_info``,
+    ``studio_get_audit_log``, ``studio_get_metrics``, ``studio_run_sql``)
+    are deliberately visible to agents — they get their own session state,
+    audit trail, and aggregated metrics to reason about quality. Only
+    destructive actions (currently ``studio_remove_source``) are hidden, so
+    source/tool deletion must be triggered by a human in Studio or Cloud.
     """
     tool_manager = mcp._tool_manager
     original_list = tool_manager.list_tools
@@ -188,7 +198,7 @@ def _hide_studio_tools_from_other_agents(mcp: FastMCP) -> None:
         tools = original_list()
         if _is_studio_client():
             return tools
-        return [t for t in tools if not t.name.startswith(_STUDIO_ONLY_PREFIX)]
+        return [t for t in tools if t.name not in _DESTRUCTIVE_TOOL_NAMES]
 
     async def filtered_call(
         name: str,
@@ -196,7 +206,7 @@ def _hide_studio_tools_from_other_agents(mcp: FastMCP) -> None:
         context: Any = None,
         convert_result: bool = False,
     ) -> Any:
-        if name.startswith(_STUDIO_ONLY_PREFIX) and not _is_studio_client():
+        if name in _DESTRUCTIVE_TOOL_NAMES and not _is_studio_client():
             raise ElliotError(
                 "TOOL_NOT_FOUND",
                 f"Unknown tool: {name}",

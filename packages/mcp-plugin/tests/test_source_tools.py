@@ -302,7 +302,7 @@ def test_profile_source_missing_table_returns_error(mcp: FastMCP):
 
 
 # ---------------------------------------------------------------------------
-# elliot_remove_source
+# studio_remove_source
 # ---------------------------------------------------------------------------
 
 
@@ -314,7 +314,7 @@ def test_remove_source_removes_from_session(mcp: FastMCP, session: ElliotSession
         name="items",
     )
     sid = disc["source_id"]
-    result = _tool(mcp, "elliot_remove_source")(source_id=sid)
+    result = _tool(mcp, "studio_remove_source")(source_id=sid)
     assert result["status"] == "removed"
     assert sid not in session.sources
 
@@ -327,7 +327,7 @@ def test_remove_source_drops_table(mcp: FastMCP, session: ElliotSession, tmp_pat
         name="items",
     )
     sid = disc["source_id"]
-    _tool(mcp, "elliot_remove_source")(source_id=sid)
+    _tool(mcp, "studio_remove_source")(source_id=sid)
     # Table should no longer appear in list_sources
     lst = _tool(mcp, "elliot_list_sources")()
     assert lst["count"] == 0
@@ -340,14 +340,75 @@ def test_remove_source_table_no_longer_previewable(mcp: FastMCP, tmp_path: Path)
         config={"path": str(csv_path)},
         name="items",
     )
-    _tool(mcp, "elliot_remove_source")(source_id=disc["source_id"])
+    _tool(mcp, "studio_remove_source")(source_id=disc["source_id"])
     result = _tool(mcp, "elliot_preview_source")(table_name="items")
     assert "text" in result or "error" in result
 
 
 def test_remove_source_not_found_returns_error(mcp: FastMCP):
-    result = _tool(mcp, "elliot_remove_source")(source_id="no-such-id")
+    result = _tool(mcp, "studio_remove_source")(source_id="no-such-id")
     assert "text" in result or "error" in result
+
+
+def test_remove_source_cascades_to_dependent_tools(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    from elliot_mcp_plugin.tools.tool_tools import register_tool_tools
+
+    register_tool_tools(mcp, session)
+    csv_path = _csv_file(tmp_path)
+    disc = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(csv_path)},
+        name="items",
+    )
+    sid = disc["source_id"]
+    _tool(mcp, "elliot_create_tool")(
+        name="count_items",
+        description="Count items in the catalog",
+        category="READ",
+        sql='SELECT COUNT(*) AS cnt FROM "items"',
+        parameters=[],
+    )
+    assert session.registry.get("count_items") is not None
+    assert "count_items" in session.tool_sql
+
+    result = _tool(mcp, "studio_remove_source")(source_id=sid)
+    assert result["status"] == "removed"
+    assert result["removed_tool_ids"] == ["count_items"]
+    assert session.registry.get("count_items") is None
+    assert "count_items" not in session.tool_sql
+
+
+def test_remove_source_leaves_unrelated_tools(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    from elliot_mcp_plugin.tools.tool_tools import register_tool_tools
+
+    register_tool_tools(mcp, session)
+    items_csv = _csv_file(tmp_path)
+    other_csv = tmp_path / "orders.csv"
+    other_csv.write_text("id,amount\n1,100\n2,200\n")
+    items_disc = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(items_csv)},
+        name="items",
+    )
+    _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(other_csv)},
+        name="orders",
+    )
+    _tool(mcp, "elliot_create_tool")(
+        name="count_orders",
+        description="Count orders placed by customers",
+        category="READ",
+        sql='SELECT COUNT(*) AS cnt FROM "orders"',
+        parameters=[],
+    )
+
+    result = _tool(mcp, "studio_remove_source")(source_id=items_disc["source_id"])
+    assert result["status"] == "removed"
+    assert result["removed_tool_ids"] == []
+    assert session.registry.get("count_orders") is not None
 
 
 # ---------------------------------------------------------------------------

@@ -339,17 +339,10 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
-    def elliot_remove_source(source_id: str) -> dict:  # type: ignore[type-arg]
-        """Remove a source and drop its table from in-memory SQLite."""
+    def studio_remove_source(source_id: str) -> dict:  # type: ignore[type-arg]
+        """Remove a source and cascade-delete its tools. Studio/dashboard only — not
+        exposed to coding agents (filtered by the studio_ prefix gate)."""
         try:
-            src = session.sources.pop(source_id, None)
-            if src is None:
-                return {"error": f"Source not found: {source_id}"}
-            if src.table_name:
-                session.engine._conn.execute(f'DROP TABLE IF EXISTS "{src.table_name}"')
-                session.engine._conn.commit()
-            session.save()
-            log.info("source.removed", source_id=source_id, table=src.table_name)
-            return {"status": "removed", "source_id": source_id, "table": src.table_name}
+            return session.remove_source(source_id)
         except Exception as exc:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))

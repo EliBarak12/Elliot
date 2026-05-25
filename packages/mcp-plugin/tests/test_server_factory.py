@@ -51,22 +51,32 @@ def test_create_multiple_servers_independent(session: ElliotSession, tmp_path: P
     assert s1 is not s2
 
 
-def test_studio_tools_hidden_from_unknown_agents(session: ElliotSession):
-    """studio_* tools must not appear in tools/list for non-Studio agents."""
+def test_readonly_studio_tools_visible_to_agents(session: ElliotSession):
+    """Read-only Studio diagnostics (logs, metrics, info, run_sql) are visible
+    to coding agents so they can inspect their own session and validate tools."""
     server = create_elliot_server(session)
     names = {t.name for t in server._tool_manager.list_tools()}
     assert "elliot_session_summary" in names, "elliot_ tools must stay visible"
-    for hidden in (
+    for visible in (
         "studio_get_connector_info",
         "studio_get_audit_log",
         "studio_get_metrics",
         "studio_run_sql",
     ):
-        assert hidden not in names, f"{hidden} leaked into tools/list for unknown agent"
+        assert visible in names, f"{visible} should be visible to agents"
 
 
-def test_studio_tools_visible_to_studio_client(session: ElliotSession):
-    """studio_* tools are visible when the agent identity is 'elliot-studio'."""
+def test_destructive_tools_hidden_from_unknown_agents(session: ElliotSession):
+    """Destructive tools (source/connector removal) never appear in tools/list
+    for coding agents — they require a human-pressed button in Studio/Cloud."""
+    server = create_elliot_server(session)
+    names = {t.name for t in server._tool_manager.list_tools()}
+    assert "studio_remove_source" not in names
+
+
+def test_destructive_tools_visible_to_studio_client(session: ElliotSession):
+    """studio_remove_source is visible only when the agent identity is 'elliot-studio'
+    (i.e., the local Studio UI's MCP client)."""
     from elliot_core.agent_identity import (
         AgentIdentity,
         reset_current_agent_identity,
@@ -79,22 +89,16 @@ def test_studio_tools_visible_to_studio_client(session: ElliotSession):
         names = {t.name for t in server._tool_manager.list_tools()}
     finally:
         reset_current_agent_identity(token)
-    for visible in (
-        "studio_get_connector_info",
-        "studio_get_audit_log",
-        "studio_get_metrics",
-        "studio_run_sql",
-    ):
-        assert visible in names, f"{visible} hidden from Studio"
+    assert "studio_remove_source" in names
 
 
-def test_studio_tool_call_blocked_for_unknown_agents(session: ElliotSession):
-    """Calling a studio_* tool as a non-Studio agent must fail like an unknown tool."""
+def test_destructive_tool_call_blocked_for_unknown_agents(session: ElliotSession):
+    """Calling a destructive tool as a non-Studio agent must fail like an unknown tool."""
     import asyncio
 
     from elliot_core.errors import ElliotError
 
     server = create_elliot_server(session)
     with pytest.raises(ElliotError) as ei:
-        asyncio.run(server._tool_manager.call_tool("studio_get_audit_log", {}))
+        asyncio.run(server._tool_manager.call_tool("studio_remove_source", {"source_id": "x"}))
     assert ei.value.code == "TOOL_NOT_FOUND"

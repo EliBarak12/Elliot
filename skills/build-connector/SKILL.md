@@ -62,8 +62,8 @@ Then explore the data:
   column only, when you only care about that one.
 
 Do this before designing tools — never guess field names. If you loaded the
-wrong source, drop it with `elliot_remove_source(source_id)` and re-discover.
-If the upstream changed and you want fresh data, call
+wrong source, ask the user to remove it from the Studio Sources page and
+re-discover. If the upstream changed and you want fresh data, call
 `elliot_refresh_source(source_id)`.
 
 ### 4. Design tools (one per agent operation)

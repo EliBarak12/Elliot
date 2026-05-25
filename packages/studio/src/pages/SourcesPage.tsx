@@ -74,7 +74,7 @@ export default function SourcesPage() {
   const handleRemove = async (sourceId: string) => {
     if (!confirm(`Remove source "${sourceId}"?`)) return;
     try {
-      await callTool("elliot_remove_source", { source_id: sourceId });
+      await callTool("studio_remove_source", { source_id: sourceId });
       await queryClient.invalidateQueries({ queryKey: ["sources"] });
       toast.success("Source removed");
     } catch (err) {

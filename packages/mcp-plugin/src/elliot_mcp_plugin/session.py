@@ -91,6 +91,43 @@ class ElliotSession:
         except FileNotFoundError:
             self._last_loaded_mtime = None
 
+    def remove_source(self, source_id: str) -> dict[str, Any]:
+        """Remove a source, drop its SQLite table, and cascade-delete dependent tools.
+
+        Source removal is a destructive user-driven action (Studio button,
+        Cloud dashboard button). Tools whose ``source_ids`` reference this
+        source are deleted in the same step so the registry doesn't keep
+        orphaned definitions that would fail at call time.
+
+        Returns ``{"status": "removed", ...}`` on success, or
+        ``{"error": "..."}`` if the source isn't found.
+        """
+        src = self.sources.pop(source_id, None)
+        if src is None:
+            return {"error": f"Source not found: {source_id}"}
+        removed_tool_ids = [
+            t.id for t in self.registry.get_all() if source_id in (t.source_ids or [])
+        ]
+        for tid in removed_tool_ids:
+            self.registry.delete(tid)
+            self.tool_sql.pop(tid, None)
+        if src.table_name:
+            self.engine._conn.execute(f'DROP TABLE IF EXISTS "{src.table_name}"')
+            self.engine._conn.commit()
+        self.save()
+        log.info(
+            "source.removed",
+            source_id=source_id,
+            table=src.table_name,
+            removed_tools=removed_tool_ids,
+        )
+        return {
+            "status": "removed",
+            "source_id": source_id,
+            "table": src.table_name,
+            "removed_tool_ids": removed_tool_ids,
+        }
+
     def refresh_from_disk(self) -> bool:
         """Re-sync in-memory state from session.json if the file has changed.
 

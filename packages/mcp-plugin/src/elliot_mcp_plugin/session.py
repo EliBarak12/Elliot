@@ -128,6 +128,31 @@ class ElliotSession:
             "removed_tool_ids": removed_tool_ids,
         }
 
+    def discard_connector(self) -> dict[str, Any]:
+        """Discard the in-flight built connector and remove its exported file.
+
+        Clears ``session.connector`` and deletes ``.elliot/connector.json`` if
+        present. Sources, tools, and skills in ``session.json`` are left
+        alone — the user is just resetting the assembly step so the agent can
+        rebuild via ``elliot_build_connector``. Used by the Studio button
+        and the Cloud dashboard's "Discard connector" action.
+        """
+        had_connector = self.connector is not None
+        self.connector = None
+        path = self.workspace._dir / "connector.json"
+        removed_file = False
+        try:
+            path.unlink()
+            removed_file = True
+        except FileNotFoundError:
+            pass
+        log.info("connector.discarded", had_connector=had_connector, removed_file=removed_file)
+        return {
+            "status": "discarded",
+            "had_connector": had_connector,
+            "removed_file": removed_file,
+        }
+
     def refresh_from_disk(self) -> bool:
         """Re-sync in-memory state from session.json if the file has changed.
 

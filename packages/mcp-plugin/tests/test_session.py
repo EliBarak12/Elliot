@@ -166,6 +166,32 @@ def test_refresh_from_disk_is_noop_when_unchanged(session: ElliotSession):
     assert session.refresh_from_disk() is False
 
 
+def test_discard_connector_clears_state_and_file(session: ElliotSession):
+    from elliot_core.types.connector import ConnectorConfig
+
+    session.connector = ConnectorConfig(
+        name="acme",
+        slug="acme",
+        version="0.1.0",
+        sources=[],
+        tools=[],
+    )
+    path = session.workspace._dir / "connector.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"name": "acme"}', encoding="utf-8")
+
+    result = session.discard_connector()
+    assert result == {"status": "discarded", "had_connector": True, "removed_file": True}
+    assert session.connector is None
+    assert not path.exists()
+
+
+def test_discard_connector_when_nothing_built_is_noop(session: ElliotSession):
+    result = session.discard_connector()
+    assert result == {"status": "discarded", "had_connector": False, "removed_file": False}
+    assert session.connector is None
+
+
 def test_save_then_refresh_does_not_re_read(session: ElliotSession):
     """Our own save() must update the tracked mtime so the very next
     list call doesn't pointlessly clear-and-reload what we just wrote."""

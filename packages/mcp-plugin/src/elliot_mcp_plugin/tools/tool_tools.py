@@ -23,6 +23,48 @@ _CATEGORY_MAP: dict[str, str] = {
 }
 
 
+def preview_tool(
+    session: ElliotSession,
+    tool_id: str,
+    supplied: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Execute a tool's SQL against the session's SQLite engine and return rows.
+
+    Shared between the OSS ``elliot_preview_tool`` MCP wrapper and the Cloud
+    ``POST /api/me/workspace/tools/{id}/preview`` endpoint. Raises
+    ``ElliotError`` for missing tool, missing SQL, or missing required
+    parameters — callers convert to their transport's error shape.
+    """
+    tool = session.registry.get(tool_id)
+    if tool is None:
+        raise ElliotError("NOT_FOUND", f"Tool not found: {tool_id}")
+    sql = session.tool_sql.get(tool_id)
+    if not sql:
+        raise ElliotError("NOT_FOUND", f"No SQL defined for tool: {tool_id}")
+
+    supplied = dict(supplied or {})
+
+    missing = [p.name for p in tool.parameters if p.required and supplied.get(p.name) in (None, "")]
+    if missing:
+        raise ElliotError(
+            "VALIDATION_REQUIRED",
+            f"Missing required parameter(s) for tool '{tool_id}': {', '.join(missing)}",
+            detail={"tool_id": tool_id, "missing": missing},
+        )
+
+    bound: dict[str, object] = {}
+    for p in tool.parameters:
+        if p.name in supplied and supplied[p.name] not in (None, ""):
+            bound[p.name] = supplied[p.name]
+        elif p.default is not None:
+            bound[p.name] = p.default
+        else:
+            bound[p.name] = None
+
+    rows = session.engine.query(sql, bound)
+    return {"rows": rows, "row_count": len(rows)}
+
+
 def _normalize_tool_input(tool: dict[str, Any]) -> dict[str, Any]:
     """Accept the same loose shape that elliot_create_tool accepts.
 
@@ -243,43 +285,11 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
         Pass call-time values via 'params' (preferred), 'arguments', or 'parameters'.
         """
         try:
-            tool = session.registry.get(tool_id)
-            if tool is None:
-                return {"error": f"Tool not found: {tool_id}"}
-            sql = session.tool_sql.get(tool_id)
-            if not sql:
-                return {"error": f"No SQL defined for tool: {tool_id}"}
-
             supplied: dict[str, Any] = {}
             for src in (params, arguments, parameters):
                 if src:
                     supplied.update(src)
-
-            # Structured validation for missing required parameters so the agent
-            # gets an actionable VALIDATION_REQUIRED error instead of a sqlite
-            # 'datatype mismatch' downstream.
-            missing = [
-                p.name for p in tool.parameters if p.required and supplied.get(p.name) in (None, "")
-            ]
-            if missing:
-                raise ElliotError(
-                    "VALIDATION_REQUIRED",
-                    f"Missing required parameter(s) for tool '{tool_id}': {', '.join(missing)}",
-                    detail={"tool_id": tool_id, "missing": missing},
-                )
-
-            # Bind every declared parameter: caller-supplied value first, then
-            # the declared default, finally None for fully-optional placeholders.
-            bound: dict[str, object] = {}
-            for p in tool.parameters:
-                if p.name in supplied and supplied[p.name] not in (None, ""):
-                    bound[p.name] = supplied[p.name]
-                elif p.default is not None:
-                    bound[p.name] = p.default
-                else:
-                    bound[p.name] = None
-            rows = session.engine.query(sql, bound)
-            return {"rows": rows, "row_count": len(rows)}
+            return preview_tool(session, tool_id, supplied)
         except ElliotError as exc:
             return to_mcp_error_content(exc)
         except Exception as exc:

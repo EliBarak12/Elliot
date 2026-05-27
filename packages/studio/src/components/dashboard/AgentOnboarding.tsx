@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Check, Copy, Sparkles, Terminal } from "lucide-react";
+import { Check, Copy, Folder, Sparkles, Terminal, type LucideIcon } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -7,7 +7,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Claude } from "@/components/icons/Claude";
+import { Codex } from "@/components/icons/Codex";
+import { Cursor } from "@/components/icons/Cursor";
 import { cn } from "@/lib/utils";
+
+type AgentIcon = LucideIcon | typeof Claude;
 
 const EXAMPLE_PROMPT =
   "I have an API at https://api.example.com — help me build a connector for it.";
@@ -15,6 +20,7 @@ const EXAMPLE_PROMPT =
 type InstallOption = {
   id: string;
   agent: string;
+  icon: AgentIcon;
   blurb: string;
   commands: string[];
 };
@@ -23,6 +29,7 @@ const INSTALL_OPTIONS: InstallOption[] = [
   {
     id: "local-dev",
     agent: "Local dev (this repo)",
+    icon: Folder,
     blurb:
       "Recommended today: boots plugin + runtime + studio AND wires every detected agent. Everything below this option still requires the server to be running.",
     commands: ["make dev"],
@@ -30,6 +37,7 @@ const INSTALL_OPTIONS: InstallOption[] = [
   {
     id: "claude-code",
     agent: "Claude Code marketplace",
+    icon: Claude,
     blurb:
       "Marketplace install (works once these manifests are on the repo's default branch). Wires the URL only — you still need a running Elliot server.",
     commands: [
@@ -40,6 +48,7 @@ const INSTALL_OPTIONS: InstallOption[] = [
   {
     id: "codex",
     agent: "Codex marketplace",
+    icon: Codex,
     blurb:
       "Experimental: Codex plugins shipped Mar 2026; treat as evolving. Same caveat as Claude Code — URL-only, server must be running.",
     commands: [
@@ -50,6 +59,7 @@ const INSTALL_OPTIONS: InstallOption[] = [
   {
     id: "any-agent",
     agent: "Cursor, VS Code, Windsurf",
+    icon: Cursor,
     blurb:
       "Not yet published to npm. Logic lives in packages/mcp-plugin/scripts/install.py; will detect every coding agent and write the right MCP config.",
     commands: ["npx @elliot/connect"],
@@ -101,22 +111,26 @@ export function AgentOnboarding({ compact = false }: AgentOnboardingProps) {
           description="One command installs the MCP server AND the six skills (`getting-started`, `discover-source`, `build-connector`, `lint-connector`, `run-eval`, `deploy`) into your agent."
         >
           <div className="flex flex-wrap gap-1.5">
-            {INSTALL_OPTIONS.map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => setSelectedId(opt.id)}
-                aria-pressed={selectedId === opt.id}
-                className={cn(
-                  "rounded-full border px-3 py-1 text-2xs font-medium transition-colors",
-                  selectedId === opt.id
-                    ? "border-primary/60 bg-primary/10 text-foreground"
-                    : "border-border/60 bg-card text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {opt.agent}
-              </button>
-            ))}
+            {INSTALL_OPTIONS.map((opt) => {
+              const Icon = opt.icon;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setSelectedId(opt.id)}
+                  aria-pressed={selectedId === opt.id}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-full border px-3 py-1 text-2xs font-medium transition-colors",
+                    selectedId === opt.id
+                      ? "border-primary/60 bg-primary/10 text-foreground"
+                      : "border-border/60 bg-card text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <Icon className="h-3 w-3" aria-hidden="true" />
+                  {opt.agent}
+                </button>
+              );
+            })}
           </div>
           <p className="text-xs text-muted-foreground">{selected.blurb}</p>
           <div className="space-y-1.5">

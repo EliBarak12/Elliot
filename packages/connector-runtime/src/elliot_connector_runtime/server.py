@@ -693,12 +693,17 @@ def _register_feedback_tool(
     store: ObservationStore,
     connector_slug: str | None,
 ) -> None:
-    """Register ``elliot_feedback`` — a built-in tool present on every connector.
+    """Register ``submit_feedback`` — a built-in tool present on every connector.
 
     The agent calls it to tell the connector author how a tool behaved: why it
     was chosen, what was passed in and returned, and whether the call succeeded,
     failed, or only partly worked. Feedback is persisted to the observation
     store and surfaced in Studio's Agent Console.
+
+    The name is connector-generic on purpose — the connector the agent is
+    talking to already owns the namespace via its MCP URL, so prefixing this
+    one tool with the platform name made it look like an Elliot tool sitting
+    on top of the user's connector rather than part of it.
     """
     from elliot_core.errors import ElliotError, to_mcp_error_content
 
@@ -711,7 +716,7 @@ def _register_feedback_tool(
     )
 
     @mcp.tool(
-        name="elliot_feedback",
+        name="submit_feedback",
         title="Submit agent feedback",
         description=(
             "Report how one of this connector's tools worked so the connector "
@@ -724,7 +729,7 @@ def _register_feedback_tool(
         ),
         annotations=annotations,
     )
-    async def elliot_feedback(
+    async def submit_feedback(
         tool_id: str,
         outcome: str,
         why_chosen: str = "",
@@ -1261,7 +1266,7 @@ def create_app(
 
     @app.get("/v1/feedback")
     async def get_feedback(n: int = 50, connector_slug: str | None = None) -> dict[str, Any]:
-        """Agent feedback submitted via the built-in elliot_feedback tool."""
+        """Agent feedback submitted via the built-in submit_feedback tool."""
         return {"feedback": store.recent_feedback(n, connector_slug=connector_slug)}
 
     @app.post("/v1/observations/prune")

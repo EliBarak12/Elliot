@@ -99,7 +99,7 @@ export function FeedbackPanel() {
             <EmptyState
               icon={MessageSquare}
               title="No agent feedback yet"
-              description="Every connector exposes an elliot_feedback tool. When an agent reports how a tool worked, it appears here."
+              description="Every connector exposes a submit_feedback tool. When an agent reports how a tool worked, it appears here."
               className="border-0 bg-transparent"
             />
           </div>

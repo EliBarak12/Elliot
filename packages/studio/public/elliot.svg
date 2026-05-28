@@ -1,13 +1,19 @@
-<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Elliot">
   <defs>
-    <linearGradient id="elliot-brand" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#00cec8" />
-      <stop offset="1" stop-color="#00cec8" stop-opacity="0.7" />
+    <linearGradient id="elliotStroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#22f0ea"/>
+      <stop offset="100%" stop-color="#006c69"/>
+    </linearGradient>
+    <linearGradient id="elliotE" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#14e5df"/>
+      <stop offset="100%" stop-color="#007875"/>
     </linearGradient>
   </defs>
-  <rect width="64" height="64" rx="14" fill="url(#elliot-brand)" />
-  <path
-    d="M24 18h18v7H32v5.5h9v6.5h-9V43h10.5v7H24z"
-    fill="#ffffff"
-  />
+  <rect x="3" y="3" width="58" height="58" rx="14" fill="#ffffff" stroke="url(#elliotStroke)" stroke-width="2.5"/>
+  <g fill="url(#elliotE)">
+    <rect x="18" y="17" width="6" height="30" rx="1.5"/>
+    <rect x="18" y="17" width="26" height="6" rx="1.5"/>
+    <rect x="18" y="29" width="20" height="6" rx="1.5"/>
+    <rect x="18" y="41" width="26" height="6" rx="1.5"/>
+  </g>
 </svg>

@@ -29,6 +29,11 @@ class ExecutorError(Exception):
     pass
 
 
+# Shape of an environment-variable name (UPPER_SNAKE). Used by strict secret
+# resolution to tell an unresolved reference from a literal credential value.
+_ENV_NAME_RE = re.compile(r"[A-Z][A-Z0-9_]*")
+
+
 # Bug: Studio's `elliot_discover_source` flattens a source into a primary
 # table named `<source.table_name>` plus child tables named
 # `<source.table_name>_<field>[_...]`. Connector tools authored against
@@ -570,16 +575,40 @@ def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
 
     Mirroring ``api_fetcher`` keeps plugin-time and runtime-time fetches
     behaving identically.
+
+    Strict mode (``ELLIOT_STRICT_SECRET_RESOLUTION=1``): instead of falling
+    open and sending an unresolved name as the credential, raise. A template
+    or an env-name-shaped key that isn't in the secret map is treated as a
+    misconfiguration, not as a literal value. Default off keeps the
+    fail-open behaviour (a resolved literal still passes through unchanged).
     """
-    import os
+    strict = os.environ.get("ELLIOT_STRICT_SECRET_RESOLUTION", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
     if key.startswith("{{ env:") and key.endswith(" }}"):
         env_var = key[len("{{ env:") : -len(" }}")].strip()
-        return secrets.get(env_var) or secrets.get(env_var.lower()) or os.environ.get(env_var, "")
+        resolved = (
+            secrets.get(env_var) or secrets.get(env_var.lower()) or os.environ.get(env_var, "")
+        )
+        if strict and not resolved:
+            raise ExecutorError(f"secret {env_var!r} is referenced but not set")
+        return resolved
     # Case 2: bare env-var name found in the secrets dict (or its lowercase
     # twin). Case 3: anything else is the resolved secret literal — return
     # it unchanged, just like api_fetcher does.
-    return secrets.get(key) or secrets.get(key.lower()) or key
+    resolved = secrets.get(key) or secrets.get(key.lower())
+    if resolved:
+        return resolved
+    # Not in the map. In strict mode, a key shaped like an env-var NAME
+    # (UPPER_SNAKE) is almost certainly an unresolved reference rather than a
+    # literal credential value — refuse instead of sending the name upstream.
+    if strict and _ENV_NAME_RE.fullmatch(key):
+        raise ExecutorError(f"secret {key!r} is referenced but not set")
+    return key
 
 
 def _build_auth_headers(auth: AuthConfig, secrets: dict[str, str]) -> dict[str, str]:

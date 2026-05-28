@@ -792,3 +792,38 @@ async def test_executor_db_pushdown_skipped_for_raw_sql(monkeypatch: pytest.Monk
 
     assert calls == ["query_database"]
     assert result.rows[0]["status"] == "open"
+
+
+# ── Opt-in strict secret resolution (ELLIOT_STRICT_SECRET_RESOLUTION) ───────
+
+
+def test_resolve_secret_fails_open_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default behaviour is unchanged: an unresolved name passes through (a
+    resolved literal value IS the key)."""
+    from elliot_connector_runtime.executor import _resolve_secret
+
+    monkeypatch.delenv("ELLIOT_STRICT_SECRET_RESOLUTION", raising=False)
+    assert _resolve_secret("MISSING_NAME", {}) == "MISSING_NAME"
+    assert _resolve_secret("sk-live-abc123", {}) == "sk-live-abc123"
+
+
+def test_resolve_secret_strict_raises_on_unresolved(monkeypatch: pytest.MonkeyPatch) -> None:
+    from elliot_connector_runtime.executor import ExecutorError, _resolve_secret
+
+    monkeypatch.setenv("ELLIOT_STRICT_SECRET_RESOLUTION", "1")
+    # Env-name-shaped key not in the map -> unresolved reference, refuse.
+    with pytest.raises(ExecutorError):
+        _resolve_secret("MISSING_NAME", {})
+    # Template not in the map -> refuse.
+    with pytest.raises(ExecutorError):
+        _resolve_secret("{{ env:MISSING_NAME }}", {})
+
+
+def test_resolve_secret_strict_passes_resolved_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    from elliot_connector_runtime.executor import _resolve_secret
+
+    monkeypatch.setenv("ELLIOT_STRICT_SECRET_RESOLUTION", "1")
+    # Found in the map -> returned.
+    assert _resolve_secret("API_TOKEN", {"API_TOKEN": "secret-val"}) == "secret-val"
+    # A literal value that isn't env-name-shaped passes through unchanged.
+    assert _resolve_secret("sk-live-abc123", {}) == "sk-live-abc123"

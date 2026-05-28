@@ -255,3 +255,31 @@ class TestRunSelect:
 
         assert len(result.rows) == 2
         assert result.fetched_at
+
+
+# ── Opt-in DB-host SSRF guard (ELLIOT_BLOCK_PRIVATE_DB_HOSTS) ───────────────
+
+
+def test_validate_db_host_is_noop_when_flag_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default behaviour is unchanged: private/loopback DSNs are not blocked."""
+    from elliot_core.sources.db_connector import _validate_db_host
+
+    monkeypatch.delenv("ELLIOT_BLOCK_PRIVATE_DB_HOSTS", raising=False)
+    # Returns without raising even for a loopback host.
+    _validate_db_host("postgresql://u:p@127.0.0.1:5432/db", source_id="db")
+
+
+def test_validate_db_host_blocks_private_when_flag_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    from elliot_core.sources.db_connector import _validate_db_host
+
+    monkeypatch.setenv("ELLIOT_BLOCK_PRIVATE_DB_HOSTS", "1")
+    with pytest.raises(SourceFetchError):
+        _validate_db_host("postgresql://u:p@127.0.0.1:5432/db", source_id="db")
+
+
+def test_validate_db_host_allows_public_when_flag_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    from elliot_core.sources.db_connector import _validate_db_host
+
+    monkeypatch.setenv("ELLIOT_BLOCK_PRIVATE_DB_HOSTS", "1")
+    # A public literal IP passes (no DNS needed, so the test is offline-safe).
+    _validate_db_host("mysql://u:p@8.8.8.8:3306/db", source_id="db")

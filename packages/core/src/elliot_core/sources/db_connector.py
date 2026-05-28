@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ipaddress
+import os
+import socket
 import threading
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -26,6 +29,56 @@ def _resolve_dsn(config: SourceConfig, secrets: dict[str, str]) -> str:
         env_var = url[7:-3].strip()
         url = secrets.get(env_var) or os.environ.get(env_var, "")
     return url
+
+
+def _block_private_db_hosts() -> bool:
+    return os.environ.get("ELLIOT_BLOCK_PRIVATE_DB_HOSTS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _validate_db_host(dsn: str, *, source_id: str) -> None:
+    """Reject DB DSNs that resolve to a non-public address — opt-in.
+
+    The REST source path is SSRF-hardened (``elliot_core.http.validate_url``);
+    the DB path is not, because legitimate databases routinely live on private
+    IPs (RDS, internal Postgres). Operators who serve untrusted connector
+    authors (e.g. multi-tenant cloud) set ``ELLIOT_BLOCK_PRIVATE_DB_HOSTS=1``
+    to forbid a source pointing at internal/metadata hosts. Default off keeps
+    every existing private-DB connector working unchanged.
+    """
+    if not _block_private_db_hosts():
+        return
+    from sqlalchemy.engine import make_url
+
+    from elliot_core.http import _BLOCKED_HOSTS, _is_blocked_ip
+
+    try:
+        host = make_url(dsn).host
+    except Exception:
+        host = None
+    if not host:
+        return
+    if host.lower() in _BLOCKED_HOSTS:
+        raise SourceFetchError(f"Source '{source_id}': database host '{host}' is blocked")
+    try:
+        addrs = socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        raise SourceFetchError(
+            f"Source '{source_id}': DNS resolution failed for database host '{host}'"
+        ) from exc
+    for *_unused, sockaddr in addrs:
+        try:
+            ip = ipaddress.ip_address(str(sockaddr[0]))
+        except ValueError:
+            continue
+        if _is_blocked_ip(ip):
+            raise SourceFetchError(
+                f"Source '{source_id}': database host '{host}' resolves to a non-public address"
+            )
 
 
 def _quote_table(name: str, *, dialect: str) -> str:
@@ -121,6 +174,7 @@ def _run_query(
     dsn = _resolve_dsn(config, secrets)
     if not dsn:
         raise ElliotError("INVALID_TOOL", f"Source '{config.id}' has no connection URL")
+    _validate_db_host(dsn, source_id=config.id)
 
     try:
         engine = _get_engine(dsn, config.type)

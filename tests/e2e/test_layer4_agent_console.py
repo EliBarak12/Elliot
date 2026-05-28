@@ -57,7 +57,7 @@ _CONSUMER_CALLS: list[tuple[str, dict]] = [
 ]
 
 # After using the tools, the consumer reports back via the built-in
-# elliot_feedback tool that is added to every connector. These do NOT count as
+# submit_feedback tool that is added to every connector. These do NOT count as
 # observed tool calls — the feedback handler writes to the feedback table only.
 _FEEDBACK_CALLS: list[dict] = [
     {
@@ -138,7 +138,7 @@ def consumer_session(console_stack: StackEndpoints, api_base_url: str) -> StackE
             # Report back on the tools just used via the built-in feedback tool.
             for feedback_args in _FEEDBACK_CALLS:
                 with contextlib.suppress(AssertionError):
-                    await call_tool_json(runtime_session, "elliot_feedback", feedback_args)
+                    await call_tool_json(runtime_session, "submit_feedback", feedback_args)
 
     asyncio.run(_consume())
     return console_stack
@@ -164,7 +164,7 @@ def test_consumer_calls_group_into_one_session(consumer_session: StackEndpoints)
 
 
 def test_agent_feedback_reaches_the_feed(consumer_session: StackEndpoints) -> None:
-    """The built-in elliot_feedback tool persists the agent's reports, and
+    """The built-in submit_feedback tool persists the agent's reports, and
     /v1/feedback serves them back for the connector author to read."""
     feedback = httpx.get(f"{RUNTIME_URL}/v1/feedback", timeout=10).json()["feedback"]
     assert len(feedback) == len(_FEEDBACK_CALLS)

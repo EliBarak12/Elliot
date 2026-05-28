@@ -57,7 +57,7 @@ class _ToolCall(_Base):
 class _AgentFeedback(_Base):
     """Free-form feedback an agent submits about a connector's tools.
 
-    Written by the built-in ``elliot_feedback`` tool exposed on every running
+    Written by the built-in ``submit_feedback`` tool exposed on every running
     connector. Lets the connector author see, per tool, why the agent chose it,
     what it passed and got back, and whether the call succeeded or failed.
     """

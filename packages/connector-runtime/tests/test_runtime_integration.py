@@ -710,7 +710,7 @@ def test_feedback_endpoint_returns_list(client: TestClient) -> None:
 
 
 def test_feedback_tool_registered_and_records(tmp_path: Path) -> None:
-    """Every running connector exposes a built-in elliot_feedback tool; calling
+    """Every running connector exposes a built-in submit_feedback tool; calling
     it persists the agent's report to the observation store with the right
     connector slug and agent identity."""
     import asyncio
@@ -744,7 +744,7 @@ def test_feedback_tool_registered_and_records(tmp_path: Path) -> None:
 
     mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
 
-    tool = mcp._tool_manager.get_tool("elliot_feedback")
+    tool = mcp._tool_manager.get_tool("submit_feedback")
     assert tool is not None
 
     identity = AgentIdentity(client="claude-code", model="claude-opus-4-7")
@@ -799,7 +799,7 @@ def test_feedback_tool_rejects_invalid_outcome(tmp_path: Path) -> None:
             pass
 
     mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
-    tool = mcp._tool_manager.get_tool("elliot_feedback")
+    tool = mcp._tool_manager.get_tool("submit_feedback")
     assert tool is not None
 
     with pytest.raises(ValueError, match="VALIDATION_INVALID_OUTCOME"):
@@ -819,7 +819,7 @@ def test_feedback_tool_absent_without_store(tmp_path: Path) -> None:
     config = ConnectorCache().get(cfg_path)
     executor = ToolExecutor(config, secrets={})
     mcp = create_runtime_server(config, executor)
-    assert mcp._tool_manager.get_tool("elliot_feedback") is None
+    assert mcp._tool_manager.get_tool("submit_feedback") is None
 
 
 def test_agent_identity_middleware_registered(app) -> None:

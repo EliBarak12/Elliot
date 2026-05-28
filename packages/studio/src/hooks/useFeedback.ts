@@ -1,6 +1,6 @@
 // Agent feedback feed for the Agent Console.
 //
-// Every running connector exposes a built-in `elliot_feedback` tool the agent
+// Every running connector exposes a built-in `submit_feedback` tool the agent
 // calls to report how a tool behaved. The connector runtime persists those
 // reports and serves them at /v1/feedback.
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";

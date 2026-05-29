@@ -130,7 +130,10 @@ def register_studio_tools(mcp: FastMCP, session: ElliotSession) -> None:
                         "tool_id": tool_id,
                         "call_count": count,
                         "error_rate": round(errors / count, 3) if count > 0 else 0,
-                        "avg_latency_ms": round(total_ms[tool_id] / count, 2) if count > 0 else 0,
+                        # Named to match the audit row / DB column / /v1/metrics
+                        # ("duration_ms"); was "avg_latency_ms", which drifted
+                        # from every other component (F-015).
+                        "avg_duration_ms": round(total_ms[tool_id] / count, 2) if count > 0 else 0,
                     }
                 )
             metrics.sort(key=lambda x: x.get("call_count") or 0, reverse=True)  # type: ignore[arg-type,return-value]

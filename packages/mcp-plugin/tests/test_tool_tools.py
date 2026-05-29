@@ -68,6 +68,33 @@ def test_create_tool_returns_tool_id(mcp: FastMCP, session: ElliotSession, tmp_p
     assert result["tool_id"] == "total_orders"
 
 
+def test_create_tool_slugifies_free_text_name(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    # A natural name with spaces must become a snake_case id, not a raw id with
+    # spaces (which blew up downstream as [Errno 22] on Windows).
+    _load_table(session, tmp_path)
+    result = _tool(mcp, "elliot_create_tool")(
+        name="List Orders",
+        description="Return all orders in the system",
+        category="read",
+        sql='SELECT * FROM "orders"',
+        parameters=[],
+    )
+    assert result["tool_id"] == "list_orders"
+
+
+def test_create_tool_rejects_unsluggable_name(mcp: FastMCP, session: ElliotSession):
+    result = _tool(mcp, "elliot_create_tool")(
+        name="!!!",
+        description="Return all orders in the system",
+        category="read",
+        sql="SELECT 1",
+        parameters=[],
+    )
+    # No letters survive slugification -> actionable validation error, not a crash.
+    blob = result.get("text", "") + result.get("error", "")
+    assert "INVALID_TOOL_NAME" in blob or "valid tool id" in blob
+
+
 def test_create_tool_stores_in_registry(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
     _load_table(session, tmp_path)
     _tool(mcp, "elliot_create_tool")(

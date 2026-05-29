@@ -53,7 +53,14 @@ def connector_file(tmp_path: Path) -> Path:
 
 
 @pytest.fixture()
-def app(connector_file: Path):
+def app(connector_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # Isolate the runtime's observation store from any developer's local
+    # .elliot/observations.db, otherwise prior `make dev` activity leaks
+    # rows into tests that assert empty (e.g. /v1/feedback).  Audit + sessions
+    # logs are isolated the same way.
+    monkeypatch.setenv("ELLIOT_DB_URL", f"sqlite:///{tmp_path / 'observations.db'}")
+    monkeypatch.setenv("ELLIOT_AUDIT_LOG", str(tmp_path / "audit.ndjson"))
+    monkeypatch.setenv("ELLIOT_SESSIONS_LOG", str(tmp_path / "sessions.ndjson"))
     return create_app(connector_path=str(connector_file), secrets={})
 
 

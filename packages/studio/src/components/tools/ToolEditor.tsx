@@ -1,4 +1,7 @@
 import { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,6 +19,7 @@ type Category = "READ" | "WRITE" | "ACTION" | "AGGREGATE";
 interface Props {
   tool: ToolDefinition | null;
   onSaved: () => void;
+  onDeleted?: () => void;
 }
 
 const ID_RE = /^[a-z][a-z0-9_]*$/;
@@ -28,7 +32,8 @@ const DEFAULT_API_MAPPING: ApiRequestMapping = {
   body_format: "json",
 };
 
-export function ToolEditor({ tool, onSaved }: Props) {
+export function ToolEditor({ tool, onSaved, onDeleted }: Props) {
+  const queryClient = useQueryClient();
   const { data: sourcesRaw } = useSources();
   const sources = Array.isArray(sourcesRaw)
     ? (sourcesRaw as Array<{ id: string; name: string }>)
@@ -124,6 +129,22 @@ export function ToolEditor({ tool, onSaved }: Props) {
       onSaved();
     } catch (err) {
       setStatus({ type: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!tool) return;
+    if (!confirm(`Delete tool "${tool.name}"? This can't be undone.`)) return;
+    setStatus(null);
+    try {
+      await callTool("elliot_delete_tool", { tool_id: tool.id });
+      await queryClient.invalidateQueries({ queryKey: ["tools"] });
+      toast.success("Tool deleted");
+      onDeleted?.();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setStatus({ type: "error", message });
+      toast.error(message);
     }
   };
 
@@ -317,13 +338,24 @@ export function ToolEditor({ tool, onSaved }: Props) {
         </div>
       )}
 
-      <div className="flex gap-2">
+      <div className="flex gap-2 items-center">
         <Button size="sm" variant="outline" onClick={() => void handleValidate()}>
           Validate
         </Button>
         <Button size="sm" disabled={!idValid} onClick={() => void handleSave()}>
           Save
         </Button>
+        {tool && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => void handleDelete()}
+            className="ml-auto gap-1.5 text-destructive hover:text-destructive hover:bg-destructive/10"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete
+          </Button>
+        )}
       </div>
 
       {saved && (

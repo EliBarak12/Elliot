@@ -125,8 +125,34 @@ def test_coerce_boolean_invalid_string():
     assert exc_info.value.code == "INVALID_PARAM_TYPE"
 
 
-def test_coerce_string_default():
-    assert _coerce(99, "string") == "99"
+def test_coerce_string_passthrough():
+    assert _coerce("hello", "string") == "hello"
+
+
+def test_coerce_string_rejects_non_string():
+    # A string param given an int must error, not silently become "99"
+    # (otherwise SQL binds the wrong type and returns empty results).
+    with pytest.raises(ElliotError) as exc_info:
+        _coerce(99, "string")
+    assert exc_info.value.code == "INVALID_PARAM_TYPE"
+
+
+def test_coerce_and_validate_rejects_unknown_param():
+    # Wrong-cased / typo'd parameter names are rejected instead of silently
+    # dropped (which used to bind NULL and return 200 + empty rows).
+    tool = _make_read_tool(
+        params=[ParameterDefinition(name="iso", type="string", required=True, description="ISO")]
+    )
+    with pytest.raises(ElliotError) as exc_info:
+        _coerce_and_validate(tool, {"ISO": "JP"})
+    assert exc_info.value.code == "UNKNOWN_PARAM"
+
+
+def test_coerce_and_validate_allows_rest_query_params():
+    # rest_query_params are valid call-time keys even when not also declared
+    # in `parameters`, so passthrough tools must not be rejected.
+    tool = _make_read_tool(rest_query_params=["q"])
+    assert _coerce_and_validate(tool, {"q": "widget"}) == {}
 
 
 def test_coerce_and_validate_enforces_enum():

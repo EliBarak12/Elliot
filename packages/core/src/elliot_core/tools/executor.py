@@ -259,6 +259,26 @@ class ToolExecutor:
 
 
 def _coerce_and_validate(tool: ToolDefinition, params: dict[str, Any]) -> dict[str, Any]:
+    # Reject parameters the tool doesn't declare. Previously an unknown key
+    # (e.g. wrong-cased "ISO" instead of "iso", or a typo) was silently
+    # dropped, so the SQL bound NULL and the tool returned 200 + empty rows
+    # with no signal to the agent. The allowed set spans every place a param
+    # can legitimately be consumed: declared parameters, passthrough
+    # rest_query_params, and WRITE api_mapping query/body params.
+    allowed = {p.name for p in tool.parameters}
+    allowed.update(tool.rest_query_params)
+    if tool.api_mapping is not None:
+        allowed.update(tool.api_mapping.query_params)
+        allowed.update(tool.api_mapping.body_params)
+    unknown = sorted(k for k in params if k not in allowed)
+    if unknown:
+        raise ElliotError(
+            "UNKNOWN_PARAM",
+            f"Unknown parameter(s) for tool '{tool.id}': {', '.join(unknown)}. "
+            f"Expected: {', '.join(sorted(allowed)) or '(none)'}",
+            detail={"tool_id": tool.id, "unknown": unknown, "allowed": sorted(allowed)},
+        )
+
     result: dict[str, Any] = {}
     for p in tool.parameters:
         val = params.get(p.name, p.default)
@@ -303,6 +323,18 @@ def _coerce(val: Any, typ: str) -> Any:
         if isinstance(val, (int, float)):
             return bool(val)
         raise ElliotError("INVALID_PARAM_TYPE", f"Expected boolean, got: {val!r}")
+    if typ in ("string", "date"):
+        # Reject silent int→str coercion: previously `country_summary({"iso": 99})`
+        # turned 99 into "99", bound it to a string SQL param, matched nothing,
+        # and returned 200 + empty rows. An agent passing the wrong type should
+        # get an actionable error, not a misleading empty result. (bool is an
+        # int subclass, so it's caught here too.)
+        if not isinstance(val, str):
+            raise ElliotError(
+                "INVALID_PARAM_TYPE",
+                f"Expected string, got {type(val).__name__}: {val!r}",
+            )
+        return val
     return str(val)
 
 

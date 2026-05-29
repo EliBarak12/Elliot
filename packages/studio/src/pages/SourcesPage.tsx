@@ -180,13 +180,21 @@ export default function SourcesPage() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-                      <DropdownMenuItem onClick={() => void handleRefresh(source.id)}>
+                      <DropdownMenuItem
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleRefresh(source.id);
+                        }}
+                      >
                         <RefreshCw className="h-3.5 w-3.5" />
                         Refresh schema
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
-                        onClick={() => void handleRemove(source.id)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleRemove(source.id);
+                        }}
                         className="text-destructive focus:text-destructive [&_svg]:text-destructive"
                       >
                         <Trash2 className="h-3.5 w-3.5" />

@@ -102,3 +102,31 @@ def test_destructive_tool_call_blocked_for_unknown_agents(session: ElliotSession
     with pytest.raises(ElliotError) as ei:
         asyncio.run(server._tool_manager.call_tool("studio_remove_source", {"source_id": "x"}))
     assert ei.value.code == "TOOL_NOT_FOUND"
+
+
+def test_newly_hidden_destructive_tools_not_listed(session: ElliotSession):
+    """elliot_delete_tool / _delete_skill / clear_audit / uninstall_trace_hook are
+    destructive and must be hidden from non-Studio agents (F-020)."""
+    server = create_elliot_server(session)
+    names = {t.name for t in server._tool_manager.list_tools()}
+    for hidden in (
+        "elliot_delete_tool",
+        "elliot_delete_skill",
+        "elliot_clear_audit_transcripts",
+        "elliot_uninstall_trace_hook",
+    ):
+        assert hidden not in names, f"{hidden} should be hidden from non-Studio agents"
+
+
+def test_missing_required_arg_surfaces_validation_code(session: ElliotSession):
+    """Pydantic arg-validation errors are reformatted to the [VALIDATION_*] envelope
+    so agents can branch on the code instead of parsing a raw pydantic dump (F-006)."""
+    import asyncio
+
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    server = create_elliot_server(session)
+    with pytest.raises(ToolError) as ei:
+        # elliot_query_sql requires `sql`
+        asyncio.run(server._tool_manager.call_tool("elliot_query_sql", {}))
+    assert "VALIDATION_MISSING_FIELD" in str(ei.value)

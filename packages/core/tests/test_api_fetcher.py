@@ -124,6 +124,30 @@ def test_extract_rows_single_dict_wrapped():
     assert rows == [{"id": 1}]
 
 
+def test_extract_rows_autodetects_resource_named_array():
+    # dummyjson-style envelope: pagination scalars + one resource-named array.
+    # No explicit data_path and no standard key, but there's exactly one
+    # list-of-objects field, so it must be extracted (not returned as 1 row).
+    data = {"total": 100, "skip": 0, "limit": 30, "products": [{"id": 1}, {"id": 2}]}
+    rows = _extract_rows(data, None)
+    assert rows == [{"id": 1}, {"id": 2}]
+
+
+def test_extract_rows_ambiguous_multiple_arrays_wraps_whole():
+    # Two object-lists -> ambiguous; fall back to wrapping the whole envelope
+    # rather than guessing wrong.
+    data = {"products": [{"id": 1}], "categories": [{"id": 2}]}
+    rows = _extract_rows(data, None)
+    assert rows == [data]
+
+
+def test_extract_rows_ignores_scalar_array():
+    # A list of scalars (e.g. an "ids" array) is not a row set.
+    data = {"name": "x", "tags": ["a", "b"]}
+    rows = _extract_rows(data, None)
+    assert rows == [data]
+
+
 def test_extract_rows_with_data_path():
     data = {"meta": {"results": [{"id": 1}]}}
     rows = _extract_rows(data, "meta.results")

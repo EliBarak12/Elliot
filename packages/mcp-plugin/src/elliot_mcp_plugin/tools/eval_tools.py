@@ -128,6 +128,32 @@ def register_eval_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
+    def elliot_list_eval_suites() -> dict:  # type: ignore[type-arg]
+        """List discoverable eval suites — the ``suite_id`` values elliot_run_eval accepts.
+
+        Scans ``<EVAL_DIR>`` (default ``.elliot/eval``) for ``.yaml`` / ``.yml`` /
+        ``.json`` files; each suite_id is the filename stem. Lets a UI populate a
+        suite dropdown instead of asking the user to guess a name.
+        """
+        try:
+            eval_dir = Path(EVAL_DIR)
+            suites: list[dict[str, str]] = []
+            if eval_dir.is_dir():
+                for f in sorted(eval_dir.iterdir()):
+                    if f.is_file() and f.suffix.lower() in (".yaml", ".yml", ".json"):
+                        suites.append(
+                            {
+                                "suite_id": f.stem,
+                                "path": str(f),
+                                "format": f.suffix.lstrip(".").lower(),
+                            }
+                        )
+            return {"suites": suites, "count": len(suites), "eval_dir": str(eval_dir)}
+        except Exception as exc:
+            log.error("eval.list_suites.failed", error=str(exc), exc_info=True)
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+
+    @mcp.tool()
     def elliot_quality_scan() -> dict:  # type: ignore[type-arg]
         """Run a quality analysis on the current connector and return per-tool scores."""
         try:

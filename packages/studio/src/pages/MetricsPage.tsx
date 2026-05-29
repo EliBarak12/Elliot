@@ -1,6 +1,14 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, AlertCircle, BarChart3, Gauge, RefreshCw, Timer } from "lucide-react";
+import {
+  Activity,
+  AlertCircle,
+  AlertTriangle,
+  BarChart3,
+  Gauge,
+  RefreshCw,
+  Timer,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,7 +24,7 @@ interface ToolMetric {
   tool_id: string;
   call_count: number;
   error_rate: number;
-  avg_latency_ms: number;
+  avg_duration_ms: number;
 }
 
 interface MetricsResponse {
@@ -106,23 +114,43 @@ function CallBar({ data }: { data: { label: string; value: number }[] }) {
 export default function MetricsPage() {
   const [days, setDays] = useState(30);
   const queryClient = useQueryClient();
-  const { data: metricsRaw, isLoading } = useMetrics(days);
+  const {
+    data: metricsRaw,
+    isLoading,
+    isError: metricsError,
+    refetch: refetchMetrics,
+  } = useMetrics(days);
   const metricsData = metricsRaw as MetricsResponse | undefined;
   const metrics = metricsData?.metrics ?? [];
 
-  const { data: efficiencyRaw } = useQuery<TokenEfficiencyResponse>({
+  const {
+    data: efficiencyRaw,
+    isError: efficiencyError,
+    refetch: refetchEfficiency,
+  } = useQuery<TokenEfficiencyResponse>({
     queryKey: ["token-efficiency"],
     queryFn: () => httpJson<TokenEfficiencyResponse>("/v1/metrics/token-efficiency"),
     refetchInterval: 30_000,
   });
   const efficiencyTools = efficiencyRaw?.tools ?? [];
 
-  const { data: harnessRaw } = useQuery<HarnessResponse>({
+  const {
+    data: harnessRaw,
+    isError: harnessError,
+    refetch: refetchHarnesses,
+  } = useQuery<HarnessResponse>({
     queryKey: ["harness-metrics"],
     queryFn: () => httpJson<HarnessResponse>("/v1/metrics/harnesses"),
     refetchInterval: 30_000,
   });
   const harnesses = harnessRaw?.harnesses ?? [];
+
+  const hasError = metricsError || efficiencyError || harnessError;
+  const handleRetry = () => {
+    void refetchMetrics();
+    void refetchEfficiency();
+    void refetchHarnesses();
+  };
 
   const handleRefresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["metrics"] });
@@ -132,7 +160,7 @@ export default function MetricsPage() {
   const avgErrorRate =
     metrics.reduce((sum, m) => sum + m.error_rate, 0) / (metrics.length || 1);
   const avgLatency =
-    metrics.reduce((sum, m) => sum + m.avg_latency_ms, 0) / (metrics.length || 1);
+    metrics.reduce((sum, m) => sum + m.avg_duration_ms, 0) / (metrics.length || 1);
 
   return (
     <div className="space-y-6">
@@ -173,7 +201,21 @@ export default function MetricsPage() {
         </div>
       )}
 
-      {!isLoading && metrics.length === 0 && (
+      {!isLoading && hasError && (
+        <EmptyState
+          icon={AlertTriangle}
+          title="Couldn't load metrics"
+          description="The Elliot MCP plugin didn't respond. Make sure the stack is running, then retry."
+          action={
+            <Button onClick={handleRetry} size="sm" variant="outline" className="gap-1.5">
+              <RefreshCw className="h-3.5 w-3.5" />
+              Retry
+            </Button>
+          }
+        />
+      )}
+
+      {!isLoading && !hasError && metrics.length === 0 && (
         <EmptyState
           icon={BarChart3}
           title="No audit data yet"
@@ -181,7 +223,7 @@ export default function MetricsPage() {
         />
       )}
 
-      {!isLoading && metrics.length > 0 && (
+      {!isLoading && !hasError && metrics.length > 0 && (
         <>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <StatCard
@@ -260,7 +302,7 @@ export default function MetricsPage() {
                           </Badge>
                         </td>
                         <td className="text-right py-2.5 px-5 text-xs tabular-nums">
-                          {m.avg_latency_ms.toFixed(0)}ms
+                          {m.avg_duration_ms.toFixed(0)}ms
                         </td>
                       </tr>
                     ))}

@@ -197,7 +197,7 @@ def test_metrics_aggregates_correctly(mcp: FastMCP, tmp_path: Path, monkeypatch)
     metrics = {m["tool_id"]: m for m in result["metrics"]}
     assert metrics["list_items"]["call_count"] == 2
     assert metrics["list_items"]["error_rate"] == 0.5
-    assert metrics["list_items"]["avg_latency_ms"] == 150.0
+    assert metrics["list_items"]["avg_duration_ms"] == 150.0
     assert metrics["count_items"]["call_count"] == 1
     assert result["days"] == 30
 

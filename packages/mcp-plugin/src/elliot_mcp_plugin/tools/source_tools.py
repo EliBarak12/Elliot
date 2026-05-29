@@ -69,11 +69,53 @@ def _sources_dir(session: ElliotSession) -> Path:
     return d
 
 
+_AUTH_ALIAS_KEYS = ("token", "username", "password")
+
+
+def _normalize_auth(config: dict[str, Any]) -> dict[str, Any]:
+    """Accept ergonomic auth aliases and normalize them to SourceConfig's shape.
+
+    ``SourceConfig.AuthConfig`` only accepts ``secret_key``, but agents naturally
+    write ``{"type":"bearer","token":"x"}`` or
+    ``{"type":"basic","username":"u","password":"p"}`` — which previously hit a
+    cryptic pydantic ``secret_key Field required`` error (the single biggest
+    cluster of harness failures). Map those aliases to ``secret_key`` here.
+    Returns a new config dict; never mutates the input.
+    """
+    auth = config.get("auth")
+    if not isinstance(auth, dict):
+        return config
+    has_alias = any(auth.get(k) for k in _AUTH_ALIAS_KEYS)
+    if not has_alias:
+        return config
+    if auth.get("secret_key"):
+        raise ElliotError(
+            "VALIDATION_ERROR",
+            "auth: provide either 'secret_key' or the token/username+password aliases, not both.",
+        )
+    auth = dict(auth)
+    atype = str(auth.get("type", "")).lower()
+    if atype == "bearer" and auth.get("token"):
+        auth["secret_key"] = auth.pop("token")
+    elif atype == "basic" and (auth.get("username") or auth.get("password")):
+        user = auth.pop("username", "") or ""
+        pw = auth.pop("password", "") or ""
+        auth["secret_key"] = f"{user}:{pw}"
+    # Drop any leftover alias keys so AuthConfig's extra="forbid" doesn't reject
+    # them (e.g. a stray "token" passed to a non-bearer type).
+    for k in _AUTH_ALIAS_KEYS:
+        auth.pop(k, None)
+    out = dict(config)
+    out["auth"] = auth
+    return out
+
+
 def _build_source_config(
     source_type: str, config: dict[str, Any], source_id: str, name: str
 ) -> SourceConfig:
     """Validate a raw config dict into a SourceConfig, mapping friendly types."""
     mapped_type = _TYPE_MAP[source_type.lower()]
+    config = _normalize_auth(config)
     merged = {"id": source_id, "type": mapped_type, "name": name, **config}
     return SourceConfig.model_validate(merged)
 
@@ -193,7 +235,15 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
         source_type: 'api'|'rest'|'http' for REST APIs, 'file'|'csv'|'json' for files,
                      'db'|'postgres'|'postgresql'|'mysql' for databases.
-        config: source-specific config dict (url, path, table, auth, etc.)
+        config: source-specific config dict. Common keys:
+            - url / path / table — the source location.
+            - auth — {"type": "api_key", "header_name": "...", "secret_key": "..."}
+              or {"type": "bearer", "token": "..."} or
+              {"type": "basic", "username": "...", "password": "..."}.
+            - data_path — jmespath to the array inside a wrapped REST response,
+              e.g. "products" for {"total":..,"products":[...]}. Usually
+              auto-detected; pass it explicitly when the rows are nested under
+              a non-obvious key or there are several arrays.
         name: logical name used as the SQLite table prefix
         """
         try:

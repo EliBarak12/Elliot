@@ -18,6 +18,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import structlog
 import yaml
@@ -129,8 +130,68 @@ def _render_prompt_body(skill: Skill) -> str:
     return "\n".join(header_parts) + skill.body
 
 
-def register_prompts(mcp: FastMCP) -> int:
-    """Register every skill in the plugin-root `skills/` directory as an MCP prompt.
+def _make_body_fn(body: str) -> Callable[[], str]:
+    def _fn() -> str:
+        return body
+
+    return _fn
+
+
+def _session_skill_prompt_name(skill_id: str) -> str:
+    return _prompt_name(f"skill_{skill_id}")
+
+
+def register_session_skill_prompt(mcp: FastMCP, skill: Any) -> str:
+    """Register one session-created skill (a SkillDefinition) as an MCP prompt.
+
+    Without this, skills built via ``elliot_create_skill`` lived only in the
+    session file — ``prompts/list`` never showed them, so agents couldn't
+    invoke them over MCP. The rendered prompt describes the steps and points
+    at ``elliot_preview_skill`` for end-to-end execution. Returns the prompt
+    name. Re-registering the same skill simply overwrites it.
+    """
+    name = _session_skill_prompt_name(skill.id)
+    steps_desc = "\n".join(
+        f"  {i + 1}. {step.alias}: call `{step.tool_id}` with {step.params}"
+        for i, step in enumerate(skill.steps)
+    )
+    inputs = ", ".join(p.name for p in skill.input_parameters) or "(none)"
+    body = (
+        f"# Elliot skill: {skill.name}\n\n"
+        f"{skill.description}\n\n"
+        f"Inputs: {inputs}\n\n"
+        f"Steps:\n{steps_desc or '  (no steps)'}\n\n"
+        f"To run it end-to-end against the loaded data, call "
+        f'`elliot_preview_skill(skill_id="{skill.id}")` with the inputs above.'
+    )
+    fn = _make_body_fn(body)
+    fn.__doc__ = skill.description
+    mcp.prompt(name=name, description=skill.description)(fn)
+    log.info("prompts.session_skill.registered", name=name, skill_id=skill.id)
+    return name
+
+
+def get_prompts_instructions_text() -> str:
+    """Build the 'Available prompts' section of the server instructions from the
+    skills actually on disk, so the advertised list can't drift from what
+    ``prompts/list`` really serves."""
+    skills = load_skills()
+    if not skills:
+        return "Available prompts (call `prompts/list` any time): (none found)"
+    lines = ["Available prompts (call `prompts/list` any time):"]
+    for skill in skills:
+        # Keep each line short and scannable: first sentence, capped length.
+        raw = (skill.description or "").strip().splitlines()[0] if skill.description else ""
+        desc = raw.split(". ")[0].rstrip(".")
+        if len(desc) > 90:
+            desc = desc[:87].rstrip() + "…"
+        lines.append(f"  - {_prompt_name(skill.name)} — {desc}")
+    return "\n".join(lines)
+
+
+def register_prompts(mcp: FastMCP, session: Any = None) -> int:
+    """Register every plugin-root skill — and, when a session is supplied, every
+    session-created skill — as an MCP prompt.
 
     Returns the number of prompts registered.
     """
@@ -138,17 +199,19 @@ def register_prompts(mcp: FastMCP) -> int:
     for skill in skills:
         prompt_name = _prompt_name(skill.name)
         rendered = _render_prompt_body(skill)
-
-        def make_fn(body: str) -> Callable[[], str]:
-            def _fn() -> str:
-                return body
-
-            return _fn
-
-        fn = make_fn(rendered)
+        fn = _make_body_fn(rendered)
         # FastMCP also uses fn.__doc__ as a description fallback. We pass the
         # description explicitly below, so this is just future-proofing.
         fn.__doc__ = skill.description
         mcp.prompt(name=prompt_name, description=skill.description)(fn)
         log.info("prompts.registered", name=prompt_name)
-    return len(skills)
+
+    count = len(skills)
+    if session is not None:
+        try:
+            for sk in session.registry.get_all_skills():
+                register_session_skill_prompt(mcp, sk)
+                count += 1
+        except Exception:
+            log.warning("prompts.session_skills.failed", exc_info=True)
+    return count

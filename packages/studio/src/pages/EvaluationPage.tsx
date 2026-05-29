@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
   CheckCircle2,
@@ -13,6 +14,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/ui/page-header";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { callTool } from "@/lib/mcp-client";
 import { cn } from "@/lib/utils";
@@ -34,6 +42,22 @@ interface EvalRunResult {
   failed: number;
   cases: EvalCaseResult[];
 }
+
+interface EvalSuite {
+  suite_id: string;
+  path: string;
+  format: string;
+}
+
+interface EvalSuiteListEnvelope {
+  suites?: EvalSuite[];
+  count?: number;
+  eval_dir?: string;
+}
+
+// Sentinel value for the "custom suite ID" option in the suite dropdown. Radix
+// Select forbids an empty-string item value, so use a non-suite_id token.
+const CUSTOM_SUITE_VALUE = "__custom__";
 
 interface ToolIssue {
   check: string;
@@ -155,9 +179,52 @@ function CaseTable({ cases }: { cases: EvalCaseResult[] }) {
 
 function EvalSuitesTab() {
   const [suiteId, setSuiteId] = useState("");
+  // When true, the user is typing a suite_id by hand instead of picking one
+  // from the discovered list (custom / fallback path).
+  const [customMode, setCustomMode] = useState(false);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<EvalRunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const {
+    data: suites,
+    isLoading: suitesLoading,
+    isError: suitesError,
+  } = useQuery({
+    queryKey: ["eval-suites"],
+    queryFn: async () => {
+      const raw = (await callTool("elliot_list_eval_suites", {})) as
+        | EvalSuiteListEnvelope
+        | EvalSuite[];
+      // The MCP tool returns { suites: [...], count, eval_dir }. Unwrap to a
+      // plain array so the dropdown can map over it without re-checking shape.
+      if (Array.isArray(raw)) return raw;
+      return Array.isArray(raw?.suites) ? raw.suites : [];
+    },
+    // Live-refresh so suites the agent adds appear without a page reload.
+    refetchInterval: 30_000,
+  });
+
+  // Force the manual text field whenever discovery yields nothing usable, so
+  // the user is never left without a way to enter a suite ID.
+  const hasSuites = (suites?.length ?? 0) > 0;
+  const useCustomField = customMode || !hasSuites;
+
+  // Value shown in the Select: the matching suite, or the custom sentinel.
+  const selectValue =
+    !useCustomField && suites?.some((s) => s.suite_id === suiteId)
+      ? suiteId
+      : CUSTOM_SUITE_VALUE;
+
+  const handleSelect = (value: string) => {
+    if (value === CUSTOM_SUITE_VALUE) {
+      setCustomMode(true);
+      setSuiteId("");
+      return;
+    }
+    setCustomMode(false);
+    setSuiteId(value);
+  };
 
   const handleRun = async () => {
     if (!suiteId.trim()) return;
@@ -186,16 +253,38 @@ function EvalSuitesTab() {
           <div className="flex gap-2 items-end">
             <div className="flex-1 space-y-1.5">
               <Label htmlFor="suite-id">Suite ID</Label>
-              <Input
-                id="suite-id"
-                value={suiteId}
-                onChange={(e) => setSuiteId(e.target.value)}
-                placeholder="e.g. smoke"
-                className="font-mono"
-              />
+              {hasSuites && (
+                <Select value={selectValue} onValueChange={handleSelect}>
+                  <SelectTrigger id="suite-id" className="font-mono">
+                    <SelectValue placeholder="Select a suite" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {suites?.map((s) => (
+                      <SelectItem key={s.suite_id} value={s.suite_id} className="font-mono">
+                        {s.suite_id}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value={CUSTOM_SUITE_VALUE}>Other / custom…</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+              {useCustomField && (
+                <Input
+                  id={hasSuites ? "suite-id-custom" : "suite-id"}
+                  value={suiteId}
+                  onChange={(e) => setSuiteId(e.target.value)}
+                  placeholder="e.g. smoke"
+                  className="font-mono"
+                />
+              )}
+              {suitesError && (
+                <p className="text-2xs text-muted-foreground">
+                  Could not list suites — enter a suite ID manually.
+                </p>
+              )}
             </div>
             <Button
-              disabled={!suiteId.trim() || running}
+              disabled={!suiteId.trim() || running || suitesLoading}
               onClick={() => void handleRun()}
               className="gap-1.5"
             >

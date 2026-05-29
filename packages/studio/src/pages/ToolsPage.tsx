@@ -28,6 +28,11 @@ export default function ToolsPage() {
     toast.success("Tool saved");
   };
 
+  const handleDeleted = () => {
+    setSelectedId(null);
+    setCreatingNew(false);
+  };
+
   const startNew = () => {
     setSelectedId(null);
     setCreatingNew(true);
@@ -103,7 +108,11 @@ export default function ToolsPage() {
 
         <Card className="flex-1 overflow-y-auto scrollbar-thin p-0">
           {creatingNew || selectedTool ? (
-            <ToolEditor tool={creatingNew ? null : selectedTool} onSaved={handleSaved} />
+            <ToolEditor
+              tool={creatingNew ? null : selectedTool}
+              onSaved={handleSaved}
+              onDeleted={handleDeleted}
+            />
           ) : (
             <div className="flex items-center justify-center h-full p-8">
               <EmptyState

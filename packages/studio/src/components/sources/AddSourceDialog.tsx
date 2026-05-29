@@ -42,12 +42,16 @@ export function AddSourceDialog({ open, onClose }: Props) {
     setLoading(true);
     setError(null);
     try {
-      // Reject inline credentials in postgres connection strings.
+      // Reject inline credentials in postgres connection strings and
+      // REST URLs (e.g. https://user:token@api.example.com).
       // CLAUDE.md: "Secrets never in logs, never hardcoded — use
       // `{{ env:VAR }}` in connector files." A `:password@` pattern
       // would land verbatim in the saved connector and in any audit
       // log of this call.
-      if (sourceType === "postgres" && /:[^@\s/]+@/.test(url)) {
+      if (
+        (sourceType === "postgres" || sourceType === "rest") &&
+        /:[^@\s/]+@/.test(url)
+      ) {
         setError(
           "Inline credentials are not allowed. Use a {{ env:VAR }} placeholder " +
             "(e.g. postgresql://user:{{ env:DB_PASSWORD }}@host/db) so the secret " +

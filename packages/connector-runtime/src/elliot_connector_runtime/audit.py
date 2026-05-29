@@ -44,6 +44,8 @@ class AuditLog:
         result_row_count: int,
         duration_ms: float,
         error: str | None = None,
+        session_id: str | None = None,
+        tokens_estimate: int = 0,
     ) -> None:
         # CLAUDE.md "Never log: secret values, API keys, raw query results".
         # `arguments` may contain agent-supplied auth tokens or API keys; the
@@ -54,6 +56,11 @@ class AuditLog:
             "arguments": redact_audit_arguments(arguments),
             "result_row_count": result_row_count,
             "duration_ms": round(duration_ms, 2),
+            # session_id ties a row to an agent session for /v1/audit correlation;
+            # tokens_estimate is the MCP byte-count estimate for per-call cost
+            # attribution. Both default to None/0 so existing callers are unaffected.
+            "session_id": session_id,
+            "tokens_estimate": tokens_estimate,
         }
         if error:
             entry["error"] = error

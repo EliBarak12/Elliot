@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -22,6 +24,38 @@ _RUNTIME_LOG_RELATIVE = Path(".elliot/runtime.log")
 _RUNTIME_HEALTH_TIMEOUT_S = 15.0
 _RUNTIME_HEALTH_INTERVAL_S = 0.2
 _LOG_TAIL_BYTES = 4096
+
+
+def _kill_process_tree(proc: subprocess.Popen[bytes]) -> None:
+    """Terminate the runtime subprocess and every child it spawned."""
+    if proc.poll() is not None:
+        return
+    if sys.platform == "win32":
+        with contextlib.suppress(Exception):
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                check=False,
+                capture_output=True,
+            )
+    else:
+        import signal
+
+        with contextlib.suppress(Exception):
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    with contextlib.suppress(Exception):
+        proc.wait(timeout=5)
+    if proc.poll() is None:
+        # Still alive — escalate to SIGKILL of the group / hard kill.
+        if sys.platform != "win32":
+            import signal
+
+            with contextlib.suppress(Exception):
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        else:
+            with contextlib.suppress(Exception):
+                proc.kill()
+        with contextlib.suppress(Exception):
+            proc.wait(timeout=3)
 
 
 def _tail_log(log_path: Path, n_bytes: int = _LOG_TAIL_BYTES) -> str:
@@ -351,6 +385,10 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
                     stdout=log_fh,
                     stderr=subprocess.STDOUT,
                     env=env,
+                    # Own process group/session so _kill_process_tree can take
+                    # down the uvicorn grandchild too (POSIX). Ignored on Windows,
+                    # where taskkill /T walks the tree by PID instead (F-024).
+                    start_new_session=(sys.platform != "win32"),
                 )
             finally:
                 # The subprocess inherits the fd; we can safely close our handle.
@@ -362,12 +400,9 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             deadline = time.monotonic() + _RUNTIME_HEALTH_TIMEOUT_S
             ok, reason = _wait_for_runtime(proc, f"http://localhost:{port}/health", deadline)
             if not ok:
-                try:
-                    if proc.poll() is None:
-                        proc.terminate()
-                        proc.wait(timeout=3)
-                except (OSError, subprocess.TimeoutExpired):
-                    pass
+                # Kill the whole tree (uv + uvicorn grandchild), not just uv,
+                # so a half-started runtime doesn't keep the port (F-024).
+                _kill_process_tree(proc)
                 session.runtime_process = None
                 log.error("runtime.start.failed", port=port, reason=reason)
                 return to_mcp_error_content(
@@ -399,11 +434,12 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
         try:
             if session.runtime_process is None:
                 return {"status": "not_running"}
-            session.runtime_process.terminate()
-            try:
-                session.runtime_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                session.runtime_process.kill()
+            # Kill the whole process tree. `uv run uvicorn` makes uvicorn a
+            # grandchild; terminating only the `uv` parent orphaned uvicorn,
+            # which kept port 3001 and went on serving the OLD connector across
+            # a stop+start (F-024). A fresh start now binds a free port and the
+            # newly-exported connector is actually served.
+            _kill_process_tree(session.runtime_process)
             session.runtime_process = None
             log.info("runtime.stopped")
             return {"status": "stopped"}

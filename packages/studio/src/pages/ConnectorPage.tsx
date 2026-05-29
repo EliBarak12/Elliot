@@ -52,6 +52,48 @@ const SEVERITY_VARIANT: Record<LintIssue["severity"], "destructive" | "warning" 
   INFO: "muted",
 };
 
+// Connection configs can carry credentials. Never render or copy them raw —
+// deep-copy and mask any known secret-bearing field before serialising.
+const SECRET_FIELDS = new Set([
+  "api_key",
+  "bearer_token",
+  "token",
+  "password",
+  "secret",
+  "authorization",
+  "auth",
+]);
+
+// On a fresh session the plugin may not be reachable yet, or no connector has
+// been built — both are expected and should not raise a user-facing error.
+function isExpectedNoConnector(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("no connector") ||
+    m.includes("not connected") ||
+    m.includes("not_found") ||
+    m.includes("connection") ||
+    m.includes("fetch") ||
+    m.includes("network")
+  );
+}
+
+function redactConnectionConfig(config: unknown): unknown {
+  if (Array.isArray(config)) {
+    return config.map((item) => redactConnectionConfig(item));
+  }
+  if (config !== null && typeof config === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(config as Record<string, unknown>)) {
+      out[key] = SECRET_FIELDS.has(key.toLowerCase())
+        ? "[REDACTED]"
+        : redactConnectionConfig(value);
+    }
+    return out;
+  }
+  return config;
+}
+
 function LintPanel({ issues }: { issues: LintIssue[] }) {
   if (issues.length === 0) {
     return (
@@ -85,10 +127,10 @@ function LintPanel({ issues }: { issues: LintIssue[] }) {
 
 export default function ConnectorPage() {
   const queryClient = useQueryClient();
-  const { data: toolsRaw } = useTools();
+  const { data: toolsRaw, isError: toolsError, error: toolsErr } = useTools();
   const tools = Array.isArray(toolsRaw) ? (toolsRaw as ToolDefinition[]) : [];
 
-  const { data: skillsRaw } = useSkills();
+  const { data: skillsRaw, isError: skillsError, error: skillsErr } = useSkills();
   const skills = Array.isArray(skillsRaw) ? (skillsRaw as SkillDefinition[]) : [];
 
   const [selectedToolIds, setSelectedToolIds] = useState<Set<string>>(new Set());
@@ -97,6 +139,7 @@ export default function ConnectorPage() {
   const [connectorSlug, setConnectorSlug] = useState("my-connector");
   const [dirty, setDirty] = useState(false);
   const [builtConnector, setBuiltConnector] = useState<ConnectorConfig | null>(null);
+  const [infoError, setInfoError] = useState<string | null>(null);
 
   // Load existing connector state from the session on mount
   useEffect(() => {
@@ -118,8 +161,14 @@ export default function ConnectorPage() {
             setSelectedSkillIds(new Set(data.connector.skills.map((s) => s.id)));
           }
         }
-      } catch {
-        // Plugin not yet connected — silently ignore
+      } catch (err) {
+        // The plugin not being connected yet (or there being no connector
+        // built yet) is expected on a fresh session — stay silent for that.
+        // Surface anything else so a real failure isn't swallowed.
+        const message = err instanceof Error ? err.message : String(err);
+        if (isExpectedNoConnector(message)) return;
+        console.error("[ConnectorPage] failed to load connector info", err);
+        setInfoError(message);
       }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -235,7 +284,9 @@ export default function ConnectorPage() {
 
   const handleCopy = async () => {
     if (!runtimeInfo?.connection_config) return;
-    await navigator.clipboard.writeText(JSON.stringify(runtimeInfo.connection_config, null, 2));
+    await navigator.clipboard.writeText(
+      JSON.stringify(redactConnectionConfig(runtimeInfo.connection_config), null, 2)
+    );
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -273,6 +324,51 @@ export default function ConnectorPage() {
           </div>
         }
       />
+
+      {infoError && (
+        <div
+          role="alert"
+          className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        >
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span className="flex-1">Failed to load connector info — {infoError}</span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => setInfoError(null)}
+            className="shrink-0 rounded p-0.5 opacity-70 hover:opacity-100 hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
+      {(toolsError || skillsError) && (
+        <div
+          role="alert"
+          className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        >
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span className="flex-1">
+            {toolsError && skillsError
+              ? "Failed to load tools and skills."
+              : toolsError
+                ? `Failed to load tools${toolsErr instanceof Error ? ` — ${toolsErr.message}` : ""}.`
+                : `Failed to load skills${skillsErr instanceof Error ? ` — ${skillsErr.message}` : ""}.`}
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 shrink-0 text-xs"
+            onClick={() => {
+              if (toolsError) void queryClient.invalidateQueries({ queryKey: ["tools"] });
+              if (skillsError) void queryClient.invalidateQueries({ queryKey: ["skills"] });
+            }}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
 
       <Card>
         <CardHeader>
@@ -482,7 +578,7 @@ export default function ConnectorPage() {
                 </Button>
               </div>
               <pre className="text-xs bg-muted/60 border border-border rounded-lg p-3 overflow-x-auto font-mono">
-                {JSON.stringify(runtimeInfo.connection_config, null, 2)}
+                {JSON.stringify(redactConnectionConfig(runtimeInfo.connection_config), null, 2)}
               </pre>
             </CardContent>
           )}
@@ -509,7 +605,7 @@ export default function ConnectorPage() {
         </Card>
       )}
 
-      {!builtConnector && !dirty && tools.length === 0 && (
+      {!builtConnector && tools.length === 0 && (
         <EmptyState
           icon={Package}
           title="Nothing to bundle yet"

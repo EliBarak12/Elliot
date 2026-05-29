@@ -20,7 +20,10 @@ _VERB_RE = re.compile(
     r"Yield|Produce|Build|Compose|Assemble)s?\b",
     re.IGNORECASE,
 )
-_JARGON = frozenset({"sql", "endpoint", "table", "column", "database", "api", "select", "from"})
+# "from" was removed: it is an ordinary English preposition ("Return rows from
+# the orders source") far more often than SQL leakage, so flagging it produced
+# false positives on otherwise clean, natural descriptions.
+_JARGON = frozenset({"sql", "endpoint", "table", "column", "database", "api", "select"})
 _GENERIC_IDS = frozenset({"query", "get_data", "fetch", "run", "execute", "call"})
 _SNAKE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 

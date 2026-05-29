@@ -265,7 +265,7 @@ export default function AgentConsole() {
                 <span className="absolute inline-flex h-full w-full rounded-full bg-success opacity-75 animate-ping" />
                 <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-success" />
               </span>
-              Live · {Math.floor((Date.now() - (dataUpdatedAt || Date.now())) / 1000)}s ago
+              Live · {dataUpdatedAt > 0 ? `${Math.floor((Date.now() - dataUpdatedAt) / 1000)}s ago` : "—"}
             </Badge>
             <Button
               size="sm"

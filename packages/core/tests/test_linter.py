@@ -19,7 +19,7 @@ def _make_connector(**tool_overrides) -> ConnectorConfig:  # type: ignore[type-a
                 "name": "filter",
                 "type": "string",
                 "required": False,
-                "description": "Optional name filter",
+                "description": "Optional exact-match name filter",
             }
         ],
     }
@@ -37,6 +37,36 @@ def test_clean_connector_has_no_errors() -> None:
     config = _make_connector()
     issues = lint_connector(config)
     assert not any(i.severity == "ERROR" for i in issues)
+
+
+def test_filter_param_without_semantics_is_warn() -> None:
+    config = _make_connector(
+        parameters=[
+            {
+                "name": "name_filter",
+                "type": "string",
+                "required": False,
+                "description": "Filter results by name",
+            }
+        ]
+    )
+    issues = lint_connector(config)
+    assert any(i.code == "FILTER_SEMANTICS_UNCLEAR" and i.severity == "WARN" for i in issues)
+
+
+def test_filter_param_with_semantics_no_issue() -> None:
+    config = _make_connector(
+        parameters=[
+            {
+                "name": "name_filter",
+                "type": "string",
+                "required": False,
+                "description": "Substring (case-insensitive) match on the item name",
+            }
+        ]
+    )
+    issues = lint_connector(config)
+    assert not any(i.code == "FILTER_SEMANTICS_UNCLEAR" for i in issues)
 
 
 def test_short_description_is_error() -> None:

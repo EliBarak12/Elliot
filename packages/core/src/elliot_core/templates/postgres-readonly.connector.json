@@ -53,8 +53,7 @@
         {"field": "created_at", "alias": null, "aggregation": "none"}
       ],
       "order_by": [{"field": "created_at", "direction": "DESC"}],
-      "limit": 20,
-      "offset_parameter": null
+      "limit": 20
     }
   ],
   "skills": []

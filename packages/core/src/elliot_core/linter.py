@@ -64,6 +64,17 @@ _ENUM_DESC_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A string parameter whose name implies filtering/searching, where the agent
+# must know the match semantics (exact vs substring vs prefix, case handling)
+# to use it correctly. Without it, agents guess wrong — e.g. asking for "cities
+# starting with L" against an exact-match field silently returns nothing.
+_FILTER_PARAM_RE = re.compile(r"filter|search", re.IGNORECASE)
+_FILTER_SEMANTICS_RE = re.compile(
+    r"exact|substring|prefix|suffix|contains|case[- ]?insensitive|case[- ]?sensitive|"
+    r"starts? with|ends? with|\bequals\b|wildcard|partial|matches|\blike\b",
+    re.IGNORECASE,
+)
+
 _VERBS = {
     "return",
     "get",
@@ -397,6 +408,31 @@ def lint_connector(
                             "fixed value set but is an open string."
                         ),
                         suggestion="Declare the allowed values as an `enum` so agents can't guess wrong.",
+                    )
+                )
+
+            # Only warn when there's already a (non-trivial) description but it
+            # omits the match semantics — the empty-description case is covered
+            # by PARAMETER_MISSING_DESCRIPTION above.
+            if (
+                param.type == "string"
+                and _FILTER_PARAM_RE.search(param.name)
+                and len(param_desc.strip()) >= 5
+                and not _FILTER_SEMANTICS_RE.search(param_desc)
+            ):
+                issues.append(
+                    LintIssue(
+                        severity="WARN",
+                        code="FILTER_SEMANTICS_UNCLEAR",
+                        tool_id=tool.id,
+                        message=(
+                            f"Tool '{tool.id}' parameter '{param.name}' looks like a filter "
+                            "but its description doesn't state the match semantics."
+                        ),
+                        suggestion=(
+                            "Say whether matching is exact, substring/contains, prefix, or "
+                            "case-insensitive so agents query it correctly."
+                        ),
                     )
                 )
 

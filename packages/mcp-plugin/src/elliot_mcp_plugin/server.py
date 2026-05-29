@@ -86,7 +86,7 @@ def create_server(config: ConnectorConfig, secrets: dict[str, str]) -> Server:
 
 def create_elliot_server(session: Any) -> FastMCP:
     """Create a FastMCP server with all Elliot tool groups, prompts, and resources registered."""
-    from elliot_mcp_plugin.prompts import register_prompts
+    from elliot_mcp_plugin.prompts import get_prompts_instructions_text, register_prompts
     from elliot_mcp_plugin.resources import register_resources
     from elliot_mcp_plugin.tools.audit_tools import register_audit_tools
     from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
@@ -100,6 +100,10 @@ def create_elliot_server(session: Any) -> FastMCP:
     from elliot_mcp_plugin.tools.tool_tools import register_tool_tools
     from elliot_mcp_plugin.tools.trace_tools import register_trace_tools
 
+    # Generate the prompt list from the skills actually on disk so the advertised
+    # set can't drift from what prompts/list serves (it previously hard-coded 8
+    # while the server served 10).
+    prompts_section = get_prompts_instructions_text()
     instructions = (
         "Elliot turns any API or database into agent-ready MCP tools. You are the "
         "agent that designs, lints, evaluates, and deploys those tools — Elliot is "
@@ -116,15 +120,7 @@ def create_elliot_server(session: Any) -> FastMCP:
         "Studio (http://localhost:5173) opens automatically in their browser when "
         "the stack is up.\n"
         "\n"
-        "Available prompts (call `prompts/list` any time):\n"
-        "  - getting_started — read first; covers prereqs + workflow\n"
-        "  - onboard_product — interview the user, then build a connector\n"
-        "  - discover_source — register a REST API or DB as a queryable source\n"
-        "  - build_connector — draft tools with verb-first descriptions\n"
-        "  - lint_connector  — run elliot_lint_connector and fix every issue\n"
-        "  - audit_connector — Petri-style parallel sub-agent audit + fix loop\n"
-        "  - run_eval        — validate tool quality against expected outputs\n"
-        "  - deploy          — lint → validate → eval → save → start runtime\n"
+        f"{prompts_section}\n"
         "\n"
         "Available resources (call `resources/list`): connector templates "
         "(rest-api-key, postgres-readonly, paginated-rest, openapi-petstore), "
@@ -144,7 +140,9 @@ def create_elliot_server(session: Any) -> FastMCP:
     register_onboarding_tools(mcp, session)
     register_audit_tools(mcp, session)
     register_trace_tools(mcp, session)
-    register_prompts(mcp)
+    # Pass the session so skills it already holds are surfaced as MCP prompts
+    # (F-027); skills created later are registered live by elliot_create_skill.
+    register_prompts(mcp, session)
     register_resources(mcp)
     _hide_destructive_tools_from_other_agents(mcp)
     return mcp
@@ -160,8 +158,33 @@ _STUDIO_CLIENT_NAME = "elliot-studio"
 _DESTRUCTIVE_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "studio_remove_source",
+        # Deletion / log-wiping / harness-config changes are human-confirmed
+        # actions, triggered from Studio or Cloud — not reachable by arbitrary
+        # connected MCP clients. (Studio's own client identity still sees them.)
+        "elliot_delete_tool",
+        "elliot_delete_skill",
+        "elliot_clear_audit_transcripts",
+        "elliot_uninstall_trace_hook",
     }
 )
+
+
+def _format_validation_error(exc: Any) -> str:
+    """Turn a pydantic ValidationError (raised by FastMCP's argument validation,
+    before our handlers' try/except can run) into the same ``[CODE] message``
+    envelope our ElliotError path uses, so agents can branch on the code rather
+    than parse a raw pydantic dump."""
+    try:
+        errors = exc.errors()
+    except Exception:
+        return "[VALIDATION_ERROR] Invalid arguments."
+    if not errors:
+        return "[VALIDATION_ERROR] Invalid arguments."
+    first = errors[0]
+    loc = ".".join(str(p) for p in first.get("loc", ())) or "argument"
+    if first.get("type") == "missing":
+        return f"[VALIDATION_MISSING_FIELD] Missing required field: {loc}"
+    return f"[VALIDATION_TYPE] Invalid value for '{loc}': {first.get('msg', 'type error')}"
 
 
 def _is_studio_client() -> bool:
@@ -211,7 +234,23 @@ def _hide_destructive_tools_from_other_agents(mcp: FastMCP) -> None:
                 "TOOL_NOT_FOUND",
                 f"Unknown tool: {name}",
             )
-        return await original_call(name, arguments, context, convert_result)
+        from mcp.server.fastmcp.exceptions import ToolError
+        from pydantic import ValidationError as PydanticValidationError
+
+        try:
+            return await original_call(name, arguments, context, convert_result)
+        except ToolError as exc:
+            # FastMCP's Tool.run wraps every in-handler exception — including the
+            # pydantic argument-validation error that fires BEFORE a handler's
+            # own try/except — as ToolError(__cause__=original). Re-surface the
+            # cause as the structured "[CODE] message" envelope so agents can
+            # branch on VALIDATION_*/Elliot codes instead of a raw pydantic dump.
+            cause = exc.__cause__
+            if isinstance(cause, ElliotError):
+                raise ToolError(f"[{cause.code}] {cause.message}") from cause
+            if isinstance(cause, PydanticValidationError):
+                raise ToolError(_format_validation_error(cause)) from cause
+            raise
 
     tool_manager.list_tools = filtered_list  # type: ignore[method-assign]
     tool_manager.call_tool = filtered_call  # type: ignore[method-assign]

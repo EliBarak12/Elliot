@@ -7,8 +7,8 @@ vi.mock("@/hooks/useMetrics", () => ({
   useMetrics: () => ({
     data: {
       metrics: [
-        { tool_id: "list_animals", call_count: 89, error_rate: 0.02, avg_latency_ms: 43 },
-        { tool_id: "get_animal", call_count: 34, error_rate: 0, avg_latency_ms: 21 },
+        { tool_id: "list_animals", call_count: 89, error_rate: 0.02, avg_duration_ms: 43 },
+        { tool_id: "get_animal", call_count: 34, error_rate: 0, avg_duration_ms: 21 },
       ],
       days: 30,
     },

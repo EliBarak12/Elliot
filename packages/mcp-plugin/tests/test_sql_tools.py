@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from mcp.server.fastmcp import FastMCP
 
+from elliot_core.errors import ElliotError
 from elliot_mcp_plugin.session import ElliotSession
 from elliot_mcp_plugin.tools.sql_tools import register_sql_tools
 
@@ -90,29 +91,29 @@ def test_query_sql_with_where(mcp: FastMCP, session: ElliotSession, tmp_path: Pa
     assert result["row_count"] == 1
 
 
-def test_query_sql_drop_returns_error(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+def test_query_sql_drop_raises(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    # Blocked SQL now raises so FastMCP marks the result isError=true, instead
+    # of returning an error dict that looked like a successful result.
     _load_table(session, tmp_path)
-    result = _tool(mcp, "elliot_query_sql")(sql='DROP TABLE "items"')
-    assert "text" in result or "error" in result
-    error_msg = result.get("error", result.get("text", ""))
-    assert "DROP" in error_msg or "Forbidden" in error_msg
+    with pytest.raises(ElliotError):
+        _tool(mcp, "elliot_query_sql")(sql='DROP TABLE "items"')
 
 
-def test_query_sql_insert_returns_error(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+def test_query_sql_insert_raises(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
     _load_table(session, tmp_path)
-    result = _tool(mcp, "elliot_query_sql")(sql="INSERT INTO items VALUES (4, 'delta')")
-    assert "text" in result or "error" in result
+    with pytest.raises(ElliotError):
+        _tool(mcp, "elliot_query_sql")(sql="INSERT INTO items VALUES (4, 'delta')")
 
 
-def test_query_sql_empty_returns_error(mcp: FastMCP):
-    result = _tool(mcp, "elliot_query_sql")(sql="  ")
-    assert "text" in result or "error" in result
+def test_query_sql_empty_raises(mcp: FastMCP):
+    with pytest.raises(ElliotError):
+        _tool(mcp, "elliot_query_sql")(sql="  ")
 
 
 def test_query_sql_semicolon_rejected(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
     _load_table(session, tmp_path)
-    result = _tool(mcp, "elliot_query_sql")(sql='SELECT 1; DROP TABLE "items"')
-    assert "text" in result or "error" in result
+    with pytest.raises(ElliotError):
+        _tool(mcp, "elliot_query_sql")(sql='SELECT 1; DROP TABLE "items"')
 
 
 # ---------------------------------------------------------------------------
@@ -176,9 +177,9 @@ def test_sample_data_limit(mcp: FastMCP, session: ElliotSession, tmp_path: Path)
     assert len(result["rows"]) <= 2
 
 
-def test_sample_data_missing_table_returns_error(mcp: FastMCP):
-    result = _tool(mcp, "elliot_sample_data")(table_name="ghost")
-    assert "text" in result or "error" in result
+def test_sample_data_missing_table_raises(mcp: FastMCP):
+    with pytest.raises(ElliotError):
+        _tool(mcp, "elliot_sample_data")(table_name="ghost")
 
 
 # ---------------------------------------------------------------------------
@@ -192,9 +193,9 @@ def test_profile_column_returns_stats(mcp: FastMCP, session: ElliotSession, tmp_
     assert "distinct_count" in result or "null_count" in result or isinstance(result, dict)
 
 
-def test_profile_column_missing_table_returns_error(mcp: FastMCP):
-    result = _tool(mcp, "elliot_profile_column")(table_name="ghost", column_name="x")
-    assert "text" in result or "error" in result
+def test_profile_column_missing_table_raises(mcp: FastMCP):
+    with pytest.raises(ElliotError):
+        _tool(mcp, "elliot_profile_column")(table_name="ghost", column_name="x")
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +209,6 @@ def test_explain_query_returns_plan(mcp: FastMCP, session: ElliotSession, tmp_pa
     assert "plan" in result
 
 
-def test_explain_query_invalid_sql_returns_error(mcp: FastMCP):
-    result = _tool(mcp, "elliot_explain_query")(sql="NOT VALID SQL !!!")
-    assert "text" in result or "error" in result
+def test_explain_query_invalid_sql_raises(mcp: FastMCP):
+    with pytest.raises(ElliotError):
+        _tool(mcp, "elliot_explain_query")(sql="NOT VALID SQL !!!")

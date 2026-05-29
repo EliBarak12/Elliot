@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -27,8 +28,12 @@ def test_safe_join_rejects_dotdot(tmp_path: Path):
 
 
 def test_safe_join_rejects_absolute(tmp_path: Path):
+    # Use an OS-correct absolute path: on Windows '/etc/passwd' is relative
+    # (no drive letter), so pick C:\etc\passwd there. Either way the join
+    # must be rejected as absolute, not as a generic escape.
+    abs_outside = "C:\\etc\\passwd" if sys.platform == "win32" else "/etc/passwd"
     with pytest.raises(PathEscape, match="absolute"):
-        safe_join(tmp_path, "/etc/passwd")
+        safe_join(tmp_path, abs_outside)
 
 
 def test_safe_join_rejects_double_dotdot(tmp_path: Path):
@@ -41,6 +46,10 @@ def test_safe_join_rejects_empty(tmp_path: Path):
         safe_join(tmp_path, "")
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="symlink creation requires SeCreateSymbolicLinkPrivilege on Windows",
+)
 def test_safe_join_rejects_symlink_escape(tmp_path: Path):
     # Build a symlink inside tmp_path that points to /tmp's sibling.
     outside = tmp_path.parent / "outside.json"

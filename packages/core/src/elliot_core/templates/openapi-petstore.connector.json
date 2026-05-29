@@ -52,8 +52,7 @@
         {"field": "status", "alias": null, "aggregation": "none"}
       ],
       "order_by": [],
-      "limit": 50,
-      "offset_parameter": null
+      "limit": 50
     }
   ],
   "skills": []

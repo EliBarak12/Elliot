@@ -151,10 +151,23 @@ def _extract_rows(data: Any, data_path: str | None) -> list[dict[str, Any]]:
         return extracted if isinstance(extracted, list) else ([extracted] if extracted else [])
     if isinstance(data, list):
         return data
+    if not isinstance(data, dict):
+        return []
+    # Common wrapper keys, in deterministic priority order.
     for key in ("data", "items", "results", "records", "rows"):
-        if isinstance(data, dict) and isinstance(data.get(key), list):
+        if isinstance(data.get(key), list):
             return data[key]
-    return [data] if isinstance(data, dict) else []
+    # Fallback auto-detect: many APIs wrap the row set under a resource-named
+    # key (dummyjson -> "products", openlibrary -> "docs", ...) alongside
+    # pagination scalars like total/skip/limit. If exactly one top-level field
+    # is a list of objects, it's unambiguously the data — extract it instead of
+    # returning the whole envelope as a single row.
+    object_lists = [
+        v for v in data.values() if isinstance(v, list) and (not v or isinstance(v[0], dict))
+    ]
+    if len(object_lists) == 1:
+        return object_lists[0]
+    return [data]
 
 
 def _parse_link_next(link_header: str) -> str | None:

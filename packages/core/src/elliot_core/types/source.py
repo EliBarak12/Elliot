@@ -28,6 +28,22 @@ class OAuth2Config(BaseModel):
 
 
 class AuthConfig(BaseModel):
+    """Authentication for a source.
+
+    The credential always lives in ``secret_key`` (a ``{{ env:VAR }}`` template
+    for shared auth, or a vault slot name for per-user auth). Expected
+    ``secret_key`` content per type:
+
+      * ``api_key`` — the key value; ``header_name`` or ``query_param`` names where it goes.
+      * ``bearer``  — the token (sent as ``Authorization: Bearer <secret_key>``).
+      * ``basic``   — ``"username:password"`` (base64-encoded into the Basic header).
+      * ``oauth2``  — handled per-user; see ``oauth2``.
+
+    The MCP ``elliot_discover_source`` tool also accepts the ergonomic aliases
+    ``token`` (bearer) and ``username`` + ``password`` (basic) and normalizes
+    them into ``secret_key`` before this model is constructed.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["api_key", "bearer", "basic", "oauth2"]

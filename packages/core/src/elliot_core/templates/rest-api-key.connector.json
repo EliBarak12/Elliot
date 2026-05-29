@@ -46,8 +46,7 @@
       ],
       "return_fields": [],
       "order_by": [],
-      "limit": 100,
-      "offset_parameter": null
+      "limit": 100
     }
   ],
   "skills": []

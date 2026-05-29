@@ -12,7 +12,13 @@ from elliot_core.tools.registry import ToolRegistry
 from elliot_core.tools.skill_runner import _lookup, _resolve_value, execute_skill
 from elliot_core.types.connector import ConnectorConfig
 from elliot_core.types.source import FetchResult, SourceConfig
-from elliot_core.types.tool import SkillDefinition, SkillStep, ToolDefinition, ToolResult
+from elliot_core.types.tool import (
+    ParameterDefinition,
+    SkillDefinition,
+    SkillStep,
+    ToolDefinition,
+    ToolResult,
+)
 
 
 def _fake_fetch(rows: list[dict[str, Any]]) -> Any:
@@ -153,7 +159,20 @@ async def test_execute_skill_unknown_tool_raises():
 @pytest.mark.asyncio
 async def test_execute_skill_multi_step_binding():
     tool_a = _make_tool("get_user")
-    tool_b = _make_tool("get_orders")
+    # get_orders must DECLARE the param the skill step binds into it, otherwise
+    # the executor now rejects it as an unknown parameter (F-025).
+    tool_b = ToolDefinition(
+        id="get_orders",
+        name="get_orders",
+        description="desc",
+        category="READ",
+        source_ids=["src"],
+        parameters=[
+            ParameterDefinition(
+                name="user_id", type="string", required=False, description="User id filter"
+            )
+        ],
+    )
     rows_a = [{"user_id": "u99", "name": "Alice"}]
     rows_b = [{"order_id": "o1"}]
 

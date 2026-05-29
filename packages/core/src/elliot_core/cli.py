@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -131,18 +132,27 @@ def _cmd_init(args: argparse.Namespace) -> None:
             print(f"  {name:<25} {desc}")
         return
 
-    if not args.template:
-        print("Error: provide --template NAME or --list", file=sys.stderr)
+    # Accept both `elliot init NAME [OUT]` (positional) and the legacy
+    # `elliot init --template NAME [OUT]`. When the flag is used, the first
+    # positional ("template") actually carries the output filename.
+    template_opt = getattr(args, "template_opt", None)
+    if template_opt:
+        template = template_opt
+        output = args.output or args.template
+    else:
+        template = args.template
+        output = args.output
+
+    if not template:
+        print("Error: provide a TEMPLATE name (see: elliot init --list)", file=sys.stderr)
         sys.exit(1)
 
-    src = _TEMPLATES_DIR / f"{args.template}.connector.json"
+    src = _TEMPLATES_DIR / f"{template}.connector.json"
     if not src.exists():
-        print(
-            f"Error: unknown template '{args.template}'. Run: elliot init --list", file=sys.stderr
-        )
+        print(f"Error: unknown template '{template}'. Run: elliot init --list", file=sys.stderr)
         sys.exit(1)
 
-    dest = Path(args.output or f"{args.template}.connector.json")
+    dest = Path(output or f"{template}.connector.json")
     dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
     print(f"Created {dest}")
     print(f"Next: elliot lint {dest}")
@@ -248,8 +258,14 @@ def _cmd_status(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
-def _write_json_merge(path: Path, key: str, entry_key: str, entry_value: object) -> bool:
-    """Merge {key: {entry_key: entry_value}} into a JSON file. Returns True if changed."""
+def _write_json_merge(
+    path: Path, key: str, entry_key: str, entry_value: object, dry_run: bool = False
+) -> bool:
+    """Merge {key: {entry_key: entry_value}} into a JSON file. Returns True if changed.
+
+    When ``dry_run`` is set, nothing is written — the return value still
+    reflects whether a write *would* have changed the file.
+    """
     data: dict[str, dict[str, object]] = {}
     if path.exists():
         try:
@@ -262,17 +278,20 @@ def _write_json_merge(path: Path, key: str, entry_key: str, entry_value: object)
     if servers.get(entry_key) == entry_value:
         return False
     servers[entry_key] = entry_value
+    if dry_run:
+        return True
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     return True
 
 
-def _write_openclaw_json(path: Path, section: str, mcp_url: str) -> bool:
+def _write_openclaw_json(path: Path, section: str, mcp_url: str, dry_run: bool = False) -> bool:
     """Merge an Elliot MCP server into an OpenClaw ``openclaw.json``.
 
     OpenClaw nests servers two levels deep — ``mcp.servers.<name>`` — and
     expects a ``transport`` field; remote HTTP servers use the canonical
-    ``"streamable-http"`` spelling. Returns True if the file changed.
+    ``"streamable-http"`` spelling. Returns True if the file changed. When
+    ``dry_run`` is set, nothing is written.
     """
     entry: dict[str, str] = {"transport": "streamable-http", "url": mcp_url}
     data: dict[str, object] = {}
@@ -294,6 +313,8 @@ def _write_openclaw_json(path: Path, section: str, mcp_url: str) -> bool:
     if servers.get(section) == entry:
         return False
     servers[section] = entry
+    if dry_run:
+        return True
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     return True
@@ -303,8 +324,11 @@ def _codex_section_re(section: str) -> re.Pattern[str]:
     return re.compile(rf"(?ms)^\[mcp_servers\.{re.escape(section)}\]\n.*?(?=^\[|\Z)")
 
 
-def _write_codex_toml(path: Path, url: str, section: str = "elliot") -> bool:
-    """Write [mcp_servers.<section>] into a Codex config.toml. Returns True if changed."""
+def _write_codex_toml(path: Path, url: str, section: str = "elliot", dry_run: bool = False) -> bool:
+    """Write [mcp_servers.<section>] into a Codex config.toml. Returns True if changed.
+
+    When ``dry_run`` is set, nothing is written.
+    """
     desired = f'[mcp_servers.{section}]\nurl = "{url}"\n'
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     if desired in existing:
@@ -316,6 +340,8 @@ def _write_codex_toml(path: Path, url: str, section: str = "elliot") -> bool:
         sep = "\n" if existing and not existing.endswith("\n") else ""
         gap = "\n" if existing else ""
         new_content = existing + sep + gap + desired
+    if dry_run:
+        return True
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(new_content, encoding="utf-8")
     return True
@@ -376,35 +402,49 @@ def _register_for_all_agents(
     mcp_url: str,
     cwd: Path,
     home: Path,
+    dry_run: bool = False,
 ) -> list[tuple[str, Path, str]]:
-    """Write `mcp_url` (under the given label/section name) to every detected agent."""
+    """Write `mcp_url` (under the given label/section name) to every detected agent.
+
+    When ``dry_run`` is set, no files are written and the reported status is
+    "would update" instead of "updated".
+    """
     results: list[tuple[str, Path, str]] = []
     section_key = f"elliot-{label}" if label != "plugin" else "elliot"
+    changed_status = "would update" if dry_run else "updated"
 
     claude_config = cwd / ".mcp.json"
     changed = _write_json_merge(
-        claude_config, "mcpServers", section_key, {"type": "http", "url": mcp_url}
+        claude_config, "mcpServers", section_key, {"type": "http", "url": mcp_url}, dry_run=dry_run
     )
-    results.append(("Claude Code", claude_config, "updated" if changed else "already configured"))
+    results.append(
+        ("Claude Code", claude_config, changed_status if changed else "already configured")
+    )
 
     if shutil.which("cursor") or (home / ".cursor").exists() or (cwd / ".cursor").exists():
         cursor_config = cwd / ".cursor" / "mcp.json"
         changed = _write_json_merge(
-            cursor_config, "mcpServers", section_key, {"type": "http", "url": mcp_url}
+            cursor_config,
+            "mcpServers",
+            section_key,
+            {"type": "http", "url": mcp_url},
+            dry_run=dry_run,
         )
-        results.append(("Cursor", cursor_config, "updated" if changed else "already configured"))
+        results.append(
+            ("Cursor", cursor_config, changed_status if changed else "already configured")
+        )
 
     if shutil.which("openclaw") or (home / ".openclaw").exists():
         openclaw_config = home / ".openclaw" / "openclaw.json"
-        changed = _write_openclaw_json(openclaw_config, section_key, mcp_url)
+        changed = _write_openclaw_json(openclaw_config, section_key, mcp_url, dry_run=dry_run)
         results.append(
-            ("OpenClaw", openclaw_config, "updated" if changed else "already configured")
+            ("OpenClaw", openclaw_config, changed_status if changed else "already configured")
         )
 
     if shutil.which("codex") or (home / ".codex").exists() or (cwd / ".codex").exists():
         codex_config = cwd / ".codex" / "config.toml"
-        changed = _write_codex_toml(codex_config, mcp_url, section=section_key)
-        results.append(("Codex", codex_config, "updated" if changed else "already configured"))
+        changed = _write_codex_toml(codex_config, mcp_url, section=section_key, dry_run=dry_run)
+        results.append(("Codex", codex_config, changed_status if changed else "already configured"))
 
     return results
 
@@ -420,6 +460,7 @@ def _cmd_connect(args: argparse.Namespace) -> None:
     """
     cwd = Path.cwd()
     home = Path.home()
+    dry_run = getattr(args, "dry_run", False)
     plugin_url = os.environ.get("ELLIOT_PLUGIN_URL", "http://localhost:3000")
     runtime_url = os.environ.get("ELLIOT_RUNTIME_URL", "http://localhost:3001")
 
@@ -438,6 +479,8 @@ def _cmd_connect(args: argparse.Namespace) -> None:
 
     print("\nElliot MCP Connect")
     print("─" * 60)
+    if dry_run:
+        print("  (dry run — no files will be written)")
 
     any_registered = False
     for label, mcp_url in targets:
@@ -450,7 +493,7 @@ def _cmd_connect(args: argparse.Namespace) -> None:
                 continue
             print("  ✓ Verified MCP initialize handshake")
 
-        results = _register_for_all_agents(label, mcp_url, cwd, home)
+        results = _register_for_all_agents(label, mcp_url, cwd, home, dry_run=dry_run)
         if not results:
             print("  No supported agents detected on this machine.")
             print("  Supported: Claude Code, Cursor, OpenClaw, Codex")
@@ -496,6 +539,18 @@ def _cmd_trace(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # Windows consoles default to cp1252, which cannot encode the box-drawing
+    # rules and check-mark glyphs (U+2500, U+2713, U+2717, U+2514) used in
+    # `connect`/`status`/`scan` output — printing them raises UnicodeEncodeError
+    # and crashes the command. Force UTF-8 on the standard streams so the CLI
+    # behaves the same everywhere; errors="replace" keeps output flowing if a
+    # stream still can't encode a glyph.
+    for _stream in (sys.stdout, sys.stderr):
+        _reconfigure = getattr(_stream, "reconfigure", None)
+        if _reconfigure is not None:
+            with contextlib.suppress(ValueError, OSError):
+                _reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(prog="elliot", description="Elliot developer tools")
     sub = parser.add_subparsers(dest="command")
 
@@ -512,9 +567,15 @@ def main() -> None:
     eval_cmd.add_argument("--connector", help="Override connector .json path")
 
     init_cmd = sub.add_parser("init", help="Create a connector from a starter template")
-    init_cmd.add_argument("--template", help="Template name (see --list)")
+    init_cmd.add_argument("template", nargs="?", help="Template name (see --list)")
+    init_cmd.add_argument(
+        "output", nargs="?", help="Output filename (default: <template>.connector.json)"
+    )
+    # Keep the original --template flag working so existing scripts and docs
+    # (elliot init --template NAME OUT) don't break; the bare positional form
+    # (elliot init NAME OUT) is now the documented one.
+    init_cmd.add_argument("--template", dest="template_opt", help=argparse.SUPPRESS)
     init_cmd.add_argument("--list", action="store_true", help="Show available templates")
-    init_cmd.add_argument("output", nargs="?", help="Output filename")
 
     export_cmd = sub.add_parser(
         "export-plugin",
@@ -545,6 +606,12 @@ def main() -> None:
         action="store_true",
         dest="runtime_only",
         help="Register only the runtime URL (skip the plugin URL).",
+    )
+    connect_cmd.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help="Preview which agent config files would change, without writing anything.",
     )
 
     trace_cmd = sub.add_parser(

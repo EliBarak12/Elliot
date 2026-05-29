@@ -9,8 +9,8 @@ import type { ProxyOptions } from "vite";
 // forwards to the real plugin/runtime, injecting X-Elliot-Key server-side so
 // the key never reaches the browser. Targets + key come from the process
 // env (set by `make dev` / the e2e harness), never from the client bundle.
-const PLUGIN_TARGET = process.env.VITE_PLUGIN_URL ?? "http://localhost:3000";
-const RUNTIME_TARGET = process.env.VITE_RUNTIME_URL ?? "http://localhost:3001";
+const PLUGIN_TARGET = process.env.VITE_PLUGIN_URL ?? "http://127.0.0.1:3000";
+const RUNTIME_TARGET = process.env.VITE_RUNTIME_URL ?? "http://127.0.0.1:3001";
 const API_KEY = process.env.ELLIOT_API_KEY ?? "";
 
 function injectKey(prefix: string): ProxyOptions {

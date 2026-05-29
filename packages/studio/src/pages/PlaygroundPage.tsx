@@ -206,7 +206,9 @@ export default function PlaygroundPage() {
                       <span
                         className={cn(
                           "h-1.5 w-1.5 rounded-full shrink-0",
-                          inv.result ? "bg-success" : "bg-muted-foreground"
+                          inv.result !== undefined
+                            ? "bg-success"
+                            : "bg-muted-foreground"
                         )}
                       />
                       <span className="text-xs font-medium truncate flex-1 min-w-0">

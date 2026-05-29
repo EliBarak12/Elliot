@@ -30,8 +30,18 @@ export function ToolTester({ toolId, parameters }: Props) {
     try {
       const params: Record<string, unknown> = {};
       for (const p of parameters) {
-        if (values[p.name] !== undefined) {
-          params[p.name] = values[p.name];
+        const raw = values[p.name];
+        if (raw === undefined) continue;
+        if (p.type === "integer") {
+          // Radix 10 avoids legacy octal parsing; fall back to the raw string
+          // when the input isn't a valid number so the backend can report it.
+          const n = parseInt(raw, 10);
+          params[p.name] = Number.isNaN(n) ? raw : n;
+        } else if (p.type === "number") {
+          const n = parseFloat(raw);
+          params[p.name] = Number.isNaN(n) ? raw : n;
+        } else {
+          params[p.name] = raw;
         }
       }
       const res = await callTool({ name: "elliot_preview_tool", args: { tool_id: toolId, params } });
@@ -85,22 +95,30 @@ export function ToolTester({ toolId, parameters }: Props) {
                 <thead>
                   {result.rows && result.rows.length > 0 && (
                     <tr>
-                      {Object.keys(result.rows[0] as object).map((k) => (
-                        <th key={k} className="border px-2 py-1 text-left bg-muted font-medium">
-                          {k}
-                        </th>
-                      ))}
+                      {typeof result.rows[0] === "object" && result.rows[0] !== null ? (
+                        Object.keys(result.rows[0] as object).map((k) => (
+                          <th key={k} className="border px-2 py-1 text-left bg-muted font-medium">
+                            {k}
+                          </th>
+                        ))
+                      ) : (
+                        <th className="border px-2 py-1 text-left bg-muted font-medium">value</th>
+                      )}
                     </tr>
                   )}
                 </thead>
                 <tbody>
                   {(result.rows ?? []).map((row, i) => (
                     <tr key={i}>
-                      {Object.values(row as object).map((v, j) => (
-                        <td key={j} className="border px-2 py-1">
-                          {String(v)}
-                        </td>
-                      ))}
+                      {typeof row === "object" && row !== null ? (
+                        Object.values(row as object).map((v, j) => (
+                          <td key={j} className="border px-2 py-1">
+                            {String(v)}
+                          </td>
+                        ))
+                      ) : (
+                        <td className="border px-2 py-1">{String(row)}</td>
+                      )}
                     </tr>
                   ))}
                 </tbody>

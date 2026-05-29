@@ -11,8 +11,40 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from mcp.server.fastmcp import FastMCP
 
+from elliot_core.errors import ElliotError
 from elliot_mcp_plugin.session import ElliotSession
-from elliot_mcp_plugin.tools.source_tools import register_source_tools
+from elliot_mcp_plugin.tools.source_tools import _build_source_config, register_source_tools
+
+
+def test_auth_bearer_token_alias_normalized() -> None:
+    sc = _build_source_config(
+        "rest", {"url": "https://api.x.com", "auth": {"type": "bearer", "token": "abc"}}, "s", "n"
+    )
+    assert sc.auth is not None and sc.auth.secret_key == "abc"
+
+
+def test_auth_basic_username_password_alias_normalized() -> None:
+    sc = _build_source_config(
+        "rest",
+        {"url": "https://api.x.com", "auth": {"type": "basic", "username": "u", "password": "p"}},
+        "s",
+        "n",
+    )
+    assert sc.auth is not None and sc.auth.secret_key == "u:p"
+
+
+def test_auth_alias_and_secret_key_conflict_raises() -> None:
+    with pytest.raises(ElliotError) as ei:
+        _build_source_config(
+            "rest",
+            {
+                "url": "https://api.x.com",
+                "auth": {"type": "bearer", "token": "a", "secret_key": "b"},
+            },
+            "s",
+            "n",
+        )
+    assert ei.value.code == "VALIDATION_ERROR"
 
 
 @pytest.fixture()

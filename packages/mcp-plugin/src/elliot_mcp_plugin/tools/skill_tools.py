@@ -9,6 +9,7 @@ import structlog
 from mcp.server.fastmcp import FastMCP
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.naming import is_valid_identifier, slugify_identifier
 from elliot_core.tools.skill_runner import execute_skill
 from elliot_core.tools.validator import validate_skill_definition
 from elliot_mcp_plugin.session import ElliotSession
@@ -78,7 +79,19 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
         aliases for `params`; `tool` is accepted as an alias for `tool_id`.
         """
         try:
-            skill_id = str(uuid.uuid4()).replace("-", "_")
+            # Derive a readable snake_case id from the name (matching tool ids)
+            # instead of an opaque UUID. Fall back to a uuid-suffixed slug only
+            # when the name yields nothing usable, and disambiguate collisions.
+            slug = slugify_identifier(name)
+            if not slug:
+                slug = "skill_" + uuid.uuid4().hex[:8]
+            elif not is_valid_identifier(slug):
+                slug = f"s_{slug}"
+            skill_id = slug
+            _suffix = 2
+            while session.registry.get_skill(skill_id) is not None:
+                skill_id = f"{slug}_{_suffix}"
+                _suffix += 1
             normalized_steps = _normalize_skill_steps(steps)
             skill = validate_skill_definition(
                 {
@@ -97,6 +110,15 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
                     )
             session.registry.add_skill(skill)
             session.save()
+            # Surface the new skill as an MCP prompt immediately so it shows up
+            # in prompts/list without a server restart (F-027). Best-effort: a
+            # prompt-registration hiccup must not fail skill creation.
+            try:
+                from elliot_mcp_plugin.prompts import register_session_skill_prompt
+
+                register_session_skill_prompt(mcp, skill)
+            except Exception:
+                log.warning("skill.prompt.register_failed", skill_id=skill.id, exc_info=True)
             log.info("skill.created", skill_id=skill.id)
             return {"skill_id": skill.id, "status": "created"}
         except ElliotError as exc:

@@ -2,14 +2,30 @@
 
 from __future__ import annotations
 
+import os
+
 import structlog
 from mcp.server.fastmcp import FastMCP
 
-from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.errors import ElliotError
 from elliot_core.sqlite.query_runner import run_tool_query, validate_tool_sql
 from elliot_mcp_plugin.session import ElliotSession
 
 log = structlog.get_logger(__name__)
+
+# Mirror elliot_connector_runtime.executor.max_result_rows so the ad-hoc SQL
+# escape hatch honours the same ELLIOT_MAX_RESULT_ROWS cap as registered tool
+# execution (principle #2: results are sized for the context window). Kept local
+# rather than imported so mcp-plugin keeps depending only on elliot-core.
+_DEFAULT_MAX_RESULT_ROWS = 10_000
+
+
+def _max_result_rows() -> int:
+    raw = os.environ.get("ELLIOT_MAX_RESULT_ROWS", "")
+    try:
+        return max(1, int(raw)) if raw else _DEFAULT_MAX_RESULT_ROWS
+    except ValueError:
+        return _DEFAULT_MAX_RESULT_ROWS
 
 
 def register_sql_tools(mcp: FastMCP, session: ElliotSession) -> None:
@@ -19,21 +35,33 @@ def register_sql_tools(mcp: FastMCP, session: ElliotSession) -> None:
         try:
             tables = session.engine.get_table_names()
             return {t: session.engine.get_table_schema(t) for t in tables}
+        except ElliotError:
+            raise
         except Exception as exc:
             log.error("sql.schema.failed", error=str(exc), exc_info=True)
-            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+            raise ElliotError("INTERNAL_ERROR", str(exc)) from exc
 
     @mcp.tool()
     def elliot_query_sql(sql: str, params: dict | None = None) -> dict:  # type: ignore[type-arg]
-        """Run a validated SELECT query against in-memory SQLite. Returns rows and meta."""
+        """Run a validated SELECT query against in-memory SQLite. Returns rows and meta.
+
+        Results are capped at ELLIOT_MAX_RESULT_ROWS (default 10,000); when the
+        cap is hit the response sets ``truncated: true`` so the agent knows the
+        set is incomplete and should narrow the query.
+        """
         try:
             rows = run_tool_query(session.engine, sql, params)
-            return {"rows": rows, "row_count": len(rows)}
-        except ElliotError as exc:
-            return to_mcp_error_content(exc)
+            cap = _max_result_rows()
+            truncated = len(rows) > cap
+            capped = rows[:cap]
+            return {"rows": capped, "row_count": len(capped), "truncated": truncated}
+        except ElliotError:
+            # Raise so FastMCP marks the result isError=true (a returned error
+            # dict was treated as a successful, doubly-nested result before).
+            raise
         except Exception as exc:
             log.error("sql.query.failed", error=str(exc), exc_info=True)
-            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+            raise ElliotError("INTERNAL_ERROR", str(exc)) from exc
 
     @mcp.tool()
     def elliot_list_tables() -> dict:  # type: ignore[type-arg]
@@ -41,9 +69,11 @@ def register_sql_tools(mcp: FastMCP, session: ElliotSession) -> None:
         try:
             tables = session.engine.get_table_names()
             return {"tables": tables}
+        except ElliotError:
+            raise
         except Exception as exc:
             log.error("sql.list_tables.failed", error=str(exc), exc_info=True)
-            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+            raise ElliotError("INTERNAL_ERROR", str(exc)) from exc
 
     @mcp.tool()
     def elliot_sample_data(table_name: str, limit: int = 10) -> dict:  # type: ignore[type-arg]
@@ -53,22 +83,22 @@ def register_sql_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 f'SELECT * FROM "{table_name}" ORDER BY RANDOM() LIMIT :n', {"n": limit}
             )
             return {"rows": rows}
-        except ElliotError as exc:
-            return to_mcp_error_content(exc)
+        except ElliotError:
+            raise
         except Exception as exc:
             log.error("sql.sample.failed", error=str(exc), exc_info=True)
-            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+            raise ElliotError("INTERNAL_ERROR", str(exc)) from exc
 
     @mcp.tool()
     def elliot_profile_column(table_name: str, column_name: str) -> dict:  # type: ignore[type-arg]
         """Return min, max, null count, distinct count, and top 5 values for a column."""
         try:
             return session.engine.profile_column(table_name, column_name)
-        except ElliotError as exc:
-            return to_mcp_error_content(exc)
+        except ElliotError:
+            raise
         except Exception as exc:
             log.error("sql.profile.failed", error=str(exc), exc_info=True)
-            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+            raise ElliotError("INTERNAL_ERROR", str(exc)) from exc
 
     @mcp.tool()
     def elliot_validate_sql(sql: str) -> dict:  # type: ignore[type-arg]
@@ -76,9 +106,11 @@ def register_sql_tools(mcp: FastMCP, session: ElliotSession) -> None:
         try:
             valid, reason = validate_tool_sql(sql)
             return {"valid": valid, "reason": reason}
+        except ElliotError:
+            raise
         except Exception as exc:
             log.error("sql.validate.failed", error=str(exc), exc_info=True)
-            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+            raise ElliotError("INTERNAL_ERROR", str(exc)) from exc
 
     @mcp.tool()
     def elliot_explain_query(sql: str) -> dict:  # type: ignore[type-arg]
@@ -86,8 +118,8 @@ def register_sql_tools(mcp: FastMCP, session: ElliotSession) -> None:
         try:
             rows = session.engine.query(f"EXPLAIN QUERY PLAN {sql}")
             return {"plan": rows}
-        except ElliotError as exc:
-            return to_mcp_error_content(exc)
+        except ElliotError:
+            raise
         except Exception as exc:
             log.error("sql.explain.failed", error=str(exc), exc_info=True)
-            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+            raise ElliotError("INTERNAL_ERROR", str(exc)) from exc

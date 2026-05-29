@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from mcp.server.fastmcp import FastMCP
 
+from elliot_core.errors import ElliotError
 from elliot_mcp_plugin.session import ElliotSession
 
 pytestmark = pytest.mark.integration
@@ -54,8 +55,8 @@ def test_query_sql_with_filter(mcp: FastMCP):
 
 
 def test_query_sql_drop_rejected(mcp: FastMCP):
-    result = _tool(mcp, "elliot_query_sql")(sql='DROP TABLE "products"')
-    assert "text" in result or "error" in result
+    with pytest.raises(ElliotError):
+        _tool(mcp, "elliot_query_sql")(sql='DROP TABLE "products"')
 
 
 def test_validate_sql_select_valid(mcp: FastMCP):

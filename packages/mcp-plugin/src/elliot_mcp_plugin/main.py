@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from elliot_core.auth_middleware import ApiKeyMiddleware, enforce_auth_configured
 from elliot_core.http_middleware import AgentIdentityMiddleware
+from elliot_mcp_plugin import __version__
 from elliot_mcp_plugin.server import create_elliot_server
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -62,5 +63,14 @@ app.add_middleware(
     ],
     allow_methods=["GET", "POST", "OPTIONS", "DELETE"],
 )
+
+
+@app.get("/health")
+@app.get("/healthz")
+async def health() -> dict[str, str]:
+    """Liveness probe for container/orchestrator healthchecks. Unauthenticated
+    (``/health`` + ``/healthz`` are in ApiKeyMiddleware's bypass list)."""
+    return {"status": "ok", "service": "mcp-plugin", "version": __version__}
+
 
 app.mount("/mcp", _mcp_app)

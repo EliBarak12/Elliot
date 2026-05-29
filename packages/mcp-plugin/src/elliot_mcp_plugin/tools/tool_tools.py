@@ -8,6 +8,7 @@ import structlog
 from mcp.server.fastmcp import FastMCP
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.naming import is_valid_identifier, slugify_identifier
 from elliot_core.sql import extract_table_names
 from elliot_core.types.tool import ToolDefinition
 from elliot_mcp_plugin.session import ElliotSession
@@ -75,7 +76,7 @@ def _normalize_tool_input(tool: dict[str, Any]) -> dict[str, Any]:
     """
     out = dict(tool)
     if not out.get("id") and out.get("name"):
-        out["id"] = str(out["name"])
+        out["id"] = slugify_identifier(str(out["name"]))
     category = out.get("category")
     if isinstance(category, str):
         mapped = _CATEGORY_MAP.get(category.lower())
@@ -164,10 +165,23 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 valid = ", ".join(sorted(_CATEGORY_MAP))
                 return {"error": f"Unknown category '{category}'. Valid: {valid}"}
             mapped_category = _CATEGORY_MAP[category.lower()]
+            # Derive a snake_case id from the free-text name. Passing the name
+            # through verbatim let ids contain spaces/colons, which then blew up
+            # downstream as a cryptic "[Errno 22] Invalid argument" on Windows
+            # (the id is used in a filename) and failed the linter's snake_case
+            # rule. Slugify + validate up front instead.
+            tool_id = slugify_identifier(name)
+            if not is_valid_identifier(tool_id):
+                raise ElliotError(
+                    "INVALID_TOOL_NAME",
+                    f"Could not derive a valid tool id from name {name!r}. Use a name "
+                    "containing at least one letter (letters, numbers, spaces and "
+                    "underscores are allowed).",
+                )
             source_ids = _infer_source_ids_from_sql(sql, session)
             tool = ToolDefinition.model_validate(
                 {
-                    "id": name,
+                    "id": tool_id,
                     "name": name,
                     "description": description,
                     "category": mapped_category,

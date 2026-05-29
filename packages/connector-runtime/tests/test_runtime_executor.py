@@ -108,6 +108,56 @@ async def test_executor_rest_source() -> None:
 
 
 @respx.mock
+async def test_executor_rest_passthrough_forwards_query_params() -> None:
+    """A READ tool with rest_query_params forwards them to the REST source as
+    live query-string params on every call (e.g. ?resource_id=<arg>)."""
+    connector = ConnectorConfig(
+        name="DataStore",
+        slug="datastore",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="search",
+                name="Search",
+                type="rest",
+                url="https://api.example.com/search",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="search_records",
+                name="Search records",
+                description="Search a resource's records live.",
+                category="READ",
+                source_ids=["search"],
+                rest_query_params=["resource_id", "q"],
+                parameters=[
+                    ParameterDefinition(
+                        name="resource_id", type="string", required=True, description="resource id"
+                    ),
+                    ParameterDefinition(
+                        name="q", type="string", required=False, description="text filter"
+                    ),
+                ],
+            )
+        ],
+        skills=[],
+    )
+    route = respx.get("https://api.example.com/search").mock(
+        return_value=httpx.Response(200, json={"records": [{"id": 1, "name": "Ada"}]})
+    )
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(connector.tools[0], {"resource_id": "abc-123", "q": "ada"})
+
+    assert len(result.rows) == 1
+    assert result.rows[0]["name"] == "Ada"
+    # The agent's params were forwarded as live query-string params.
+    sent = str(route.calls.last.request.url)
+    assert "resource_id=abc-123" in sent
+    assert "q=ada" in sent
+
+
+@respx.mock
 async def test_executor_empty_result() -> None:
     respx.get("https://api.example.com/animals").mock(
         return_value=httpx.Response(200, json={"items": []})

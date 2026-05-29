@@ -50,6 +50,49 @@ def _load_table(session: ElliotSession, tmp_path: Path) -> None:
     _tool(s, "elliot_discover_source")(source_type="file", config={"path": str(p)}, name="orders")
 
 
+def test_create_rest_tool_sets_passthrough(mcp: FastMCP, session: ElliotSession):
+    from elliot_core.types.source import SourceConfig
+
+    session.sources["api1"] = SourceConfig.model_validate(
+        {"id": "api1", "type": "rest", "name": "api1", "url": "https://api.example.com/search"}
+    )
+    out = _tool(mcp, "elliot_create_rest_tool")(
+        name="Search records",
+        description="Search a resource's records live via the API.",
+        source_id="api1",
+        query_params=[
+            {
+                "name": "resource_id",
+                "type": "string",
+                "required": True,
+                "description": "resource id",
+            },
+            {"name": "q", "type": "string", "required": False, "description": "text filter"},
+        ],
+    )
+    assert out.get("status") == "created", out
+    tool = session.registry.get(out["tool_id"])
+    assert tool is not None
+    assert tool.rest_query_params == ["resource_id", "q"]
+    assert tool.source_ids == ["api1"]
+    assert {p.name for p in tool.parameters} == {"resource_id", "q"}
+
+
+def test_create_rest_tool_rejects_non_rest_source(mcp: FastMCP, session: ElliotSession):
+    from elliot_core.types.source import SourceConfig
+
+    session.sources["f1"] = SourceConfig.model_validate(
+        {"id": "f1", "type": "file", "name": "f1", "path": "/tmp/x.json"}
+    )
+    out = _tool(mcp, "elliot_create_rest_tool")(
+        name="X tool",
+        description="should be rejected",
+        source_id="f1",
+        query_params=[{"name": "a"}],
+    )
+    assert "error" in out
+
+
 # ---------------------------------------------------------------------------
 # elliot_create_tool
 # ---------------------------------------------------------------------------

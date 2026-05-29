@@ -201,6 +201,100 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
+    def elliot_create_rest_tool(
+        name: str,
+        description: str,
+        source_id: str,
+        query_params: list[dict],  # type: ignore[type-arg]
+        parameters: list[dict] | None = None,  # type: ignore[type-arg]
+    ) -> dict:  # type: ignore[type-arg]
+        """Define a LIVE REST passthrough tool (call-time parameterized fetch).
+
+        Unlike elliot_create_tool — which queries data snapshotted from a fixed
+        URL at build time — a passthrough tool forwards its ``query_params`` to a
+        REST source as URL query parameters on EVERY call and returns the live
+        response. Use it for large or server-side-filtered APIs where a fixed
+        snapshot won't work — e.g. a datastore/search endpoint that needs a
+        resource id per call:
+
+            GET <source url>?resource_id=<resource_id>&q=<q>
+
+        Args:
+            source_id: id of a REST source (from elliot_discover_source) whose
+                URL is the base endpoint; query_params are appended to it per
+                call.
+            query_params: the parameters forwarded as query params. Each is
+                {"name": str, "type"?: "string|integer|number|boolean|date",
+                "required"?: bool, "description"?: str, "enum"?: [str]}. They
+                become the tool's agent-facing inputs AND its rest_query_params.
+            parameters: optional extra declared parameters that are NOT
+                forwarded (rare — e.g. a value used only by an optional SQL
+                post-filter).
+        """
+        try:
+            source = session.sources.get(source_id)
+            if source is None:
+                return {
+                    "error": (
+                        f"Source not found: {source_id}. Discover a REST source first with "
+                        "elliot_discover_source."
+                    )
+                }
+            if source.type != "rest":
+                return {
+                    "error": (
+                        f"Source '{source_id}' is type '{source.type}', not 'rest'. Passthrough "
+                        "tools require a REST source."
+                    )
+                }
+            if not query_params:
+                return {"error": "query_params must list at least one parameter to forward."}
+
+            tool_id = slugify_identifier(name)
+            if not is_valid_identifier(tool_id):
+                raise ElliotError(
+                    "INVALID_TOOL_NAME",
+                    f"Could not derive a valid tool id from name {name!r}.",
+                )
+
+            def _norm(p: dict[str, Any]) -> dict[str, Any]:
+                pname = p.get("name")
+                if not pname:
+                    raise ElliotError("VALIDATION_ERROR", "each query_param needs a 'name'.")
+                return {
+                    "name": pname,
+                    "type": p.get("type", "string"),
+                    "required": p.get("required", True),
+                    "description": p.get("description", ""),
+                    "enum": p.get("enum"),
+                }
+
+            qp = [_norm(p) for p in query_params]
+            all_params = qp + [_norm(p) for p in (parameters or [])]
+            tool = ToolDefinition.model_validate(
+                {
+                    "id": tool_id,
+                    "name": name,
+                    "description": description,
+                    "category": "READ",
+                    "source_ids": [source_id],
+                    "rest_query_params": [p["name"] for p in qp],
+                    "parameters": all_params,
+                }
+            )
+            session.registry.add(tool)
+            # Pure passthrough tools carry no SQL; drop any stale entry.
+            session.tool_sql.pop(tool.id, None)
+            session.save()
+            log.info("tool.created.rest_passthrough", tool_id=tool.id, source_id=source_id)
+            return {"tool_id": tool.id, "status": "created", "mode": "rest_passthrough"}
+        except ElliotError as exc:
+            return to_mcp_error_content(exc)
+        except Exception as exc:
+            log.error("tool.create_rest.failed", error=str(exc))
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+
+    @mcp.tool()
     def elliot_update_tool(tool_id: str, patch: dict) -> dict:  # type: ignore[type-arg]
         """Partially update a tool definition (name, description, sql, parameters)."""
         try:

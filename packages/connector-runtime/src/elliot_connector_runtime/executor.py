@@ -102,6 +102,14 @@ class ToolExecutor:
         if pushdown is not None:
             return await self._execute_db_pushdown(tool, pushdown, arguments)
 
+        # Passthrough mode: a READ tool that forwards its declared
+        # rest_query_params to the bound REST source as live query-string
+        # params on every call (e.g. ?resource_id=<arg>), instead of querying a
+        # fixed snapshot. The response varies per call, so this path always
+        # fetches live and never uses the materialization cache.
+        if tool.category == "READ" and tool.rest_query_params:
+            return await self._execute_passthrough(tool, arguments)
+
         # Determine SQL: prefer explicit sql, fall back to build_select_sql for filter_groups tools
         if tool.sql:
             # Even connector-supplied SQL must be a single SELECT/CTE — a
@@ -294,6 +302,7 @@ class ToolExecutor:
         self,
         source: SourceConfig,
         arguments: dict[str, Any],
+        extra_params: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         from urllib.parse import urlsplit
 
@@ -335,7 +344,9 @@ class ToolExecutor:
                 except SSRFError as exc:
                     raise ExecutorError(f"Refusing to fetch REST source: {exc.message}") from exc
 
-                params: dict[str, Any] = {}
+                # Passthrough query params (forwarded from the tool call) are the
+                # base; pagination params are layered on top.
+                params: dict[str, Any] = dict(extra_params or {})
                 if pagination.strategy == "offset":
                     params["offset"] = offset
                     params["limit"] = pagination.page_size
@@ -480,6 +491,62 @@ class ToolExecutor:
             row_count=len(result.rows),
         )
         return self._capped_result(tool.id, result.rows)
+
+    async def _execute_passthrough(
+        self,
+        tool: ToolDefinition,
+        arguments: dict[str, Any],
+    ) -> QueryResult:
+        """Forward a READ tool's ``rest_query_params`` to its REST source as
+        live query-string params and return the response.
+
+        Unlike the snapshot path this fetches on every call (the response
+        varies with the params), so it bypasses the materialization cache. An
+        optional ``sql`` / ``filter_groups`` still applies as a post-fetch
+        filter over the flattened live result.
+        """
+        if not tool.source_ids:
+            raise ExecutorError(f"Tool {tool.id!r} uses rest_query_params but has no source_ids")
+        source = self._sources.get(tool.source_ids[0])
+        if source is None:
+            raise ExecutorError(
+                f"Source {tool.source_ids[0]!r} for tool {tool.id!r} is not configured"
+            )
+        if source.type != "rest":
+            raise ExecutorError(
+                f"Tool {tool.id!r} uses rest_query_params but its source {source.id!r} is "
+                f"type {source.type!r}, not 'rest'"
+            )
+
+        api_params = {k: arguments[k] for k in tool.rest_query_params if k in arguments}
+        rows = await self._fetch_rest(source, arguments, extra_params=api_params)
+
+        if tool.sql or tool.filter_groups or tool.return_fields:
+            from elliot_core.sqlite.query_runner import validate_tool_sql
+
+            engine = SQLiteEngine()
+            try:
+                engine.load_result(flatten(rows, table_name=source.table_name or source.id))
+                if tool.sql:
+                    ok, reason = validate_tool_sql(tool.sql)
+                    if not ok:
+                        raise ExecutorError(f"Tool {tool.id!r} has invalid SQL: {reason}")
+                    sql = tool.sql
+                    params: dict[str, Any] = {p.name: arguments.get(p.name) for p in tool.parameters}
+                else:
+                    sql, params = build_select_sql(tool, arguments)
+                rows = engine.query(sql, params)
+            finally:
+                engine.close()
+
+        log.info(
+            "tool.passthrough",
+            tool_id=tool.id,
+            source_id=source.id,
+            api_params=sorted(api_params),
+            row_count=len(rows),
+        )
+        return self._capped_result(tool.id, rows)
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────

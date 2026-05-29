@@ -200,6 +200,46 @@ def test_update_tool_not_found(mcp: FastMCP):
     assert "text" in result or "error" in result
 
 
+def test_update_tool_reinfers_source_ids_when_sql_changes(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    """Regression: changing a tool's SQL to reference a different source must
+    re-infer source_ids. Otherwise the tool keeps the old source_ids, the
+    runtime materializes the wrong tables, and the SQL hits "no such table" /
+    returns 0 rows at call time while lint stays green (the data.gov.il bug)."""
+    _load_table(session, tmp_path)  # source "orders"
+
+    from elliot_mcp_plugin.tools.source_tools import register_source_tools
+
+    s = FastMCP("src")
+    register_source_tools(s, session)
+    p2 = tmp_path / "customers.csv"
+    p2.write_text("id,name\n1,Ann\n2,Bob\n")
+    _tool(s, "elliot_discover_source")(
+        source_type="file", config={"path": str(p2)}, name="customers"
+    )
+
+    orders_sid = next(sid for sid, src in session.sources.items() if src.name == "orders")
+    customers_sid = next(sid for sid, src in session.sources.items() if src.name == "customers")
+
+    _tool(mcp, "elliot_create_tool")(
+        name="repointed",
+        description="Retrieve all orders from the database",
+        category="READ",
+        sql='SELECT * FROM "orders"',
+        parameters=[],
+    )
+    assert session.registry.get("repointed").source_ids == [orders_sid]
+
+    _tool(mcp, "elliot_update_tool")(
+        tool_id="repointed",
+        patch={"sql": 'SELECT * FROM "customers"'},
+    )
+
+    # source_ids must now follow the SQL to the customers source.
+    assert session.registry.get("repointed").source_ids == [customers_sid]
+
+
 # ---------------------------------------------------------------------------
 # elliot_preview_tool
 # ---------------------------------------------------------------------------

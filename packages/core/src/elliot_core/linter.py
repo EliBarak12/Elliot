@@ -430,8 +430,9 @@ def lint_connector(
                             "but its description doesn't state the match semantics."
                         ),
                         suggestion=(
-                            "Say whether matching is exact, substring/contains, prefix, or "
-                            "case-insensitive so agents query it correctly."
+                            f"Put it in '{param.name}'s OWN description (not the tool "
+                            "description): say whether matching is exact, substring/contains, "
+                            "prefix, or case-insensitive so agents query it correctly."
                         ),
                     )
                 )

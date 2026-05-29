@@ -389,6 +389,26 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
+    def elliot_delete_source(source_id: str) -> dict:  # type: ignore[type-arg]
+        """Delete a source and cascade-delete any tools bound to it.
+
+        Use this to prune an orphaned source — e.g. one you discovered, then
+        rebuilt your tools onto a differently-named source, leaving the old one
+        materialized as dead weight (it is still fetched/loaded on every build).
+        WARNING: any tool whose source_ids include this source is deleted too —
+        re-point or re-create those tools against the source you kept.
+        """
+        try:
+            if session.sources.get(source_id) is None:
+                return {"error": f"Source not found: {source_id}"}
+            return session.remove_source(source_id)
+        except ElliotError as exc:
+            return to_mcp_error_content(exc)
+        except Exception as exc:
+            log.error("source.delete.failed", source_id=source_id, error=str(exc))
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+
+    @mcp.tool()
     def studio_remove_source(source_id: str) -> dict:  # type: ignore[type-arg]
         """Remove a source and cascade-delete its tools. Studio/dashboard only — not
         exposed to coding agents (filtered by the studio_ prefix gate)."""

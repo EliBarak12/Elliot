@@ -194,10 +194,17 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             if tool is None:
                 return {"error": f"Tool not found: {tool_id}"}
             sql_patch = patch.pop("sql", None)
-            if patch:
-                session.registry.update(tool_id, patch)
             if sql_patch is not None:
                 session.tool_sql[tool_id] = sql_patch
+                # SQL changed → the tables it references (and therefore the
+                # sources the runtime must materialize) may have changed too.
+                # elliot_create_tool infers source_ids from the SQL; update
+                # MUST do the same, otherwise the tool keeps stale source_ids
+                # and its SQL silently decouples from the materialized schema
+                # ("no such table" / 0 rows at runtime while lint stays green).
+                patch["source_ids"] = _infer_source_ids_from_sql(sql_patch, session)
+            if patch:
+                session.registry.update(tool_id, patch)
             session.save()
             return {"tool_id": tool_id, "status": "updated"}
         except ElliotError as exc:

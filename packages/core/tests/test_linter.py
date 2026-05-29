@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from elliot_core.linter import lint_connector
-from elliot_core.types import ConnectorConfig
+from elliot_core.types import ConnectorConfig, SourceConfig
 
 
 def _make_connector(**tool_overrides) -> ConnectorConfig:  # type: ignore[type-arg]
@@ -44,6 +44,86 @@ def test_short_description_is_error() -> None:
     issues = lint_connector(config)
     assert any(i.code == "DESCRIPTION_TOO_SHORT" for i in issues)
     assert any(i.severity == "ERROR" for i in issues if i.code == "DESCRIPTION_TOO_SHORT")
+
+
+# ── TOOL_SOURCE_NOT_LOADED: SQL ↔ source_ids coverage ────────────────────────
+
+
+def _catalog_source() -> SourceConfig:
+    return SourceConfig(
+        id="catalog_a",
+        name="catalog_a",
+        type="rest",
+        url="https://data.gov.il/api/3/action/package_search",
+        table_name="catalog_a",
+    )
+
+
+def _search_tool(source_ids: list[str]) -> dict:  # type: ignore[type-arg]
+    return {
+        "id": "search_datasets",
+        "name": "search_datasets",
+        "description": "Search the catalog for datasets by keyword",
+        "category": "READ",
+        "source_ids": source_ids,
+        "sql": 'SELECT id, title FROM "catalog_a_result_results" WHERE title LIKE :q LIMIT 10',
+        "parameters": [
+            {"name": "q", "type": "string", "required": True, "description": "search text"}
+        ],
+    }
+
+
+def test_tool_referencing_source_missing_from_source_ids_is_error() -> None:
+    # SQL touches catalog_a's flattened child table, but source_ids is empty —
+    # the runtime would never materialize it (the data.gov.il regression).
+    config = ConnectorConfig(
+        name="T",
+        slug="t",
+        version="1.0.0",
+        sources=[_catalog_source()],
+        tools=[_search_tool(source_ids=[])],  # type: ignore[list-item]
+    )
+    issues = lint_connector(config)
+    mismatch = [i for i in issues if i.code == "TOOL_SOURCE_NOT_LOADED"]
+    assert mismatch and mismatch[0].severity == "ERROR"
+
+
+def test_tool_with_matching_source_ids_is_clean() -> None:
+    config = ConnectorConfig(
+        name="T",
+        slug="t",
+        version="1.0.0",
+        sources=[_catalog_source()],
+        tools=[_search_tool(source_ids=["catalog_a"])],  # type: ignore[list-item]
+    )
+    codes = {i.code for i in lint_connector(config)}
+    assert "TOOL_SOURCE_NOT_LOADED" not in codes
+
+
+def test_cte_alias_is_not_flagged_as_missing_source() -> None:
+    # "ds" is a CTE alias, not a source — it must not trigger the rule.
+    tool = {
+        "id": "list_publishers",
+        "name": "list_publishers",
+        "description": "List dataset publishers with counts",
+        "category": "READ",
+        "source_ids": ["catalog_a"],
+        "sql": (
+            "WITH ds AS (SELECT organization_title AS publisher "
+            'FROM "catalog_a_result_results") '
+            "SELECT publisher, COUNT(*) AS n FROM ds GROUP BY publisher LIMIT 50"
+        ),
+        "parameters": [],
+    }
+    config = ConnectorConfig(
+        name="T",
+        slug="t",
+        version="1.0.0",
+        sources=[_catalog_source()],
+        tools=[tool],  # type: ignore[list-item]
+    )
+    codes = {i.code for i in lint_connector(config)}
+    assert "TOOL_SOURCE_NOT_LOADED" not in codes
 
 
 def test_description_missing_verb_is_warn() -> None:

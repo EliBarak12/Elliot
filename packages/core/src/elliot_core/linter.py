@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
+from .sql import extract_table_names
 from .types import ConnectorConfig
 
 Severity = Literal["ERROR", "WARN", "INFO"]
@@ -178,6 +179,64 @@ def _lint_source_auth(config: ConnectorConfig) -> list[LintIssue]:
     return issues
 
 
+def _lint_tool_source_coverage(config: ConnectorConfig) -> list[LintIssue]:
+    """Catch tools whose SQL references a source that the runtime won't load.
+
+    At call time the runtime materializes ONLY the tables belonging to a tool's
+    ``source_ids``. If the tool's SQL references a base table that maps to a
+    source NOT in ``source_ids`` (e.g. the SQL was edited to point at a
+    different source but ``source_ids`` wasn't re-inferred), the runtime fails
+    with "no such table" / returns 0 rows — while every other static check
+    passes. This rule makes that decoupling visible before publish.
+
+    A referenced identifier that matches no known source (CTE aliases like
+    ``ds``, or genuinely external names) is ignored — only references that
+    DO resolve to a connector source but are missing from ``source_ids`` are
+    flagged. Longest key wins so ``catalog_a`` beats ``catalog``.
+    """
+    # Candidate table-name keys for each source -> the source identifier that
+    # source_ids would contain (source.id; after build that equals the name).
+    key_to_sid: list[tuple[str, str]] = []
+    for src in config.sources:
+        for key in {src.table_name, src.name, src.id}:
+            if key:
+                key_to_sid.append((key, src.id))
+
+    issues: list[LintIssue] = []
+    for tool in config.tools:
+        if not tool.sql:
+            continue
+        tool_sources = set(tool.source_ids or [])
+        reported: set[str] = set()
+        for tbl in extract_table_names(tool.sql):
+            owner: str | None = None
+            best_len = -1
+            for key, sid in key_to_sid:
+                if (tbl == key or tbl.startswith(key + "_")) and len(key) > best_len:
+                    best_len, owner = len(key), sid
+            if owner is None or owner in tool_sources or owner in reported:
+                continue
+            reported.add(owner)
+            issues.append(
+                LintIssue(
+                    severity="ERROR",
+                    code="TOOL_SOURCE_NOT_LOADED",
+                    tool_id=tool.id,
+                    message=(
+                        f"Tool '{tool.id}' SQL references table '{tbl}' from source "
+                        f"'{owner}', but that source is not in the tool's source_ids — "
+                        "the runtime won't materialize it, so the call fails with "
+                        "'no such table' / 0 rows even though preview works."
+                    ),
+                    suggestion=(
+                        "Re-create the tool, or re-run elliot_update_tool with the SQL so "
+                        "source_ids is re-inferred from the tables the SQL references."
+                    ),
+                )
+            )
+    return issues
+
+
 def _starts_with_verb(description: str) -> bool:
     first_word = description.strip().split()[0].lower().rstrip(".,:")
     return first_word in _VERBS
@@ -217,6 +276,9 @@ def lint_connector(
 
     # ── source auth checks (per-user / OAuth distribution safety) ────────────
     issues.extend(_lint_source_auth(config))
+
+    # ── SQL ↔ source_ids coverage (runtime "no such table" guard) ────────────
+    issues.extend(_lint_tool_source_coverage(config))
 
     seen_ids: set[str] = set()
     for tool in config.tools:

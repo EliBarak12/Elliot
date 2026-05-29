@@ -12,6 +12,8 @@ import pytest
 from mcp.server.fastmcp import FastMCP
 
 from elliot_core.errors import ElliotError
+from elliot_core.types.source import SourceConfig
+from elliot_core.types.tool import ToolDefinition
 from elliot_mcp_plugin.session import ElliotSession
 from elliot_mcp_plugin.tools.source_tools import _build_source_config, register_source_tools
 
@@ -72,6 +74,39 @@ def _tool(mcp: FastMCP, name: str):
 
             return sync_wrapper
     return fn
+
+
+def test_delete_source_prunes_source_and_dependent_tools(mcp, session):
+    delete = _tool(mcp, "elliot_delete_source")
+    src = SourceConfig.model_validate(
+        {"id": "s1", "type": "file", "name": "people", "path": "/tmp/people.json"}
+    )
+    src.table_name = "people"
+    session.sources["s1"] = src
+    tool = ToolDefinition.model_validate(
+        {
+            "id": "list_people",
+            "name": "List people",
+            "description": "Lists people from the source.",
+            "category": "READ",
+            "source_ids": ["s1"],
+            "parameters": [],
+        }
+    )
+    session.registry.add(tool)
+    session.tool_sql["list_people"] = "SELECT * FROM people"
+    session.save()
+
+    result = delete("s1")
+    assert result.get("status") == "removed", result
+    assert "s1" not in session.sources
+    # Cascade: the tool bound to the deleted source is gone too.
+    assert session.registry.get("list_people") is None
+
+
+def test_delete_source_unknown_returns_error(mcp, session):
+    delete = _tool(mcp, "elliot_delete_source")
+    assert "error" in delete("does-not-exist")
 
 
 def _is_error(result: dict) -> bool:  # type: ignore[type-arg]

@@ -61,7 +61,12 @@ def test_create_rest_tool_sets_passthrough(mcp: FastMCP, session: ElliotSession)
         description="Search a resource's records live via the API.",
         source_id="api1",
         query_params=[
-            {"name": "resource_id", "type": "string", "required": True, "description": "resource id"},
+            {
+                "name": "resource_id",
+                "type": "string",
+                "required": True,
+                "description": "resource id",
+            },
             {"name": "q", "type": "string", "required": False, "description": "text filter"},
         ],
     )

@@ -532,7 +532,9 @@ class ToolExecutor:
                     if not ok:
                         raise ExecutorError(f"Tool {tool.id!r} has invalid SQL: {reason}")
                     sql = tool.sql
-                    params: dict[str, Any] = {p.name: arguments.get(p.name) for p in tool.parameters}
+                    params: dict[str, Any] = {
+                        p.name: arguments.get(p.name) for p in tool.parameters
+                    }
                 else:
                     sql, params = build_select_sql(tool, arguments)
                 rows = engine.query(sql, params)

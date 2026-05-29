@@ -148,7 +148,15 @@ def register_openai_routes(
         try:
             result = await executor.execute(td, arguments)
             duration = (time.monotonic() - t0) * 1000
-            audit.record(td.id, arguments, len(result.rows), duration)
+            from ..session_tracker import _estimate_tokens
+
+            audit.record(
+                td.id,
+                arguments,
+                len(result.rows),
+                duration,
+                tokens_estimate=_estimate_tokens(result.rows),
+            )
             content: dict[str, Any] = {"rows": result.rows, "count": len(result.rows)}
             # `result.truncated` is set when the executor capped the row set at
             # ELLIOT_MAX_RESULT_ROWS — pass the marker through.

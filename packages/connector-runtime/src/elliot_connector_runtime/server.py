@@ -413,12 +413,24 @@ def _register_tool(
         store. All three do blocking I/O (file appends, synchronous SQLAlchemy
         writes), so this runs in a worker thread — never on the event loop."""
         row_count = len(result_rows)
+        # Estimate tokens up-front so the audit row, the observation store, and
+        # /v1/sessions all report the same per-call figure.
+        from .session_tracker import _estimate_tokens
+
+        token_estimate = _estimate_tokens(result_rows)
         if audit is not None:
             with contextlib.suppress(Exception):
-                audit.record(tool_id, arguments, row_count, duration_ms, error=error)
+                audit.record(
+                    tool_id,
+                    arguments,
+                    row_count,
+                    duration_ms,
+                    error=error,
+                    session_id=session_id,
+                    tokens_estimate=token_estimate,
+                )
         identity_payload = _identity_payload(identity)
         agent_hint = _agent_hint_from_identity(identity)
-        token_estimate = 0
         if session_id is not None:
             if tracker is not None:
                 with contextlib.suppress(Exception):
@@ -438,11 +450,6 @@ def _register_tool(
                     )
                     # The session stays open and accumulates every call from
                     # this MCP connection — the idle sweeper flushes it later.
-                # mirror SessionTracker's internal token estimate so the
-                # observation store agrees with /v1/sessions
-                from .session_tracker import _estimate_tokens
-
-                token_estimate = _estimate_tokens(result_rows)
             if store is not None:
                 with contextlib.suppress(Exception):
                     store.open_session(
@@ -1014,6 +1021,18 @@ def create_app(
         @_app.api_route("/mcp/", methods=["GET", "POST", "DELETE", "OPTIONS"])
         @_app.api_route("/mcp/{rest:path}", methods=["GET", "POST", "DELETE", "OPTIONS"])
         async def _mcp_unavailable() -> JSONResponse:
+            return JSONResponse(status_code=503, content=_no_connector_error())
+
+        # The /v1/* observability + task routes only exist on the connector-loaded
+        # app. Without this catch-all, Studio's Dashboard / Agent Console / Metrics
+        # get a bare 404 (rendered as "no data yet") and nothing signals that the
+        # runtime is simply waiting for a connector. Return the same actionable 503
+        # so Studio can show a real empty state.
+        @_app.api_route(
+            "/v1/{rest:path}",
+            methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        )
+        async def _v1_unavailable() -> JSONResponse:
             return JSONResponse(status_code=503, content=_no_connector_error())
 
         return _app

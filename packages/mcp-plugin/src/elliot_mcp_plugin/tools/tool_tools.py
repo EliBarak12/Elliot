@@ -10,6 +10,7 @@ from mcp.server.fastmcp import FastMCP
 from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.naming import is_valid_identifier, slugify_identifier
 from elliot_core.sql import extract_table_names
+from elliot_core.sqlite.query_runner import validate_tool_sql
 from elliot_core.types.tool import ToolDefinition
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -178,6 +179,12 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                     "containing at least one letter (letters, numbers, spaces and "
                     "underscores are allowed).",
                 )
+            # Reject non-read-only SQL before it is stored and later executed
+            # against the in-memory mirror. The runtime's DB push-down path
+            # validates too, but the SQLite path executed tool.sql directly.
+            sql_ok, sql_reason = validate_tool_sql(sql)
+            if not sql_ok:
+                raise ElliotError("INVALID_SQL", sql_reason)
             source_ids = _infer_source_ids_from_sql(sql, session)
             tool = ToolDefinition.model_validate(
                 {
@@ -303,6 +310,9 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 return {"error": f"Tool not found: {tool_id}"}
             sql_patch = patch.pop("sql", None)
             if sql_patch is not None:
+                sql_ok, sql_reason = validate_tool_sql(sql_patch)
+                if not sql_ok:
+                    raise ElliotError("INVALID_SQL", sql_reason)
                 session.tool_sql[tool_id] = sql_patch
                 # SQL changed → the tables it references (and therefore the
                 # sources the runtime must materialize) may have changed too.

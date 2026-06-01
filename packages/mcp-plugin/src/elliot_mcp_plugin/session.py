@@ -8,6 +8,7 @@ import structlog
 
 from elliot_core import ConnectorBuilder, SQLiteEngine, ToolRegistry, WorkspaceStore
 from elliot_core.audit.models import AuditTranscript, ProductIntent
+from elliot_core.sql import safe_ident
 from elliot_core.types.connector import ConnectorConfig, ProductContext
 from elliot_core.types.source import SourceConfig
 from elliot_core.types.tool import SkillDefinition, ToolDefinition
@@ -112,7 +113,10 @@ class ElliotSession:
             self.registry.delete(tid)
             self.tool_sql.pop(tid, None)
         if src.table_name:
-            self.engine._conn.execute(f'DROP TABLE IF EXISTS "{src.table_name}"')
+            # Validate + quote the identifier rather than hand-rolling the
+            # double-quote — a table name carrying a quote would otherwise be a
+            # DROP-TABLE injection.
+            self.engine._conn.execute(f"DROP TABLE IF EXISTS {safe_ident(src.table_name)}")
             self.engine._conn.commit()
         self.save()
         log.info(

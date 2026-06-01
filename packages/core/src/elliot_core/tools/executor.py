@@ -148,6 +148,14 @@ class ToolExecutor:
                 engine.load_result(flatten(fetch_result.rows, table_name))
 
             if tool.sql:
+                # Defence in depth: a stored tool.sql must be a read-only
+                # SELECT before it runs against the in-memory mirror, even if a
+                # caller bypassed the create/update validation path.
+                from elliot_core.sqlite.query_runner import validate_tool_sql
+
+                valid, reason = validate_tool_sql(tool.sql)
+                if not valid:
+                    raise ElliotError("INVALID_SQL", reason)
                 sql = tool.sql
                 sql_params = {p.name: params.get(p.name) for p in tool.parameters}
             else:

@@ -9,6 +9,10 @@ dependencies = [
     "jmespath>=1.0",
     "mcp>=1.3",
     "slowapi>=0.1.9",
+    # Real token counting for the observability/efficiency figures. Optional at
+    # runtime — session_tracker falls back to a chars/4 estimate if it (or its
+    # vocab) can't load — but shipping it makes the accurate path the default.
+    "tiktoken>=0.7",
     "uvicorn>=0.29",
 ]
 

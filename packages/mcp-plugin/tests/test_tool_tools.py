@@ -442,3 +442,18 @@ def test_validate_tool_still_rejects_genuinely_invalid_input(
     )
     assert result["valid"] is False
     assert "error" in result
+
+
+def test_create_tool_rejects_non_select_sql(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    """A tool whose SQL is not a read-only SELECT must be refused at creation,
+    not stored and executed against the in-memory mirror at call time."""
+    _load_table(session, tmp_path)
+    result = _tool(mcp, "elliot_create_tool")(
+        name="evil",
+        description="Drops a table",
+        category="READ",
+        sql='DROP TABLE "orders"',
+        parameters=[],
+    )
+    assert "INVALID_SQL" in result.get("text", "")
+    assert "evil" not in session.registry._tools if hasattr(session.registry, "_tools") else True

@@ -8,6 +8,7 @@ import structlog
 from mcp.server.fastmcp import FastMCP
 
 from elliot_core.errors import ElliotError
+from elliot_core.sql import safe_ident
 from elliot_core.sqlite.query_runner import run_tool_query, validate_tool_sql
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -79,8 +80,11 @@ def register_sql_tools(mcp: FastMCP, session: ElliotSession) -> None:
     def elliot_sample_data(table_name: str, limit: int = 10) -> dict:  # type: ignore[type-arg]
         """Return N random rows from a table."""
         try:
+            # safe_ident validates table_name against ^[A-Za-z_][A-Za-z0-9_]*$
+            # and quotes it — a hand-rolled f-string quote would let a name
+            # containing a double-quote break out of the identifier.
             rows = session.engine.query(
-                f'SELECT * FROM "{table_name}" ORDER BY RANDOM() LIMIT :n', {"n": limit}
+                f"SELECT * FROM {safe_ident(table_name)} ORDER BY RANDOM() LIMIT :n", {"n": limit}
             )
             return {"rows": rows}
         except ElliotError:
@@ -116,6 +120,12 @@ def register_sql_tools(mcp: FastMCP, session: ElliotSession) -> None:
     def elliot_explain_query(sql: str) -> dict:  # type: ignore[type-arg]
         """Return EXPLAIN QUERY PLAN output for a SELECT statement."""
         try:
+            # Reject non-SELECT statements before planning them — keep the same
+            # read-only trust boundary as elliot_query_sql rather than passing
+            # arbitrary SQL straight through.
+            valid, reason = validate_tool_sql(sql)
+            if not valid:
+                raise ElliotError("INVALID_SQL", reason)
             rows = session.engine.query(f"EXPLAIN QUERY PLAN {sql}")
             return {"plan": rows}
         except ElliotError:

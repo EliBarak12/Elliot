@@ -624,12 +624,33 @@ def _db_from_clause(source: SourceConfig, dialect: str) -> str:
     raise ExecutorError(f"DB source {source.id!r} has neither 'table' nor 'query' set")
 
 
+def _host_env_secrets_allowed() -> bool:
+    """Whether a ``{{ env:NAME }}`` secret may fall back to the host process env.
+
+    Local single-user Elliot keeps connector secrets in its own process
+    environment, so reading ``os.environ`` is the intended resolution path.
+
+    The multi-tenant cloud is different: it resolves each tenant's secrets into
+    a closed map and sets ``ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS=1`` so a tenant
+    connector can never declare ``{{ env:AWS_SECRET_ACCESS_KEY }}`` (or
+    ``DATABASE_URL``, or the platform's own ``ELLIOT_CLOUD_SECRETS_ENCRYPTION_KEY``)
+    and have the server inject its own environment into an outbound request.
+    """
+    return os.environ.get("ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
     """Resolve ``auth.secret_key`` to a concrete header value.
 
     Three paths must work, matching ``elliot_core.sources.api_fetcher``:
 
-    1. ``"{{ env:REVIEWS_TOKEN }}"`` — env-var template. Look it up.
+    1. ``"{{ env:REVIEWS_TOKEN }}"`` — env-var template. Look it up in the
+       supplied secret map, then (single-user only) the host environment.
     2. ``"REVIEWS_TOKEN"`` — bare env-var name. Look up via secrets dict
        (with lower-case fallback because the loader lower-cases keys).
     3. The runtime loader applies ``elliot_core.secrets.resolve_secrets``
@@ -640,11 +661,17 @@ def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
     Mirroring ``api_fetcher`` keeps plugin-time and runtime-time fetches
     behaving identically.
     """
-    import os
-
     if key.startswith("{{ env:") and key.endswith(" }}"):
         env_var = key[len("{{ env:") : -len(" }}")].strip()
-        return secrets.get(env_var) or secrets.get(env_var.lower()) or os.environ.get(env_var, "")
+        resolved = secrets.get(env_var) or secrets.get(env_var.lower())
+        if resolved:
+            return resolved
+        # Closed secret map (cloud): never consult the host environment. An
+        # unresolved secret yields "" so the upstream call fails with an auth
+        # error rather than leaking a server-side env var.
+        if _host_env_secrets_allowed():
+            return os.environ.get(env_var, "")
+        return ""
     # Case 2: bare env-var name found in the secrets dict (or its lowercase
     # twin). Case 3: anything else is the resolved secret literal — return
     # it unchanged, just like api_fetcher does.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import time
 import uuid
@@ -191,12 +192,40 @@ class AgentSession:
         }
 
 
-def _estimate_tokens(data: Any) -> int:
-    """Rough token estimate: characters / 4."""
+@functools.lru_cache(maxsize=1)
+def _encoder() -> Any | None:
+    """Return a tiktoken encoder if available, else ``None``.
+
+    A token count is only as good as the tokenizer. When ``tiktoken`` is
+    installed we use ``cl100k_base`` (a solid cross-model proxy) for a real
+    count instead of a heuristic. When it isn't installed — or its BPE vocab
+    can't be loaded (e.g. offline) — we fall back to chars/4. Cached so the
+    vocab loads at most once per process.
+    """
     try:
-        return max(1, len(json.dumps(data, default=str)) // 4)
+        import tiktoken
+
+        return tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        return None
+
+
+def _estimate_tokens(data: Any) -> int:
+    """Estimate the token cost of a result.
+
+    Uses a real tokenizer (tiktoken ``cl100k_base``) when available; otherwise
+    falls back to the chars/4 heuristic. Both paths are model-approximate — the
+    figure powers the token-efficiency dashboard and eval gates, not billing.
+    """
+    try:
+        text = json.dumps(data, default=str)
     except Exception:
         return 0
+    enc = _encoder()
+    if enc is not None:
+        with contextlib.suppress(Exception):
+            return max(1, len(enc.encode(text)))
+    return max(1, len(text) // 4)
 
 
 _PREVIEW_MAX_CHARS = 800

@@ -1,11 +1,11 @@
-import { useState, useEffect } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { callTool } from "@/lib/mcp-client";
-import { useCallTool } from "@/hooks/useTools";
-import { useTools } from "@/hooks/useTools";
-import type { SkillDefinition, ToolDefinition } from "@/types/api";
+import { useState, useEffect } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { callTool } from '@/lib/mcp-client';
+import { useCallTool } from '@/hooks/useTools';
+import { useTools } from '@/hooks/useTools';
+import type { SkillDefinition, ToolDefinition } from '@/types/api';
 
 interface SkillStep {
   alias: string;
@@ -23,36 +23,40 @@ export function SkillEditor({ skill, onSaved }: Props) {
   const tools = Array.isArray(toolsRaw) ? (toolsRaw as ToolDefinition[]) : [];
   const { mutateAsync: callToolMutation, isPending: isTesting } = useCallTool();
 
-  const [name, setName] = useState(skill?.name ?? "");
-  const [description, setDescription] = useState(skill?.description ?? "");
+  const [name, setName] = useState(skill?.name ?? '');
+  const [description, setDescription] = useState(skill?.description ?? '');
   const [steps, setSteps] = useState<SkillStep[]>(
     (skill?.steps ?? []).map((s) => ({
       alias: s.alias,
       tool_id: s.tool_id,
       params: s.params as Record<string, string>,
-    }))
+    })),
   );
   const [testInputs, setTestInputs] = useState<Record<string, string>>({});
   const [testResult, setTestResult] = useState<unknown | null>(null);
-  const [status, setStatus] = useState<{ type: "ok" | "error"; message: string } | null>(null);
+  const [status, setStatus] = useState<{ type: 'ok' | 'error'; message: string } | null>(null);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    setName(skill?.name ?? "");
-    setDescription(skill?.description ?? "");
+    setName(skill?.name ?? '');
+    setDescription(skill?.description ?? '');
     setSteps(
       (skill?.steps ?? []).map((s) => ({
         alias: s.alias,
         tool_id: s.tool_id,
         params: s.params as Record<string, string>,
-      }))
+      })),
     );
     setSaved(false);
     setStatus(null);
+    // Clear transient test state so the previous skill's inputs/output don't
+    // linger under the newly-selected skill.
+    setTestInputs({});
+    setTestResult(null);
   }, [skill]);
 
   const addStep = () =>
-    setSteps((prev) => [...prev, { alias: `step${prev.length + 1}`, tool_id: "", params: {} }]);
+    setSteps((prev) => [...prev, { alias: `step${prev.length + 1}`, tool_id: '', params: {} }]);
 
   const updateStep = (i: number, s: SkillStep) => {
     const next = [...steps];
@@ -63,13 +67,13 @@ export function SkillEditor({ skill, onSaved }: Props) {
   const handleSave = async () => {
     setStatus(null);
     try {
-      const toolName = skill ? "elliot_update_skill" : "elliot_create_skill";
+      const toolName = skill ? 'elliot_update_skill' : 'elliot_create_skill';
       await callTool(toolName, { skill: { name, description, steps } });
       setSaved(true);
-      setStatus({ type: "ok", message: "Saved ✓" });
+      setStatus({ type: 'ok', message: 'Saved ✓' });
       onSaved();
     } catch (err) {
-      setStatus({ type: "error", message: err instanceof Error ? err.message : String(err) });
+      setStatus({ type: 'error', message: err instanceof Error ? err.message : String(err) });
     }
   };
 
@@ -77,7 +81,7 @@ export function SkillEditor({ skill, onSaved }: Props) {
     setTestResult(null);
     try {
       const res = await callToolMutation({
-        name: "elliot_preview_skill",
+        name: 'elliot_preview_skill',
         args: { skill: { name, description, steps }, inputs: testInputs },
       });
       setTestResult(res);
@@ -104,7 +108,13 @@ export function SkillEditor({ skill, onSaved }: Props) {
       <div>
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs font-medium text-muted-foreground">Steps</span>
-          <Button type="button" size="sm" variant="outline" className="h-6 text-xs" onClick={addStep}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-6 text-xs"
+            onClick={addStep}
+          >
             + Add step
           </Button>
         </div>
@@ -148,7 +158,7 @@ export function SkillEditor({ skill, onSaved }: Props) {
                   <span className="text-xs w-24 text-muted-foreground">{p.name}</span>
                   <Input
                     placeholder={`{{skill.input.${p.name}}}`}
-                    value={step.params[p.name] ?? ""}
+                    value={step.params[p.name] ?? ''}
                     onChange={(e) =>
                       updateStep(i, {
                         ...step,
@@ -167,9 +177,9 @@ export function SkillEditor({ skill, onSaved }: Props) {
       {status && (
         <div
           className={`text-xs px-3 py-2 rounded border ${
-            status.type === "ok"
-              ? "bg-green-50 border-green-200 text-green-800"
-              : "bg-destructive/10 border-destructive/20 text-destructive"
+            status.type === 'ok'
+              ? 'bg-green-50 border-green-200 text-green-800'
+              : 'bg-destructive/10 border-destructive/20 text-destructive'
           }`}
         >
           {status.message}
@@ -185,12 +195,17 @@ export function SkillEditor({ skill, onSaved }: Props) {
           <p className="text-xs font-medium text-muted-foreground">Test skill</p>
           <Input
             placeholder='{"input": "value"}'
-            value={testInputs["input"] ?? ""}
+            value={testInputs['input'] ?? ''}
             onChange={(e) => setTestInputs({ input: e.target.value })}
             className="h-7 text-xs"
           />
-          <Button size="sm" variant="outline" disabled={isTesting} onClick={() => void handleTest()}>
-            {isTesting ? "Running…" : "Test"}
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={isTesting}
+            onClick={() => void handleTest()}
+          >
+            {isTesting ? 'Running…' : 'Test'}
           </Button>
           {testResult !== null && (
             <pre className="text-xs bg-muted rounded p-2 overflow-x-auto">

@@ -212,3 +212,25 @@ def test_explain_query_returns_plan(mcp: FastMCP, session: ElliotSession, tmp_pa
 def test_explain_query_invalid_sql_raises(mcp: FastMCP):
     with pytest.raises(ElliotError):
         _tool(mcp, "elliot_explain_query")(sql="NOT VALID SQL !!!")
+
+
+# ---------------------------------------------------------------------------
+# Identifier-injection / read-only regressions
+# ---------------------------------------------------------------------------
+
+
+def test_sample_data_rejects_quote_injection(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    """A table name carrying a double-quote must be rejected by safe_ident,
+    not f-stringed into the query where it could break out of the identifier."""
+    _load_table(session, tmp_path)
+    with pytest.raises(ElliotError) as exc:
+        _tool(mcp, "elliot_sample_data")(table_name='items" UNION SELECT 1 --')
+    assert exc.value.code == "INVALID_IDENTIFIER"
+
+
+def test_explain_query_rejects_non_select(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    """EXPLAIN must not plan a non-read-only statement."""
+    _load_table(session, tmp_path)
+    with pytest.raises(ElliotError) as exc:
+        _tool(mcp, "elliot_explain_query")(sql='DROP TABLE "items"')
+    assert exc.value.code == "INVALID_SQL"

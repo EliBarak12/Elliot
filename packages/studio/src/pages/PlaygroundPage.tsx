@@ -1,25 +1,26 @@
-import { useState } from "react";
-import { Download, FlaskConical, History, Play } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
-import { PageHeader } from "@/components/ui/page-header";
-import { EmptyState } from "@/components/ui/empty-state";
+import { useState } from 'react';
+import { Download, FlaskConical, History, Play } from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Label } from '@/components/ui/label';
+import { PageHeader } from '@/components/ui/page-header';
+import { EmptyState } from '@/components/ui/empty-state';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { useTools, useCallTool } from "@/hooks/useTools";
-import { ParameterForm } from "@/components/playground/ParameterForm";
-import { ResultViewer } from "@/components/playground/ResultViewer";
-import type { ToolDefinition } from "@/types/api";
-import { cn } from "@/lib/utils";
+} from '@/components/ui/select';
+import { useTools, useCallTool } from '@/hooks/useTools';
+import { ParameterForm } from '@/components/playground/ParameterForm';
+import { ResultViewer } from '@/components/playground/ResultViewer';
+import type { ToolDefinition } from '@/types/api';
+import { cn } from '@/lib/utils';
 
 interface Invocation {
+  id: string;
   toolId: string;
   params: Record<string, string>;
   result: unknown;
@@ -27,12 +28,22 @@ interface Invocation {
   timestamp: number;
 }
 
+// Cap history so a long playground session doesn't grow memory / the DOM list
+// without bound.
+const MAX_HISTORY = 50;
+
+function newId(): string {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export default function PlaygroundPage() {
   const { data: toolsRaw } = useTools();
   const tools = Array.isArray(toolsRaw) ? (toolsRaw as ToolDefinition[]) : [];
   const { mutateAsync: callTool, isPending } = useCallTool();
 
-  const [selectedToolId, setSelectedToolId] = useState<string>("");
+  const [selectedToolId, setSelectedToolId] = useState<string>('');
   const [params, setParams] = useState<Record<string, string>>({});
   const [history, setHistory] = useState<Invocation[]>([]);
   const [currentResult, setCurrentResult] = useState<{
@@ -51,9 +62,8 @@ export default function PlaygroundPage() {
   };
 
   const requiredFilled =
-    selectedTool?.parameters
-      .filter((p) => p.required)
-      .every((p) => params[p.name]?.trim()) ?? false;
+    selectedTool?.parameters.filter((p) => p.required).every((p) => params[p.name]?.trim()) ??
+    false;
 
   const handleRun = async () => {
     if (!selectedTool) return;
@@ -64,16 +74,16 @@ export default function PlaygroundPage() {
       for (const p of selectedTool.parameters) {
         const raw = params[p.name];
         if (raw === undefined) continue;
-        if (p.type === "integer") {
+        if (p.type === 'integer') {
           // Radix 10 avoids legacy octal parsing; fall back to the raw string
           // when the input isn't a valid number so the backend can report it.
           const n = parseInt(raw, 10);
           args[p.name] = Number.isNaN(n) ? raw : n;
-        } else if (p.type === "number") {
+        } else if (p.type === 'number') {
           const n = parseFloat(raw);
           args[p.name] = Number.isNaN(n) ? raw : n;
-        } else if (p.type === "boolean") {
-          args[p.name] = raw === "true";
+        } else if (p.type === 'boolean') {
+          args[p.name] = raw === 'true';
         } else {
           args[p.name] = raw;
         }
@@ -82,15 +92,24 @@ export default function PlaygroundPage() {
       // invoke them through the meta-tool 'elliot_preview_tool' which executes
       // the registered SQL against the session's SQLite engine.
       const result = await callTool({
-        name: "elliot_preview_tool",
+        name: 'elliot_preview_tool',
         args: { tool_id: selectedTool.id, params: args },
       });
       const latencyMs = performance.now() - t0;
       setCurrentResult({ result, latencyMs });
-      setHistory((prev) => [
-        { toolId: selectedTool.id, params: { ...params }, result, latencyMs, timestamp: Date.now() },
-        ...prev,
-      ]);
+      setHistory((prev) =>
+        [
+          {
+            id: newId(),
+            toolId: selectedTool.id,
+            params: { ...params },
+            result,
+            latencyMs,
+            timestamp: Date.now(),
+          },
+          ...prev,
+        ].slice(0, MAX_HISTORY),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -104,9 +123,9 @@ export default function PlaygroundPage() {
       expected_result: currentResult.result,
       timestamp: new Date().toISOString(),
     };
-    const blob = new Blob([JSON.stringify(fixture, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(fixture, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
+    const a = document.createElement('a');
     a.href = url;
     a.download = `${selectedTool.id}-fixture.json`;
     a.click();
@@ -176,7 +195,7 @@ export default function PlaygroundPage() {
                     onClick={() => void handleRun()}
                   >
                     <Play className="h-3.5 w-3.5" />
-                    {isPending ? "Running…" : "Run tool"}
+                    {isPending ? 'Running…' : 'Run tool'}
                   </Button>
                 </>
               )}
@@ -197,18 +216,16 @@ export default function PlaygroundPage() {
                 </p>
               ) : (
                 <div className="space-y-0.5 max-h-72 overflow-y-auto scrollbar-thin">
-                  {history.map((inv, i) => (
+                  {history.map((inv) => (
                     <button
-                      key={i}
+                      key={inv.id}
                       className="w-full flex items-center gap-2 px-2 py-1.5 text-left rounded-md hover:bg-muted/40 transition-colors"
                       onClick={() => loadFromHistory(inv)}
                     >
                       <span
                         className={cn(
-                          "h-1.5 w-1.5 rounded-full shrink-0",
-                          inv.result !== undefined
-                            ? "bg-success"
-                            : "bg-muted-foreground"
+                          'h-1.5 w-1.5 rounded-full shrink-0',
+                          inv.result !== undefined ? 'bg-success' : 'bg-muted-foreground',
                         )}
                       />
                       <span className="text-xs font-medium truncate flex-1 min-w-0">
@@ -251,10 +268,7 @@ export default function PlaygroundPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                <ResultViewer
-                  result={currentResult.result}
-                  latencyMs={currentResult.latencyMs}
-                />
+                <ResultViewer result={currentResult.result} latencyMs={currentResult.latencyMs} />
               </CardContent>
             </Card>
           ) : (
@@ -263,8 +277,8 @@ export default function PlaygroundPage() {
               title="No result yet"
               description={
                 selectedTool
-                  ? "Fill the parameters and run the tool to see the result."
-                  : "Select a tool from the invoker on the left to get started."
+                  ? 'Fill the parameters and run the tool to see the result.'
+                  : 'Select a tool from the invoker on the left to get started.'
               }
               className="m-auto w-full max-w-md"
             />

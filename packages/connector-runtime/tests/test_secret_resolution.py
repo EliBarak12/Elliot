@@ -60,3 +60,23 @@ def test_gate_truthy_values(monkeypatch: pytest.MonkeyPatch, flag: str) -> None:
 def test_resolved_literal_passthrough() -> None:
     # Case 3: a non-template, non-dict key is already the resolved literal.
     assert _resolve_secret("literal-token-value", {}) == "literal-token-value"
+
+
+# ── TLS verification kill-switch gating ────────────────────────────────────
+
+
+def test_oauth_insecure_flag_honored_outside_cloud(monkeypatch: pytest.MonkeyPatch) -> None:
+    from elliot_connector_runtime.oauth_flow import _verify_tls
+
+    monkeypatch.delenv("ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS", raising=False)
+    monkeypatch.setenv("ELLIOT_OAUTH_INSECURE", "1")
+    assert _verify_tls() is False  # local dev may opt out
+
+
+def test_oauth_insecure_flag_ignored_in_cloud(monkeypatch: pytest.MonkeyPatch) -> None:
+    from elliot_connector_runtime.oauth_flow import _verify_tls
+
+    # The cloud sets the closed-secrets flag; TLS verification can't be disabled.
+    monkeypatch.setenv("ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS", "1")
+    monkeypatch.setenv("ELLIOT_OAUTH_INSECURE", "1")
+    assert _verify_tls() is True

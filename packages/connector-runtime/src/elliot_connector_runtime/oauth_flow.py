@@ -168,7 +168,22 @@ async def refresh_access_token(
 
 
 def _verify_tls() -> bool:
-    """Allow disabling TLS verification only for local demo/test endpoints."""
+    """Whether to verify TLS certificates on OAuth token exchanges (default on).
+
+    ``ELLIOT_OAUTH_INSECURE=1`` disables verification for a local demo/test
+    provider only. It is *ignored* in the multi-tenant cloud — signalled by
+    ``ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS=1`` — because a shared host must never
+    turn off certificate verification for credential exchanges, which would
+    expose every tenant's OAuth tokens to a man-in-the-middle.
+    """
+    cloud = os.environ.get("ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if cloud:
+        return True
     return os.environ.get("ELLIOT_OAUTH_INSECURE", "") != "1"
 
 

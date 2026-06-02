@@ -62,7 +62,16 @@ export function Sidebar() {
     <aside className="flex flex-col w-60 shrink-0 border-r border-border/70 bg-background h-screen">
       <div className="flex items-center gap-2.5 h-14 px-5 border-b border-border/70">
         <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shrink-0 shadow-sm">
-          <span className="text-primary-foreground text-xs font-bold leading-none">E</span>
+          <svg
+            viewBox="0 0 64 64"
+            className="h-[17px] w-[17px] text-primary-foreground"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <rect x="18" y="17" width="28" height="8" rx="4" />
+            <rect x="18" y="28" width="20" height="8" rx="4" />
+            <rect x="18" y="39" width="28" height="8" rx="4" />
+          </svg>
         </div>
         <div className="flex flex-col leading-tight">
           <span className="font-semibold text-[15px] tracking-tight text-foreground">Elliot</span>

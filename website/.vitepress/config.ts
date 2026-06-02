@@ -17,7 +17,7 @@ export default defineConfig({
 
   head: [
     ["link", { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" }],
-    ["meta", { name: "theme-color", content: "#00cec8" }],
+    ["meta", { name: "theme-color", content: "#c0303c" }],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:title", content: "Elliot — Build your connector. Make your product agent-ready." }],
     [

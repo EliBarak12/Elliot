@@ -9,7 +9,7 @@
 [![CI](https://github.com/EliBarak12/Elliot/actions/workflows/ci.yml/badge.svg)](https://github.com/EliBarak12/Elliot/actions/workflows/ci.yml)
 [![Docs](https://github.com/EliBarak12/Elliot/actions/workflows/docs.yml/badge.svg)](https://github.com/EliBarak12/Elliot/actions/workflows/docs.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-success.svg)](LICENSE)
-[![MCP compatible](https://img.shields.io/badge/MCP-compatible-00cec8)](https://modelcontextprotocol.io)
+[![MCP compatible](https://img.shields.io/badge/MCP-compatible-c0303c)](https://modelcontextprotocol.io)
 [![Python 3.13](https://img.shields.io/badge/Python-3.13-3776ab.svg)](pyproject.toml)
 
 [Documentation](https://elibarak12.github.io/Elliot/) · [Quickstart](https://elibarak12.github.io/Elliot/docs/quickstart) · [Concepts](https://elibarak12.github.io/Elliot/docs/concepts) · [The five principles](https://elibarak12.github.io/Elliot/docs/five-principles)

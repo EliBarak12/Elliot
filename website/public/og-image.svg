@@ -5,12 +5,12 @@
       <stop offset="100%" stop-color="#14171c"/>
     </linearGradient>
     <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#14e5df"/>
-      <stop offset="100%" stop-color="#008f8b"/>
+      <stop offset="0%" stop-color="#e5646e"/>
+      <stop offset="100%" stop-color="#8f1f29"/>
     </linearGradient>
     <radialGradient id="halo" cx="20%" cy="20%" r="60%">
-      <stop offset="0%" stop-color="#00cec8" stop-opacity="0.45"/>
-      <stop offset="100%" stop-color="#00cec8" stop-opacity="0"/>
+      <stop offset="0%" stop-color="#c0303c" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#c0303c" stop-opacity="0"/>
     </radialGradient>
   </defs>
 
@@ -26,7 +26,11 @@
   <!-- Mark -->
   <g transform="translate(80,160)">
     <rect x="0" y="0" width="120" height="120" rx="28" fill="url(#brand)"/>
-    <path d="M30 26h60v12H46v14h36v12H46v14h46v12H30z" fill="#ffffff"/>
+    <g fill="#ffffff">
+      <rect x="34" y="32" width="52" height="15" rx="7"/>
+      <rect x="34" y="53" width="37" height="15" rx="7"/>
+      <rect x="34" y="73" width="52" height="15" rx="7"/>
+    </g>
   </g>
 
   <!-- Wordmark -->
@@ -45,8 +49,8 @@
 
   <!-- URL chip -->
   <g transform="translate(80,540)">
-    <rect x="0" y="0" width="280" height="44" rx="22" fill="#ffffff" fill-opacity="0.08" stroke="#00cec8" stroke-opacity="0.4"/>
-    <circle cx="22" cy="22" r="6" fill="#00cec8"/>
+    <rect x="0" y="0" width="280" height="44" rx="22" fill="#ffffff" fill-opacity="0.08" stroke="#c0303c" stroke-opacity="0.4"/>
+    <circle cx="22" cy="22" r="6" fill="#c0303c"/>
     <text x="42" y="29" font-family="ui-monospace,SF Mono,Menlo" font-size="16" fill="#ffffff" fill-opacity="0.92">
       elibarak12.github.io/Elliot
     </text>

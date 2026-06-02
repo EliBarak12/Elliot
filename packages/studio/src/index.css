@@ -4,7 +4,7 @@
 
 @layer base {
   :root {
-    /* Elliot Design Tokens — Apple-inspired neutral system, teal as accent.
+    /* Elliot Design Tokens — Apple-inspired neutral system, red as accent.
        Surfaces layer light → dark: background < card < popover. */
 
     --background: 240 5% 98%;
@@ -16,8 +16,8 @@
     --popover: 0 0% 100%;
     --popover-foreground: 240 10% 4%;
 
-    /* Brand: Elliot Teal #00cec8 — used only for primary actions and active states */
-    --primary: 178 100% 38%;
+    /* Brand: Elliot Red #c0303c — used only for primary actions and active states */
+    --primary: 355 60% 47%;
     --primary-foreground: 0 0% 100%;
 
     --secondary: 240 5% 96%;
@@ -40,7 +40,7 @@
 
     --border: 240 6% 90%;
     --input: 240 6% 90%;
-    --ring: 178 100% 38%;
+    --ring: 355 60% 47%;
 
     /* Apple-style radius — 10px for cards/sheets, derived smaller values for buttons/inputs */
     --radius: 0.625rem;
@@ -63,7 +63,7 @@
     --popover: 240 6% 11%;
     --popover-foreground: 0 0% 98%;
 
-    --primary: 178 100% 45%;
+    --primary: 355 62% 55%;
     --primary-foreground: 240 10% 6%;
 
     --secondary: 240 5% 14%;
@@ -86,7 +86,7 @@
 
     --border: 240 5% 18%;
     --input: 240 5% 18%;
-    --ring: 178 100% 45%;
+    --ring: 355 62% 55%;
 
     --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.4);
     --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.4), 0 1px 3px 0 rgb(0 0 0 / 0.3);

@@ -26,7 +26,11 @@
   <!-- Mark -->
   <g transform="translate(80,160)">
     <rect x="0" y="0" width="120" height="120" rx="28" fill="url(#brand)"/>
-    <path d="M30 26h60v12H46v14h36v12H46v14h46v12H30z" fill="#ffffff"/>
+    <g fill="#ffffff">
+      <rect x="34" y="32" width="52" height="15" rx="7"/>
+      <rect x="34" y="53" width="37" height="15" rx="7"/>
+      <rect x="34" y="73" width="52" height="15" rx="7"/>
+    </g>
   </g>
 
   <!-- Wordmark -->

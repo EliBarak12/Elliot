@@ -29,7 +29,11 @@
   <g>
     <rect x="118" y="118" width="124" height="124" rx="28" fill="url(#ring)"/>
     <rect x="118" y="118" width="124" height="124" rx="28" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="2"/>
-    <path d="M148 144h60v12h-44v14h36v12h-36v14h46v12h-62z" fill="#ffffff"/>
+    <g fill="#ffffff">
+      <rect x="148" y="150" width="56" height="16" rx="8"/>
+      <rect x="148" y="172" width="40" height="16" rx="8"/>
+      <rect x="148" y="194" width="56" height="16" rx="8"/>
+    </g>
   </g>
 
   <!-- Orbit nodes -->

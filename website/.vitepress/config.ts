@@ -3,6 +3,85 @@ import { defineConfig } from "vitepress";
 const ogImage = "/og-image.svg";
 const siteUrl = "https://elibarak12.github.io/Elliot/";
 
+// Brand-aligned syntax themes — warm/crimson palette, no blue, so code
+// blocks stay on-brand with the rest of the Elliot docs.
+const codeThemeLight = {
+  name: "elliot-light",
+  type: "light" as const,
+  colors: { "editor.background": "#f7f7f8", "editor.foreground": "#1f2328" },
+  settings: [
+    { settings: { foreground: "#1f2328", background: "#f7f7f8" } },
+    {
+      scope: ["comment", "punctuation.definition.comment"],
+      settings: { foreground: "#8a8f98", fontStyle: "italic" },
+    },
+    {
+      scope: ["keyword", "storage", "storage.type", "storage.modifier", "keyword.control", "keyword.operator"],
+      settings: { foreground: "#c0303c" },
+    },
+    {
+      scope: ["entity.name.function", "support.function", "meta.function-call.generic"],
+      settings: { foreground: "#8f1f29" },
+    },
+    {
+      scope: ["string", "string.quoted", "string.template", "meta.string"],
+      settings: { foreground: "#3f6e2f" },
+    },
+    {
+      scope: ["constant.numeric", "constant.language", "constant.character", "constant"],
+      settings: { foreground: "#9a5b00" },
+    },
+    {
+      scope: ["entity.name.type", "support.type", "support.class", "entity.name.tag", "entity.name.class"],
+      settings: { foreground: "#a3415c" },
+    },
+    {
+      scope: ["variable", "variable.other", "meta.definition.variable", "support.variable"],
+      settings: { foreground: "#1f2328" },
+    },
+    { scope: ["variable.parameter"], settings: { foreground: "#7a4a52" } },
+    { scope: ["punctuation", "meta.brace"], settings: { foreground: "#57606a" } },
+  ],
+};
+const codeThemeDark = {
+  name: "elliot-dark",
+  type: "dark" as const,
+  colors: { "editor.background": "#14171c", "editor.foreground": "#e6edf3" },
+  settings: [
+    { settings: { foreground: "#e6edf3", background: "#14171c" } },
+    {
+      scope: ["comment", "punctuation.definition.comment"],
+      settings: { foreground: "#8b949e", fontStyle: "italic" },
+    },
+    {
+      scope: ["keyword", "storage", "storage.type", "storage.modifier", "keyword.control", "keyword.operator"],
+      settings: { foreground: "#e5646e" },
+    },
+    {
+      scope: ["entity.name.function", "support.function", "meta.function-call.generic"],
+      settings: { foreground: "#f0a8ae" },
+    },
+    {
+      scope: ["string", "string.quoted", "string.template", "meta.string"],
+      settings: { foreground: "#a7d1a0" },
+    },
+    {
+      scope: ["constant.numeric", "constant.language", "constant.character", "constant"],
+      settings: { foreground: "#e8a06a" },
+    },
+    {
+      scope: ["entity.name.type", "support.type", "support.class", "entity.name.tag", "entity.name.class"],
+      settings: { foreground: "#e58aa0" },
+    },
+    {
+      scope: ["variable", "variable.other", "meta.definition.variable", "support.variable"],
+      settings: { foreground: "#e6edf3" },
+    },
+    { scope: ["variable.parameter"], settings: { foreground: "#d3a9ad" } },
+    { scope: ["punctuation", "meta.brace"], settings: { foreground: "#9aa4ad" } },
+  ],
+};
+
 export default defineConfig({
   title: "Elliot",
   description:
@@ -122,8 +201,8 @@ export default defineConfig({
 
   markdown: {
     theme: {
-      light: "github-light",
-      dark: "github-dark",
+      light: codeThemeLight,
+      dark: codeThemeDark,
     },
     lineNumbers: false,
   },

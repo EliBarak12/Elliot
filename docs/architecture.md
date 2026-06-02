@@ -132,16 +132,16 @@ elliot/
 │               ├── Playground.tsx     # Interactive tool tester
 │               └── Metrics.tsx        # Audit log viewer
 │
-├── tasks/                             # Implementation task specs
-│   ├── 01-monorepo-setup/
-│   ├── 02-core-library/
-│   ├── 03-mcp-plugin/
-│   ├── 04-connector-runtime/
-│   ├── 05-studio-ui/
-│   ├── 06-eval-and-polish/
-│   └── 07-dx-and-observability/
-│
 ├── docs/                              # This folder
+│   └── tasks/                         # Implementation task specs
+│       ├── 01-monorepo-setup/
+│       ├── 02-core-library/
+│       ├── 03-mcp-plugin/
+│       ├── 04-connector-runtime/
+│       ├── 05-studio-ui/
+│       ├── 06-eval-and-polish/
+│       └── 07-dx-and-observability/
+│
 ├── Procfile                           # honcho / foreman dev runner
 ├── pyproject.toml                     # uv workspace root
 └── package.json                       # pnpm workspace root

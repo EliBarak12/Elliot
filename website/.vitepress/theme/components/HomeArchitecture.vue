@@ -42,14 +42,14 @@ onMounted(() => {
           aria-label="Elliot architecture diagram"
         >
           <defs>
-            <linearGradient id="el-teal" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stop-color="#14e5df" />
-              <stop offset="100%" stop-color="#008f8b" />
+            <linearGradient id="el-red" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#e5646e" />
+              <stop offset="100%" stop-color="#8f1f29" />
             </linearGradient>
             <linearGradient id="el-pipe" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stop-color="#00cec8" stop-opacity="0" />
-              <stop offset="50%" stop-color="#00cec8" stop-opacity="0.9" />
-              <stop offset="100%" stop-color="#00cec8" stop-opacity="0" />
+              <stop offset="0%" stop-color="#c0303c" stop-opacity="0" />
+              <stop offset="50%" stop-color="#c0303c" stop-opacity="0.9" />
+              <stop offset="100%" stop-color="#c0303c" stop-opacity="0" />
             </linearGradient>
             <filter id="el-soft" x="-20%" y="-20%" width="140%" height="140%">
               <feGaussianBlur stdDeviation="6" />
@@ -92,9 +92,9 @@ onMounted(() => {
           <g>
             <rect x="300" y="60" width="320" height="320" rx="24"
                   fill="var(--elliot-surface)"
-                  stroke="url(#el-teal)" stroke-width="2" />
+                  stroke="url(#el-red)" stroke-width="2" />
             <ellipse cx="460" cy="60" rx="220" ry="34"
-                     fill="url(#el-teal)" opacity="0.18" filter="url(#el-soft)" />
+                     fill="url(#el-red)" opacity="0.18" filter="url(#el-soft)" />
             <text x="460" y="42" text-anchor="middle"
                   font-family="ui-monospace, SF Mono"
                   font-size="11" letter-spacing="2"
@@ -105,7 +105,7 @@ onMounted(() => {
               <rect x="324" y="92" width="272" height="78" rx="14"
                     fill="var(--elliot-surface-2)"
                     stroke="var(--elliot-border)" stroke-width="1" />
-              <circle cx="346" cy="124" r="6" fill="url(#el-teal)" />
+              <circle cx="346" cy="124" r="6" fill="url(#el-red)" />
               <text x="362" y="128" font-size="14" font-weight="600"
                     fill="var(--vp-c-text-1)">mcp-plugin</text>
               <text x="362" y="150" font-size="12" fill="var(--vp-c-text-2)">
@@ -118,7 +118,7 @@ onMounted(() => {
               <rect x="324" y="180" width="272" height="78" rx="14"
                     fill="var(--elliot-surface-2)"
                     stroke="var(--elliot-border)" stroke-width="1" />
-              <circle cx="346" cy="212" r="6" fill="url(#el-teal)" />
+              <circle cx="346" cy="212" r="6" fill="url(#el-red)" />
               <text x="362" y="216" font-size="14" font-weight="600"
                     fill="var(--vp-c-text-1)">connector-runtime</text>
               <text x="362" y="238" font-size="12" fill="var(--vp-c-text-2)">
@@ -131,7 +131,7 @@ onMounted(() => {
               <rect x="324" y="268" width="272" height="78" rx="14"
                     fill="var(--elliot-surface-2)"
                     stroke="var(--elliot-border)" stroke-width="1" />
-              <circle cx="346" cy="300" r="6" fill="url(#el-teal)" />
+              <circle cx="346" cy="300" r="6" fill="url(#el-red)" />
               <text x="362" y="304" font-size="14" font-weight="600"
                     fill="var(--vp-c-text-1)">studio</text>
               <text x="362" y="326" font-size="12" fill="var(--vp-c-text-2)">

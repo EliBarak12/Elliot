@@ -29,8 +29,13 @@ Compose a skill when **all** of these are true:
    results — only the final answer.
 
 If the agent often branches between two different second-step tools based on
-the first tool's output, that's a *workflow*, not a skill. Leave it to the
-agent and document the branch in a SKILL.md instead.
+the first tool's output, that's a *workflow*, not a deterministic chain — but
+it can still be a connector skill. Author it as a **prose skill**: call
+`elliot_create_skill` with `instructions` (markdown describing the workflow,
+branches and all) and `when_to_use`, and leave `steps` empty. On export it
+becomes a `SKILL.md` guide alongside the connector's tools — exactly like the
+hand-written guides Elliot ships for itself. A skill may carry both `steps`
+(the happy-path chain) and `instructions` (the surrounding judgement).
 
 ## Steps
 

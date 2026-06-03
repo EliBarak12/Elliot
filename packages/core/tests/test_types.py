@@ -9,6 +9,7 @@ from elliot_core.types import (
     FilterGroup,
     ParameterDefinition,
     ReturnField,
+    SkillDefinition,
     SourceConfig,
     ToolDefinition,
 )
@@ -179,3 +180,39 @@ def test_unknown_field_on_tool_is_rejected():
 def test_unknown_field_on_source_is_rejected():
     with pytest.raises(PydanticValidationError):
         SourceConfig(id="s", name="S", type="rest", url="https://x", typo_field=1)
+
+
+def test_skill_with_steps_only_is_valid():
+    skill = SkillDefinition(
+        id="report",
+        name="Report",
+        description="d",
+        steps=[{"alias": "a", "tool_id": "list_products", "params": {}}],
+    )
+    assert skill.instructions == ""
+    assert skill.when_to_use == ""
+    assert len(skill.steps) == 1
+
+
+def test_skill_with_instructions_only_is_valid():
+    """A prose-only skill needs no steps."""
+    skill = SkillDefinition(
+        id="onboard",
+        name="Onboard",
+        description="d",
+        instructions="1. Call list_products.\n2. Summarise.",
+        when_to_use="When the user wants a catalog summary.",
+    )
+    assert skill.steps == []
+    assert skill.instructions.startswith("1.")
+
+
+def test_skill_with_neither_steps_nor_instructions_is_rejected():
+    """An empty skill does nothing and must be rejected."""
+    with pytest.raises(PydanticValidationError):
+        SkillDefinition(id="empty", name="Empty", description="d")
+
+
+def test_skill_with_blank_instructions_and_no_steps_is_rejected():
+    with pytest.raises(PydanticValidationError):
+        SkillDefinition(id="empty", name="Empty", description="d", instructions="   \n  ")

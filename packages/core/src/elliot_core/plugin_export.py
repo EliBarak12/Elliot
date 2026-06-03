@@ -45,6 +45,12 @@ log = structlog.get_logger(__name__)
 # for both hosts.
 _PLUGIN_ROOT_VAR = "${CLAUDE_PLUGIN_ROOT}"
 
+# Every exported OSS plugin points home at Elliot Cloud — the hosted product
+# that built it. Surfaced in both plugin manifests, both marketplaces, and the
+# README so an installer can always trace the plugin back to its source.
+_ELLIOT_CLOUD_URL = "https://elliot-cloud.com"
+_ELLIOT_AUTHOR = {"name": "Elliot", "url": _ELLIOT_CLOUD_URL}
+
 
 def _kebab(value: str) -> str:
     """Lowercase kebab-case slug safe for a skill directory + frontmatter name."""
@@ -65,6 +71,8 @@ def _claude_plugin_manifest(config: ConnectorConfig) -> dict[str, object]:
         "name": config.slug,
         "version": config.version,
         "description": config.description or f"Agent-ready tools for {config.name}.",
+        "author": dict(_ELLIOT_AUTHOR),
+        "homepage": _ELLIOT_CLOUD_URL,
         "keywords": ["mcp", "connector", "elliot", config.slug],
         "mcpServers": "./.mcp.json",
     }
@@ -73,7 +81,7 @@ def _claude_plugin_manifest(config: ConnectorConfig) -> dict[str, object]:
 def _claude_marketplace(config: ConnectorConfig) -> dict[str, object]:
     return {
         "name": config.slug,
-        "owner": {"name": "Elliot connector"},
+        "owner": {"name": "Elliot", "url": _ELLIOT_CLOUD_URL},
         "description": f"Elliot connector plugin for {config.name}.",
         "version": config.version,
         "plugins": [
@@ -93,6 +101,8 @@ def _codex_plugin_manifest(config: ConnectorConfig, connector_filename: str) -> 
         "name": config.slug,
         "version": config.version,
         "description": short,
+        "author": dict(_ELLIOT_AUTHOR),
+        "homepage": _ELLIOT_CLOUD_URL,
         "keywords": ["mcp", "connector", "elliot", config.slug],
         "skills": "./skills/",
         "mcpServers": {config.slug: _mcp_server(config.slug, connector_filename)},
@@ -109,6 +119,7 @@ def _codex_plugin_manifest(config: ConnectorConfig, connector_filename: str) -> 
 def _codex_marketplace(config: ConnectorConfig) -> dict[str, object]:
     return {
         "name": config.slug,
+        "owner": {"name": "Elliot", "url": _ELLIOT_CLOUD_URL},
         "interface": {"displayName": config.name},
         "plugins": [
             {
@@ -173,13 +184,28 @@ def _render_usage_skill(config: ConnectorConfig) -> str:
 
 
 def _render_workflow_skill(skill: SkillDefinition, config: ConnectorConfig) -> str:
-    """Turn a connector workflow (SkillDefinition) into agent-facing guidance."""
+    """Turn a connector workflow (SkillDefinition) into agent-facing guidance.
+
+    A skill can be authored two ways, and either (or both) is rendered:
+
+    - ``instructions`` — the author's own markdown becomes the skill body
+      verbatim, exactly like Elliot's hand-written ``SKILL.md`` guides.
+    - ``steps`` — a deterministic chain is rendered as a numbered tool list.
+
+    When both are present, the prose leads and the steps follow as a concrete
+    reference. ``when_to_use`` is taken from the author when set, otherwise a
+    sensible default is generated.
+    """
     server = config.slug
+    when_to_use = (
+        skill.when_to_use.strip()
+        or f"Trigger when the user wants to {skill.name.lower()} with {config.name}."
+    )
     lines = [
         "---",
         f"name: {_kebab(skill.id)}",
         f"description: {skill.description}",
-        f"when_to_use: Trigger when the user wants to {skill.name.lower()} with {config.name}.",
+        f"when_to_use: {when_to_use}",
         f"allowed-tools: mcp__{server}__*",
         "---",
         "",
@@ -193,19 +219,25 @@ def _render_workflow_skill(skill: SkillDefinition, config: ConnectorConfig) -> s
             req = "required" if param.required else "optional"
             desc = f" — {param.description}" if param.description else ""
             lines.append(f"- `{param.name}` ({param.type}, {req}){desc}")
-    lines += [
-        "",
-        "## Steps",
-        "",
-        "Call these connector tools in order, feeding each result into the next:",
-        "",
-    ]
-    for index, step in enumerate(skill.steps, start=1):
-        params = json.dumps(step.params, sort_keys=True)
-        lines.append(
-            f"{index}. **{step.alias}** — call `mcp__{server}__{step.tool_id}` "
-            f"with parameters `{params}`"
-        )
+    if skill.instructions.strip():
+        lines += ["", skill.instructions.strip()]
+    if skill.steps:
+        # When the author also wrote prose, frame the chain as a concrete
+        # reference rather than the whole workflow.
+        heading = "## Tool sequence" if skill.instructions.strip() else "## Steps"
+        lines += [
+            "",
+            heading,
+            "",
+            "Call these connector tools in order, feeding each result into the next:",
+            "",
+        ]
+        for index, step in enumerate(skill.steps, start=1):
+            params = json.dumps(step.params, sort_keys=True)
+            lines.append(
+                f"{index}. **{step.alias}** — call `mcp__{server}__{step.tool_id}` "
+                f"with parameters `{params}`"
+            )
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -228,6 +260,9 @@ def _readme(config: ConnectorConfig, connector_filename: str, skill_count: int) 
 This plugin exposes the **{config.name}** connector ({tool_count} tool(s)) as an
 MCP server you can install in Codex or Claude Code. It was generated by
 `elliot export-plugin`.
+
+> Built with **Elliot** — turn any API or database into agent-ready MCP tools
+> and skills. Learn more at {_ELLIOT_CLOUD_URL}.
 
 ## MCP server name
 
@@ -273,6 +308,10 @@ Then open the plugin directory in Codex and install **{config.slug}**.
 - `.claude-plugin/` — Claude Code manifest + marketplace
 - `.codex-plugin/` — Codex manifest
 - `.agents/plugins/marketplace.json` — Codex marketplace
+
+---
+
+Made with [Elliot]({_ELLIOT_CLOUD_URL}) — {_ELLIOT_CLOUD_URL}
 """
 
 

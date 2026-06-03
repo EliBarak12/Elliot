@@ -127,11 +127,15 @@ async def test_execute_skill_empty_steps():
     config = _make_config([tool])
     executor = ToolExecutor(config, fetch_source=_fake_fetch([]))
 
+    # A prose-only skill (no steps) still validates because it carries
+    # instructions. execute_skill has nothing to run, so it returns an empty
+    # result rather than failing.
     skill = SkillDefinition(
         id="empty_skill",
         name="Empty",
         description="desc",
         steps=[],
+        instructions="Just guidance, no executable steps.",
     )
     result = await execute_skill(skill, {}, registry, executor)
     assert result.rows == []

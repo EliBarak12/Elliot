@@ -104,7 +104,9 @@ export default function SkillsPage() {
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-sm truncate">{skill.name}</span>
                     <Badge variant="muted" className="ml-auto shrink-0">
-                      {skill.steps.length} {skill.steps.length === 1 ? "step" : "steps"}
+                      {skill.steps?.length
+                        ? `${skill.steps.length} ${skill.steps.length === 1 ? "step" : "steps"}`
+                        : "prose"}
                     </Badge>
                   </div>
                 </button>

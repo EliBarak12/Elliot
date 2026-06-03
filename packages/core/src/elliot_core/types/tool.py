@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 # Connector-authored models reject unknown fields so a typo in a saved
 # connector JSON (e.g. "max_row" for "max_rows") surfaces as a validation
@@ -134,13 +134,50 @@ class SkillStep(BaseModel):
 
 
 class SkillDefinition(BaseModel):
+    """A connector workflow.
+
+    A skill is the connector author's answer to "how should an agent use my
+    tools to get a job done?" — the same role Elliot's own ``SKILL.md`` files
+    play for Elliot-the-plugin. It comes in two flavours, and a single skill
+    may be both:
+
+    - **Deterministic** — a ``steps`` chain the runtime can execute end-to-end
+      (look up the customer, then summarise their orders). Exposed as one MCP
+      call so the agent doesn't orchestrate the chain itself.
+    - **Prose** — free-form ``instructions`` (markdown) plus ``when_to_use``,
+      describing a workflow the agent drives itself (including branches the
+      runtime can't express as a flat chain). Exported verbatim as a
+      ``SKILL.md`` guide alongside the connector's tools.
+
+    A skill must carry at least one of ``steps`` or ``instructions``; an empty
+    skill is a no-op and is rejected.
+    """
+
     model_config = _strict
 
     id: str
     name: str
     description: str
-    steps: list[SkillStep]
+    # Optional now that a skill can be pure prose. A prose-only skill leaves
+    # this empty and lives entirely in `instructions`.
+    steps: list[SkillStep] = []
     input_parameters: list[ParameterDefinition] = []
+    # Free-form, agent-facing guidance. When set, it is the body of the
+    # exported SKILL.md — the author describes the workflow in their own words
+    # instead of (or in addition to) a deterministic step chain.
+    instructions: str = ""
+    # The trigger line for the exported SKILL.md frontmatter: when an agent
+    # should reach for this skill. Empty falls back to an auto-generated line.
+    when_to_use: str = ""
+
+    @model_validator(mode="after")
+    def _require_steps_or_instructions(self) -> SkillDefinition:
+        if not self.steps and not self.instructions.strip():
+            raise ValueError(
+                f"Skill '{self.id}' must define at least one step or non-empty "
+                "instructions — an empty skill does nothing."
+            )
+        return self
 
 
 class ToolResult(BaseModel):

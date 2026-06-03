@@ -97,7 +97,31 @@ For each tool call `elliot_create_tool`:
 - For constrained strings, add `enum` values
 - Prefer returning a small computed result (counts, totals, grouped rows) over a large raw set
 
-**SQL conventions** — the runtime executes against in-memory SQLite:
+**Tool execution modes** — most READ tools query a materialized snapshot, but
+that is not the only mode. Don't assume "everything is SQL over a frozen
+snapshot":
+
+- **READ over a snapshot (default).** The source is fetched into in-memory
+  SQLite and the tool's SQL runs against it. The snapshot is cached with a TTL
+  (default 300s), so it re-fetches periodically — it is not frozen at build
+  time.
+- **READ passthrough (live).** Give the tool `rest_query_params` (a list of
+  parameter names) to forward those args as live query-string params and fetch
+  **fresh on every call**, bypassing the snapshot — for search / per-id lookups
+  whose result must vary per call.
+- **WRITE / ACTION (live).** A `WRITE` or `ACTION` tool is backed by
+  `api_mapping` (not SQL) and makes a live HTTP request per call, mapping
+  parameters via `path_template` (`/issues/{number}`), `query_params`, and
+  `body_params`. These do **not** use the SQL conventions below.
+
+**Per-user auth.** If each caller should act as themselves (their own GitHub /
+Slack / Gmail token, not one shared key), that's configured on the *source* at
+discovery time with `auth.scope: "per_user"` + `{{ user_oauth:SOURCE_ID }}` —
+not by adding a token parameter to a tool. See `elliot://docs/authentication`
+and the per-user section of the `discover-source` skill.
+
+**SQL conventions** (READ-over-snapshot tools) — the runtime executes against
+in-memory SQLite:
 - Reference parameters with a **colon prefix**: `WHERE plan = :plan` — declare
   each one in the tool's `parameters` list. **NOT** `{{ plan }}` (Jinja) or
   `$plan` (Bash); SQLite parses neither and the runtime will reject the SQL

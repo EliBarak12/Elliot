@@ -82,6 +82,46 @@ batched message — never field-by-field, it wastes turns.
   `link_header`, or `none`. Add `cursor_field` or `next_url_field` if the
   upstream returns them under a non-default key.
 
+#### Shared vs per-user auth
+
+`auth` also takes a `scope` (default `shared`). Pick deliberately — this is the
+difference between "one service account for everyone" and "each caller acts as
+themselves":
+
+- **`scope: "shared"`** (default, shown above) — one credential, same for every
+  caller, from `{{ env:VAR }}`. Use for public/open data or a single service
+  account.
+- **`scope: "per_user"`** — each end user connects their **own** account; the
+  runtime resolves *that caller's* token per request. Use for GitHub / Slack /
+  Gmail / any "act as the calling user" source. Each caller authorizes once via
+  an OAuth flow; until they do, tools on that source return `AUTH_REQUIRED` with
+  a connect URL. **Yes, Elliot supports this** — don't fall back to baking one
+  shared token in, and don't add a `token` parameter to a tool.
+
+```json
+{
+  "url": "https://api.github.com/user/repos",
+  "auth": {
+    "type": "oauth2",
+    "scope": "per_user",
+    "secret_key": "{{ user_oauth:github }}",
+    "oauth2": {
+      "authorization_url": "https://github.com/login/oauth/authorize",
+      "token_url": "https://github.com/login/oauth/access_token",
+      "scopes": ["repo"],
+      "client_id_secret": "{{ env:GITHUB_CLIENT_ID }}",
+      "client_secret_secret": "{{ env:GITHUB_CLIENT_SECRET }}"
+    }
+  }
+}
+```
+
+Here `secret_key: "{{ user_oauth:github }}"` (Elliot Cloud) resolves to the
+calling user's stored token; `client_id_secret` / `client_secret_secret` are the
+app-level OAuth credentials from `{{ env:... }}`. Read
+`elliot://docs/authentication` for the full auth + fetch model before building a
+per-user connector.
+
 ### Postgres / MySQL
 
 ```json
@@ -150,6 +190,7 @@ If `elliot_discover_source` returns an error:
 |-----------|--------|
 | `SOURCE_UNREACHABLE` | Confirm the URL / env var with the user, retry once. If it still fails, stop and ask. |
 | `AUTH_FAILED` | Confirm the env var name and that the variable is actually set in the shell. Do **not** ask the user to paste the secret. |
+| `AUTH_REQUIRED` | A `per_user` source needs the calling user to connect their own account. Surface the connect URL(s) from `details.connect`; the user logs in once, then retry. Never paste a token. |
 | `SCHEMA_NOT_FOUND` | List available schemas (the error `details` will include them) and ask which one. |
 | anything else | Surface the error message verbatim and ask the user how they want to proceed. |
 

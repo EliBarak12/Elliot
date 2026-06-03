@@ -2,7 +2,7 @@
   "mcpServers": {
     "elliot": {
       "type": "http",
-      "url": "http://localhost:3000/mcp/"
+      "url": "https://api.elliot-cloud.com/b/mcp"
     }
   }
 }

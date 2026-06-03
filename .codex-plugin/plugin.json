@@ -13,7 +13,7 @@
   "skills": "./skills/",
   "mcpServers": {
     "elliot": {
-      "url": "http://localhost:3000/mcp/"
+      "url": "https://api.elliot-cloud.com/b/mcp"
     }
   },
   "interface": {

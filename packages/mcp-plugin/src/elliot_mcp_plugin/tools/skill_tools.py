@@ -69,14 +69,25 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
     def elliot_create_skill(
         name: str,
         description: str,
-        steps: list[dict],  # type: ignore[type-arg]
-        input_parameters: list[dict],  # type: ignore[type-arg]
+        steps: list[dict] | None = None,  # type: ignore[type-arg]
+        input_parameters: list[dict] | None = None,  # type: ignore[type-arg]
+        instructions: str = "",
+        when_to_use: str = "",
     ) -> dict:  # type: ignore[type-arg]
-        """Define a multi-step skill that chains tool calls together.
+        """Define a connector skill — a workflow around the connector's tools.
 
-        Each step requires {alias: str, tool_id: str, params: dict}. The keys
-        `arguments`, `args`, `parameters`, and `inputs` are accepted as
-        aliases for `params`; `tool` is accepted as an alias for `tool_id`.
+        A skill comes in two flavours, and may be both:
+
+        - **Deterministic**: pass `steps`, a chain the runtime executes
+          end-to-end. Each step is {alias: str, tool_id: str, params: dict}.
+          The keys `arguments`, `args`, `parameters`, and `inputs` are accepted
+          as aliases for `params`; `tool` is accepted for `tool_id`.
+        - **Prose**: pass `instructions` (markdown) and optionally `when_to_use`
+          to describe a workflow the agent drives itself — including branches a
+          flat step chain can't express. This is exported as a SKILL.md guide,
+          the same way Elliot ships its own skills.
+
+        Supply at least one of `steps` or `instructions`.
         """
         try:
             # Derive a readable snake_case id from the name (matching tool ids)
@@ -92,14 +103,16 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
             while session.registry.get_skill(skill_id) is not None:
                 skill_id = f"{slug}_{_suffix}"
                 _suffix += 1
-            normalized_steps = _normalize_skill_steps(steps)
+            normalized_steps = _normalize_skill_steps(steps or [])
             skill = validate_skill_definition(
                 {
                     "id": skill_id,
                     "name": name,
                     "description": description,
                     "steps": normalized_steps,
-                    "input_parameters": input_parameters,
+                    "input_parameters": input_parameters or [],
+                    "instructions": instructions,
+                    "when_to_use": when_to_use,
                 }
             )
             for step in skill.steps:
@@ -177,6 +190,19 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
             skill = session.registry.get_skill(skill_id)
             if skill is None:
                 return {"error": f"Skill not found: {skill_id}"}
+
+            # Prose-only skills have nothing to execute — they're guidance the
+            # agent follows itself. Return that guidance instead of an empty set
+            # so the caller sees the skill rather than a confusing no-op result.
+            if not skill.steps:
+                return {
+                    "rows": [],
+                    "meta": {
+                        "kind": "prose",
+                        "when_to_use": skill.when_to_use,
+                        "instructions": skill.instructions,
+                    },
+                }
 
             supplied: dict[str, Any] = {}
             for src in (inputs, arguments, params):

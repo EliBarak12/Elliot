@@ -25,6 +25,8 @@ export function SkillEditor({ skill, onSaved }: Props) {
 
   const [name, setName] = useState(skill?.name ?? '');
   const [description, setDescription] = useState(skill?.description ?? '');
+  const [whenToUse, setWhenToUse] = useState(skill?.when_to_use ?? '');
+  const [instructions, setInstructions] = useState(skill?.instructions ?? '');
   const [steps, setSteps] = useState<SkillStep[]>(
     (skill?.steps ?? []).map((s) => ({
       alias: s.alias,
@@ -40,6 +42,8 @@ export function SkillEditor({ skill, onSaved }: Props) {
   useEffect(() => {
     setName(skill?.name ?? '');
     setDescription(skill?.description ?? '');
+    setWhenToUse(skill?.when_to_use ?? '');
+    setInstructions(skill?.instructions ?? '');
     setSteps(
       (skill?.steps ?? []).map((s) => ({
         alias: s.alias,
@@ -68,7 +72,9 @@ export function SkillEditor({ skill, onSaved }: Props) {
     setStatus(null);
     try {
       const toolName = skill ? 'elliot_update_skill' : 'elliot_create_skill';
-      await callTool(toolName, { skill: { name, description, steps } });
+      await callTool(toolName, {
+        skill: { name, description, steps, instructions, when_to_use: whenToUse },
+      });
       setSaved(true);
       setStatus({ type: 'ok', message: 'Saved ✓' });
       onSaved();
@@ -82,7 +88,10 @@ export function SkillEditor({ skill, onSaved }: Props) {
     try {
       const res = await callToolMutation({
         name: 'elliot_preview_skill',
-        args: { skill: { name, description, steps }, inputs: testInputs },
+        args: {
+          skill: { name, description, steps, instructions, when_to_use: whenToUse },
+          inputs: testInputs,
+        },
       });
       setTestResult(res);
     } catch (err) {
@@ -104,6 +113,24 @@ export function SkillEditor({ skill, onSaved }: Props) {
         onChange={(e) => setDescription(e.target.value)}
         className="text-sm min-h-[60px]"
       />
+
+      <div>
+        <p className="text-xs font-medium text-muted-foreground mb-1">
+          Workflow guide (optional)
+        </p>
+        <Input
+          placeholder="When to use — e.g. when the user asks to reconcile invoices"
+          value={whenToUse}
+          onChange={(e) => setWhenToUse(e.target.value)}
+          className="h-8 text-sm mb-2"
+        />
+        <Textarea
+          placeholder="Instructions (markdown) — describe the workflow around your tools. Leave the steps below empty for a prose-only skill."
+          value={instructions}
+          onChange={(e) => setInstructions(e.target.value)}
+          className="text-sm min-h-[100px] font-mono"
+        />
+      </div>
 
       <div>
         <div className="flex items-center justify-between mb-2">

@@ -45,6 +45,36 @@ _CONNECTOR_WITH_SKILL = {
 }
 
 
+_CONNECTOR_WITH_PROSE_SKILL = {
+    "name": "Acme API",
+    "slug": "acme-api",
+    "version": "2.1.0",
+    "description": "Read-only access to Acme widgets.",
+    "tools": [
+        {
+            "id": "list_widgets",
+            "name": "List Widgets",
+            "description": "Return every widget in the catalog",
+            "category": "READ",
+            "sql": "SELECT id, name FROM widgets LIMIT 50",
+        }
+    ],
+    "skills": [
+        {
+            "id": "triage-defects",
+            "name": "Triage Defects",
+            "description": "Decide which widgets to recall",
+            "when_to_use": "When the user reports a defective batch.",
+            "instructions": (
+                "## How to triage\n\n"
+                "First list the widgets, then branch: recall any flagged unsafe, "
+                "otherwise note them for review."
+            ),
+        }
+    ],
+}
+
+
 def _write_connector(tmp_path: Path, data: dict | None = None) -> Path:
     path = tmp_path / "acme.connector.json"
     path.write_text(json.dumps(data or _CONNECTOR), encoding="utf-8")
@@ -151,6 +181,70 @@ def test_workflow_skill_generated_from_connector_skill(tmp_path: Path):
     # The usage skill must list the connector's tool too.
     guide = (out / "skills" / "acme-api-guide" / "SKILL.md").read_text(encoding="utf-8")
     assert "mcp__acme-api__list_widgets" in guide
+
+
+def test_prose_skill_renders_author_instructions_and_when_to_use(tmp_path: Path):
+    """A prose skill exports its author instructions + when_to_use verbatim."""
+    connector = _write_connector(tmp_path, _CONNECTOR_WITH_PROSE_SKILL)
+    out = tmp_path / "out"
+    export_plugin(connector, out)
+    skill = (out / "skills" / "triage-defects" / "SKILL.md").read_text(encoding="utf-8")
+    assert "name: triage-defects" in skill
+    # Author's when_to_use wins over the generated default.
+    assert "when_to_use: When the user reports a defective batch." in skill
+    # The author's markdown body is present verbatim.
+    assert "## How to triage" in skill
+    assert "branch: recall any flagged unsafe" in skill
+    # Pure-prose skill has no generated step list.
+    assert "## Steps" not in skill
+
+
+def test_skill_with_prose_and_steps_renders_both(tmp_path: Path):
+    data = {
+        **_CONNECTOR_WITH_PROSE_SKILL,
+        "skills": [
+            {
+                **_CONNECTOR_WITH_PROSE_SKILL["skills"][0],
+                "steps": [{"alias": "w", "tool_id": "list_widgets", "params": {}}],
+            }
+        ],
+    }
+    connector = _write_connector(tmp_path, data)
+    out = tmp_path / "out"
+    export_plugin(connector, out)
+    skill = (out / "skills" / "triage-defects" / "SKILL.md").read_text(encoding="utf-8")
+    assert "## How to triage" in skill
+    # When prose is present, the chain is framed as a reference, not "## Steps".
+    assert "## Tool sequence" in skill
+    assert "mcp__acme-api__list_widgets" in skill
+
+
+def test_exported_plugin_links_to_elliot_cloud(tmp_path: Path):
+    """Manifests, marketplaces, and README all point home at elliot-cloud.com."""
+    connector = _write_connector(tmp_path)
+    out = tmp_path / "out"
+    export_plugin(connector, out)
+
+    claude = json.loads((out / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    assert claude["author"]["url"] == "https://elliot-cloud.com"
+    assert claude["homepage"] == "https://elliot-cloud.com"
+
+    codex = json.loads((out / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    assert codex["author"]["url"] == "https://elliot-cloud.com"
+    assert codex["homepage"] == "https://elliot-cloud.com"
+
+    claude_mkt = json.loads(
+        (out / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
+    )
+    assert claude_mkt["owner"]["url"] == "https://elliot-cloud.com"
+
+    codex_mkt = json.loads(
+        (out / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8")
+    )
+    assert codex_mkt["owner"]["url"] == "https://elliot-cloud.com"
+
+    readme = (out / "README.md").read_text(encoding="utf-8")
+    assert "https://elliot-cloud.com" in readme
 
 
 def test_codex_marketplace_uses_local_source(tmp_path: Path):

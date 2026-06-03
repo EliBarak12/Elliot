@@ -45,8 +45,14 @@ export interface SkillDefinition {
   id: string;
   name: string;
   description: string;
-  steps: SkillStep[];
+  // Optional: a skill can be pure prose (instructions only) or a deterministic
+  // step chain, or both.
+  steps?: SkillStep[];
   input_parameters: ParameterDefinition[];
+  // Free-form markdown workflow guidance, exported as a SKILL.md body.
+  instructions?: string;
+  // Frontmatter trigger line for the exported SKILL.md.
+  when_to_use?: string;
 }
 
 export interface ConnectorConfig {

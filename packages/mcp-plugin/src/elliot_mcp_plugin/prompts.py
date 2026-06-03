@@ -151,19 +151,29 @@ def register_session_skill_prompt(mcp: FastMCP, skill: Any) -> str:
     name. Re-registering the same skill simply overwrites it.
     """
     name = _session_skill_prompt_name(skill.id)
-    steps_desc = "\n".join(
-        f"  {i + 1}. {step.alias}: call `{step.tool_id}` with {step.params}"
-        for i, step in enumerate(skill.steps)
-    )
     inputs = ", ".join(p.name for p in skill.input_parameters) or "(none)"
-    body = (
-        f"# Elliot skill: {skill.name}\n\n"
-        f"{skill.description}\n\n"
-        f"Inputs: {inputs}\n\n"
-        f"Steps:\n{steps_desc or '  (no steps)'}\n\n"
-        f"To run it end-to-end against the loaded data, call "
-        f'`elliot_preview_skill(skill_id="{skill.id}")` with the inputs above.'
-    )
+    when_to_use = getattr(skill, "when_to_use", "") or ""
+    instructions = getattr(skill, "instructions", "") or ""
+
+    parts = [f"# Elliot skill: {skill.name}", "", skill.description, ""]
+    if when_to_use.strip():
+        parts += [f"_When to use:_ {when_to_use.strip()}", ""]
+    parts += [f"Inputs: {inputs}", ""]
+    if instructions.strip():
+        parts += [instructions.strip(), ""]
+    if skill.steps:
+        steps_desc = "\n".join(
+            f"  {i + 1}. {step.alias}: call `{step.tool_id}` with {step.params}"
+            for i, step in enumerate(skill.steps)
+        )
+        parts += [
+            "Steps:",
+            steps_desc,
+            "",
+            "To run it end-to-end against the loaded data, call "
+            f'`elliot_preview_skill(skill_id="{skill.id}")` with the inputs above.',
+        ]
+    body = "\n".join(parts).rstrip()
     fn = _make_body_fn(body)
     fn.__doc__ = skill.description
     mcp.prompt(name=name, description=skill.description)(fn)

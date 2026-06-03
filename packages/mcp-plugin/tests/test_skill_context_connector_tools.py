@@ -98,6 +98,43 @@ def test_create_skill_registers(mcp: FastMCP, session: ElliotSession, tmp_path: 
     assert session.registry.get_skill(skill_id) is not None
 
 
+def test_create_prose_skill_without_steps(mcp: FastMCP, session: ElliotSession):
+    """A prose-only skill needs no steps — just instructions."""
+    result = _tool(mcp, "elliot_create_skill")(
+        name="onboarding_flow",
+        description="Walks the agent through onboarding a new customer",
+        instructions="1. Create the account.\n2. If trial, set the flag, else bill them.",
+        when_to_use="When a new customer signs up.",
+    )
+    assert result["status"] == "created"
+    skill = session.registry.get_skill(result["skill_id"])
+    assert skill is not None
+    assert skill.steps == []
+    assert skill.when_to_use == "When a new customer signs up."
+    assert skill.instructions.startswith("1.")
+
+
+def test_create_skill_with_neither_steps_nor_instructions_errors(mcp: FastMCP):
+    result = _tool(mcp, "elliot_create_skill")(
+        name="empty_skill",
+        description="Does nothing",
+    )
+    assert "text" in result or "error" in result
+
+
+def test_preview_prose_skill_returns_guidance(mcp: FastMCP, session: ElliotSession):
+    created = _tool(mcp, "elliot_create_skill")(
+        name="prose_only",
+        description="Prose guidance only",
+        instructions="Do the thing, then the other thing.",
+        when_to_use="When asked.",
+    )
+    result = _tool(mcp, "elliot_preview_skill")(skill_id=created["skill_id"])
+    assert result["meta"]["kind"] == "prose"
+    assert result["meta"]["instructions"] == "Do the thing, then the other thing."
+    assert result["rows"] == []
+
+
 def test_list_skills_after_create(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
     _load_and_create_tool(mcp, session, tmp_path)
     _tool(mcp, "elliot_create_skill")(

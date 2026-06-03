@@ -463,7 +463,7 @@ export default function ConnectorPage() {
                     />
                     <span className="flex-1 text-sm truncate">{skill.name}</span>
                     <Badge variant="muted" className="shrink-0">
-                      {skill.steps.length} steps
+                      {skill.steps?.length ? `${skill.steps.length} steps` : 'prose'}
                     </Badge>
                   </label>
                 );

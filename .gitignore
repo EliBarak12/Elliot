@@ -53,8 +53,8 @@ packages/studio/.vite/
 .elliot/secrets.enc
 
 # E2E run artifacts (screenshots, captured logs)
-tests/e2e/artifacts/
+dev/e2e/artifacts/
 
 # Per-user auth demo runtime artifacts
-examples/**/.vault.db
-examples/**/.vault_oauth.db
+dev/examples/**/.vault.db
+dev/examples/**/.vault_oauth.db

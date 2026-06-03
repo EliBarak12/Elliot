@@ -208,7 +208,7 @@ Elliot is a monorepo of four packages:
 | `packages/connector-runtime` | `elliot-connector-runtime` | Python 3.13 · FastAPI | Tool execution and session/observation store — port `3001` |
 | `packages/studio` | `elliot-studio` | React 19 · Vite | Visual dashboard — port `5173` (dev) / `8080` (Docker) |
 
-Connector files live in `connectors/`, starter templates in `templates/`, and every environment variable is documented in [`.env.example`](.env.example).
+Connector files live in `connectors/`, starter templates ship with the plugin (browse them via the `elliot://templates/` MCP resources), and every environment variable is documented in [`.env.example`](.env.example).
 
 ## Documentation
 

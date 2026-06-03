@@ -125,7 +125,6 @@ elliot/
 │   ├── connector-runtime/     elliot-connector-runtime  :3001
 │   └── studio/                elliot-studio        React 19 :5173
 ├── connectors/            user connector.json files
-├── templates/             starter connectors
 ├── Procfile               honcho start
 ├── docker-compose.yml     production
 └── .env.example           all env vars

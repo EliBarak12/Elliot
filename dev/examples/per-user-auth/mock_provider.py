@@ -8,7 +8,7 @@ Each end user authorizes their own mailbox account; the access token maps to
 that account, so /messages returns only that account's mail. This proves the
 tools run in the *connecting user's* scope.
 
-Run standalone:  uv run python examples/per-user-auth/mock_provider.py
+Run standalone:  uv run python dev/examples/per-user-auth/mock_provider.py
 """
 
 from __future__ import annotations

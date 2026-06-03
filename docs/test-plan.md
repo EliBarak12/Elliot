@@ -137,7 +137,7 @@ flowchart LR
     Core --> Plugin["test-mcp-plugin\npytest packages/mcp-plugin\n--cov-fail-under=80"]
     Core --> Runtime["test-connector-runtime\npytest packages/connector-runtime\n--cov-fail-under=85"]
 
-    Plugin --> E2E["test-e2e\npytest tests/e2e/ -m e2e"]
+    Plugin --> E2E["test-e2e\npytest dev/e2e/ -m e2e"]
     Runtime --> E2E
     Studio --> E2E
 
@@ -221,8 +221,8 @@ uv run pytest packages/mcp-plugin/tests/        --cov=elliot_mcp_plugin        -
 cd packages/studio && npx vitest run --coverage
 
 # E2E only (slow, needs running services)
-uv run pytest tests/e2e/ -m e2e -v
+uv run pytest dev/e2e/ -m e2e -v
 
 # Everything at once from repo root
-uv run pytest packages/ --ignore=tests/e2e -v
+uv run pytest packages/ --ignore=dev/e2e -v
 ```

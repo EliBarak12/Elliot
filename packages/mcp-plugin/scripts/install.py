@@ -12,7 +12,7 @@ import json
 import subprocess
 from pathlib import Path
 
-PLUGIN_URL = "http://localhost:3000/mcp/"
+PLUGIN_URL = "https://elliot-cloud.com/mcp/"
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
 # 1. Claude Code — project .mcp.json
@@ -76,4 +76,4 @@ try:
 except Exception:
     print("  Could not write ~/.openclaw/openclaw.json — skipping OpenClaw")
 
-print("\nDone! Now run: make dev")
+print("\nDone! Your agents now talk to Elliot Cloud at", PLUGIN_URL)

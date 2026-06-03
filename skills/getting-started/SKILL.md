@@ -10,9 +10,9 @@ allowed-tools: Bash mcp__elliot__*
 
 You are working with **Elliot**, a platform that turns existing APIs and databases into **agent-ready MCP connectors**. Your job is to help the user design, validate, deploy, and observe agent-ready tool sets built around their data sources.
 
-## ⚠️ PREREQUISITE — is the Elliot server actually running?
+## ⚠️ PREREQUISITE — can you reach the Elliot endpoint?
 
-Elliot is a local service. The MCP plugin URL (`http://localhost:3000/mcp/`) won't respond unless the user has the Elliot stack running. **Always check this first** — most "Elliot isn't working" problems are just the server not being up.
+By default the marketplace wires your agent to the hosted Elliot Cloud endpoint at `https://elliot-cloud.com/mcp/`. If you run Elliot locally instead, the URL is your own (e.g. `http://localhost:3000/mcp/`) and that stack must be up. Either way, if the endpoint can't be reached every Elliot tool call fails — **always check this first**, because most "Elliot isn't working" problems are just an unreachable endpoint.
 
 ### Quick check
 
@@ -20,8 +20,8 @@ Try calling `elliot_get_session_state`. Three possible outcomes:
 
 | Outcome | What it means | What to do |
 |---|---|---|
-| Returns a result with counts | Server is running ✓ | Skip to the workflow section below |
-| MCP transport error / connection refused | Server isn't running | Walk the user through starting it (next section) |
+| Returns a result with counts | Endpoint is reachable ✓ | Skip to the workflow section below |
+| MCP transport error / connection refused | Endpoint isn't reachable | Help the user reconnect (next section) |
 | `tools/list` doesn't include any `elliot_*` tools | Plugin isn't installed at all | Tell the user to run `/plugin install elliot@elliot` first |
 
 `elliot_get_session_state` returns counts of sources / tools / skills plus
@@ -29,11 +29,15 @@ Try calling `elliot_get_session_state`. Three possible outcomes:
 session" probe. (`elliot_session_summary` and `studio_get_connector_info` exist
 as thinner / Studio-flavoured variants of the same idea.)
 
-### If the server isn't running, tell the user
+### If the endpoint isn't reachable, tell the user
 
-Stop and ask the user to start Elliot. Use this exact message:
+Stop and help the user reconnect. If they're on **Elliot Cloud** (the marketplace default), use this message:
 
-> "I can't reach the Elliot server. It needs to be running locally on `http://localhost:3000` before I can use any of its tools. Please open a terminal and run:
+> "I can't reach the Elliot Cloud endpoint at `https://elliot-cloud.com/mcp/`. Check your network connection and that your Elliot Cloud account is active, then tell me when to retry."
+
+If they're running Elliot **locally**, ask them to start the stack:
+
+> "I can't reach your local Elliot server. It needs to be running on `http://localhost:3000` before I can use any of its tools. Please open a terminal and run:
 >
 > ```
 > git clone https://github.com/EliBarak12/Elliot.git
@@ -44,13 +48,13 @@ Stop and ask the user to start Elliot. Use this exact message:
 >
 > Once it's running, Studio will open automatically in your browser at `http://localhost:5173`. Tell me when you see it and I'll continue."
 
-**Do not retry tool calls in a loop while waiting.** Wait for the user to confirm Elliot is up, then re-run `elliot_session_summary`.
+**Do not retry tool calls in a loop while waiting.** Wait for the user to confirm Elliot is reachable, then re-run `elliot_session_summary`.
 
-### If the user already has Elliot installed and just needs to start it
+### If the user already has Elliot running and just needs to reconnect
 
 If the user says "I have Elliot already" or you see `.elliot/` or a `Makefile` with `dev:` in their cwd, give the short version:
 
-> "Run `make dev` from the Elliot repo to start the stack. Studio will open in your browser when it's ready."
+> "Run `make dev` from the Elliot repo to start the local stack, or confirm your Elliot Cloud connection is active. Then I'll continue."
 
 ## The five principles
 

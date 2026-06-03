@@ -103,18 +103,24 @@ _INSTALL_MD = """# Installing Elliot in Your Project
 Elliot is an MCP server. Your agent connects to it over HTTP and gains access
 to the tools you've built.
 
-## Important: the server still needs to be running
+## The hosted endpoint
 
-Every install path below just wires up the *URL* — `http://localhost:3000/mcp/`.
-None of them brings up the Elliot server itself. You also need ONE of:
+Every install path below wires up the *URL* — `https://elliot-cloud.com/mcp/`,
+the hosted Elliot Cloud endpoint. No local server is required: your agent
+connects straight to Elliot Cloud.
 
-- Run `make dev` in a clone of `EliBarak12/Elliot` (boots plugin + runtime + studio).
+Prefer to run Elliot yourself? Boot the stack locally and point your agent at
+your own URL instead of the hosted one:
+
+- Run `make dev` in a clone of `EliBarak12/Elliot` (boots plugin + runtime +
+  studio on `http://localhost:3000`), then `elliot connect` to wire every
+  detected agent at the local URL.
 - Run `uvx --from elliot-mcp-plugin uvicorn elliot_mcp_plugin.main:app --port 3000`
   (once the package is published on PyPI).
-- Point at a hosted Elliot endpoint (see "Remote" below) — not yet available.
 
-If the URL is wired but the server isn't running, every Elliot tool call returns
-a connection error. The recovery is always: start the server.
+If the URL is wired but the endpoint is unreachable, every Elliot tool call
+returns a connection error. The recovery is always: confirm the endpoint is up
+(or switch to a local URL).
 
 ## 1. Marketplace install (Claude Code)
 
@@ -124,7 +130,7 @@ a connection error. The recovery is always: start the server.
 ```
 
 This copies the Elliot plugin into `~/.claude/plugins/elliot/` — skills, the
-plugin manifest, and the `.mcp.json` that points at `localhost:3000`. Claude
+plugin manifest, and the `.mcp.json` that points at `elliot-cloud.com`. Claude
 Code reads `.claude-plugin/marketplace.json` at the cloned repo root and the
 plugin's own `.claude-plugin/plugin.json` to discover skills under `skills/`.
 
@@ -159,8 +165,8 @@ config for each. Skills still travel through the MCP server itself via
 These IDEs accept MCP-install deeplinks. Click the matching link from the
 Elliot README — they pre-fill the config and prompt you to confirm:
 
-- VS Code: `vscode:mcp/install?{"name":"elliot","type":"http","url":"http://localhost:3000/mcp/"}`
-- Cursor:  `cursor:install-mcp?config={"name":"elliot","type":"http","url":"http://localhost:3000/mcp/"}`
+- VS Code: `vscode:mcp/install?{"name":"elliot","type":"http","url":"https://elliot-cloud.com/mcp/"}`
+- Cursor:  `cursor:install-mcp?config={"name":"elliot","type":"http","url":"https://elliot-cloud.com/mcp/"}`
 
 ## 5. Manual config (always works)
 
@@ -171,7 +177,7 @@ Add to your agent's MCP config:
   "mcpServers": {
     "elliot": {
       "type": "http",
-      "url": "http://localhost:3000/mcp/"
+      "url": "https://elliot-cloud.com/mcp/"
     }
   }
 }
@@ -180,7 +186,7 @@ Add to your agent's MCP config:
 For Codex (TOML):
 ```toml
 [mcp_servers.elliot]
-url = "http://localhost:3000/mcp/"
+url = "https://elliot-cloud.com/mcp/"
 ```
 
 ## First connection

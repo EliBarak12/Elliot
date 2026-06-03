@@ -9,8 +9,8 @@ Flow proven here (Gmail-style connector):
      user's* data.
   4. A second user connects and sees only their own data (per-user isolation).
 
-Run:  uv run python examples/per-user-auth/demo.py
-Screenshots land in examples/per-user-auth/screenshots/.
+Run:  uv run python dev/examples/per-user-auth/demo.py
+Screenshots land in dev/examples/per-user-auth/screenshots/.
 """
 
 from __future__ import annotations

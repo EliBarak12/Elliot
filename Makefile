@@ -37,20 +37,20 @@ test-cov:
 # targets.
 e2e:
 	PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers \
-	uv run pytest tests/e2e -v --tb=short
+	uv run pytest dev/e2e -v --tb=short
 
 e2e-mcp:
-	uv run pytest tests/e2e/test_layer1_mcp_protocol.py -v --tb=short
+	uv run pytest dev/e2e/test_layer1_mcp_protocol.py -v --tb=short
 
 # Builder → Consumer → Reviewer multi-agent pipeline. Set budget knobs via
 # ELLIOT_E2E_BUILDER_BUDGET_USD / ELLIOT_E2E_CONSUMER_BUDGET_USD /
 # ELLIOT_E2E_REVIEWER_BUDGET_USD if you want tighter / looser caps.
 e2e-agent:
-	uv run pytest tests/e2e/test_layer2_claude_agent.py -v --tb=short
+	uv run pytest dev/e2e/test_layer2_claude_agent.py -v --tb=short
 
 e2e-ui:
 	PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers \
-	uv run pytest tests/e2e/test_layer3_studio_ui.py -v --tb=short
+	uv run pytest dev/e2e/test_layer3_studio_ui.py -v --tb=short
 
 lint:
 	uv run ruff check .

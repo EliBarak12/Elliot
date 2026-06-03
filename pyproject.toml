@@ -18,7 +18,7 @@ dev-dependencies = [
     "types-pyyaml>=6.0.12.20260510",
     "slowapi>=0.1.9",
     "honcho>=2.0",
-    # E2E suite (tests/e2e) — runs Studio in a headless browser. Not exercised
+    # E2E suite (dev/e2e) — runs Studio in a headless browser. Not exercised
     # by the mandatory pre-push pytest run; opt-in via `make e2e`. Pinned to
     # 1.56.x so it matches the browser build cached at /opt/pw-browsers.
     "playwright>=1.56,<1.57",

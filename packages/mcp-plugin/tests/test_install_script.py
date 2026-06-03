@@ -37,7 +37,7 @@ def test_install_creates_mcp_json(tmp_path: Path):
     assert mcp_json.exists()
     data = json.loads(mcp_json.read_text())
     assert "elliot" in data["mcpServers"]
-    assert data["mcpServers"]["elliot"]["url"] == "https://elliot-cloud.com/mcp/"
+    assert data["mcpServers"]["elliot"]["url"] == "https://api.elliot-cloud.com/b/mcp"
 
 
 def test_install_creates_codex_config(tmp_path: Path):
@@ -57,7 +57,7 @@ def test_install_creates_openclaw_config(tmp_path: Path):
     entry = data["mcp"]["servers"]["elliot"]
     assert entry == {
         "transport": "streamable-http",
-        "url": "https://elliot-cloud.com/mcp/",
+        "url": "https://api.elliot-cloud.com/b/mcp",
     }
 
 

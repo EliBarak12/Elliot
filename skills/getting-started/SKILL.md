@@ -12,7 +12,7 @@ You are working with **Elliot**, a platform that turns existing APIs and databas
 
 ## ⚠️ PREREQUISITE — can you reach the Elliot endpoint?
 
-By default the marketplace wires your agent to the hosted Elliot Cloud endpoint at `https://elliot-cloud.com/mcp/`. If you run Elliot locally instead, the URL is your own (e.g. `http://localhost:3000/mcp/`) and that stack must be up. Either way, if the endpoint can't be reached every Elliot tool call fails — **always check this first**, because most "Elliot isn't working" problems are just an unreachable endpoint.
+By default the marketplace wires your agent to the hosted Elliot Cloud builder at `https://api.elliot-cloud.com/b/mcp`. It's OAuth-protected, so the first tool call opens a browser tab to authorize Elliot Cloud — until that's done, calls come back unauthorized. If you run Elliot locally instead, the URL is your own (e.g. `http://localhost:3000/mcp/`) and that stack must be up. Either way, if the endpoint can't be reached every Elliot tool call fails — **always check this first**, because most "Elliot isn't working" problems are just an unreachable or unauthorized endpoint.
 
 ### Quick check
 
@@ -33,7 +33,7 @@ as thinner / Studio-flavoured variants of the same idea.)
 
 Stop and help the user reconnect. If they're on **Elliot Cloud** (the marketplace default), use this message:
 
-> "I can't reach the Elliot Cloud endpoint at `https://elliot-cloud.com/mcp/`. Check your network connection and that your Elliot Cloud account is active, then tell me when to retry."
+> "I can't reach the Elliot Cloud builder at `https://api.elliot-cloud.com/b/mcp`. If a browser tab opened asking you to authorize Elliot Cloud, please complete that sign-in; otherwise check your network connection and that your Elliot Cloud account is active. Tell me when to retry."
 
 If they're running Elliot **locally**, ask them to start the stack:
 

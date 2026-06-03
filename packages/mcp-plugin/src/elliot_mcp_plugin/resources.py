@@ -105,9 +105,14 @@ to the tools you've built.
 
 ## The hosted endpoint
 
-Every install path below wires up the *URL* — `https://elliot-cloud.com/mcp/`,
-the hosted Elliot Cloud endpoint. No local server is required: your agent
-connects straight to Elliot Cloud.
+Every install path below wires up the *URL* — `https://api.elliot-cloud.com/b/mcp`,
+the hosted Elliot Cloud builder. No local server is required: your agent
+connects straight to Elliot Cloud and gets the same build/lint/eval/publish
+tools and skills you'd run locally.
+
+The endpoint is OAuth-protected. The config carries only the URL — on the first
+tool call your agent opens a browser tab to authorize Elliot Cloud (no API key
+to paste). After that the agent stays connected.
 
 Prefer to run Elliot yourself? Boot the stack locally and point your agent at
 your own URL instead of the hosted one:
@@ -120,7 +125,7 @@ your own URL instead of the hosted one:
 
 If the URL is wired but the endpoint is unreachable, every Elliot tool call
 returns a connection error. The recovery is always: confirm the endpoint is up
-(or switch to a local URL).
+and that you've authorized Elliot Cloud (or switch to a local URL).
 
 ## 1. Marketplace install (Claude Code)
 
@@ -130,7 +135,7 @@ returns a connection error. The recovery is always: confirm the endpoint is up
 ```
 
 This copies the Elliot plugin into `~/.claude/plugins/elliot/` — skills, the
-plugin manifest, and the `.mcp.json` that points at `elliot-cloud.com`. Claude
+plugin manifest, and the `.mcp.json` that points at `api.elliot-cloud.com`. Claude
 Code reads `.claude-plugin/marketplace.json` at the cloned repo root and the
 plugin's own `.claude-plugin/plugin.json` to discover skills under `skills/`.
 
@@ -165,8 +170,8 @@ config for each. Skills still travel through the MCP server itself via
 These IDEs accept MCP-install deeplinks. Click the matching link from the
 Elliot README — they pre-fill the config and prompt you to confirm:
 
-- VS Code: `vscode:mcp/install?{"name":"elliot","type":"http","url":"https://elliot-cloud.com/mcp/"}`
-- Cursor:  `cursor:install-mcp?config={"name":"elliot","type":"http","url":"https://elliot-cloud.com/mcp/"}`
+- VS Code: `vscode:mcp/install?{"name":"elliot","type":"http","url":"https://api.elliot-cloud.com/b/mcp"}`
+- Cursor:  `cursor:install-mcp?config={"name":"elliot","type":"http","url":"https://api.elliot-cloud.com/b/mcp"}`
 
 ## 5. Manual config (always works)
 
@@ -177,7 +182,7 @@ Add to your agent's MCP config:
   "mcpServers": {
     "elliot": {
       "type": "http",
-      "url": "https://elliot-cloud.com/mcp/"
+      "url": "https://api.elliot-cloud.com/b/mcp"
     }
   }
 }
@@ -186,7 +191,7 @@ Add to your agent's MCP config:
 For Codex (TOML):
 ```toml
 [mcp_servers.elliot]
-url = "https://elliot-cloud.com/mcp/"
+url = "https://api.elliot-cloud.com/b/mcp"
 ```
 
 ## First connection

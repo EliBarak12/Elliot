@@ -160,7 +160,7 @@ On first connect, an agent automatically calls `prompts/get name=getting_started
 Install the bundled plugin (`.cursor-plugin/`) from the Cursor marketplace, or add the MCP server by hand:
 ```json
 { "mcpServers": { "elliot": {
-  "url": "https://elliot-cloud.com/mcp/"
+  "url": "https://api.elliot-cloud.com/b/mcp"
 }}}
 ```
 

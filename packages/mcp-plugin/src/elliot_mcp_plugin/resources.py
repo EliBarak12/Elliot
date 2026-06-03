@@ -240,7 +240,10 @@ None of them brings up the Elliot server itself. You also need ONE of:
 - Run `make dev` in a clone of `EliBarak12/Elliot` (boots plugin + runtime + studio).
 - Run `uvx --from elliot-mcp-plugin uvicorn elliot_mcp_plugin.main:app --port 3000`
   (once the package is published on PyPI).
-- Point at a hosted Elliot endpoint (see "Remote" below) — not yet available.
+- Use **Elliot Cloud**, the hosted builder — connect your agent to its `/b/mcp`
+  endpoint via OAuth (no local server to run; each user authorizes with their
+  own account). Get the URL + per-client setup from the *Connect an agent* page
+  in the Elliot Cloud dashboard.
 
 If the URL is wired but the server isn't running, every Elliot tool call returns
 a connection error. The recovery is always: start the server.

@@ -37,7 +37,7 @@ Elliot plugin: !`curl -s http://localhost:3000/health 2>/dev/null | python3 -c "
 
 ### 1. Name the connector
 Call `elliot_set_context` with:
-- `connector_name`: slug-style name (e.g. "acme-crm")
+- `name`: slug-style name (e.g. "acme-crm")
 - `description`: one sentence describing the product
 
 ### 2. Describe the source

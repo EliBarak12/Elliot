@@ -28,13 +28,37 @@ For each issue reported:
 | `warning` | Should fix — hurts agent accuracy |
 | `info` | Optional — quality improvement |
 
-### 3. Fix descriptions
-For `description_no_verb` issues: rewrite to start with a clear verb.
-Pattern: `"<Verb> <object>. Use when <context>. Returns <fields>. <Key constraint>."`
+### 3. Fix the issues by code
 
-For `token_risk_high` issues: add a LIMIT parameter or reduce return fields.
+The linter emits stable UPPER_SNAKE codes (the exact strings you'll see in the
+output). The common ones and how to fix them:
 
-For `sql_select_star` issues: replace `SELECT *` with explicit column list.
+| Code | Severity | Fix |
+|------|----------|-----|
+| `DESCRIPTION_TOO_SHORT` | error | Write ≥15 chars: `"<Verb> <object>. Use when <context>. Returns <fields>. <constraint>."` |
+| `DESCRIPTION_MISSING_VERB` | warn | Start the description with a verb — "Return…", "List…", "Create…", "Count…". |
+| `UNBOUNDED_SELECT` | error | A `SELECT *` with no `WHERE` or `LIMIT`. Add `LIMIT :limit` or a filter parameter. |
+| `SELECT_STAR_NO_LIMIT` | warn | Replace `SELECT *` with an explicit column list, or add a `LIMIT`. |
+| `MISSING_PAGINATION` | warn | List-style READ tool with no LIMIT/cursor — add `LIMIT :limit` or a limit/offset/cursor parameter. |
+| `PARAMETER_NAME_GENERIC` / `_TOO_SHORT` | warn | Rename to something specific: `customer_id`, `order_status`. |
+| `PARAMETER_MISSING_DESCRIPTION` | warn | Add a description so agents know what to pass. |
+| `PARAMETER_SHOULD_BE_ENUM` | warn | Declare the fixed value set as an `enum`. |
+| `FILTER_SEMANTICS_UNCLEAR` | warn | In the *parameter's own* description, state exact / contains / prefix / case-insensitive matching. |
+| `WRITE_TOOL_DESCRIPTION` | info | Add the mutation verb ("Creates…", "Deletes…") to a WRITE/ACTION tool. |
+| `SENSITIVE_FIELD_EXPOSED` | error | A field the product intent marked never-expose appears in this tool's SQL/output **or** its forwarded `rest_query_params` / `api_mapping` body/query params. Drop or redact it. |
+| `SECRET_IN_URL` | error | A secret is embedded in `source.url`. Move it to `auth.secret_key` as `{{ env:VAR }}`. |
+
+Auth issues (these fire on the *source*, not a tool):
+
+| Code | Severity | Fix |
+|------|----------|-----|
+| `AUTH_OAUTH2_MISSING_CONFIG` | error | `auth.type: "oauth2"` needs an `oauth2` block (authorization_url, token_url, client_id_secret, client_secret_secret). |
+| `AUTH_OAUTH2_CLIENT_NOT_ENV` | warn | OAuth `client_id_secret` / `client_secret_secret` must be `{{ env:VAR }}`, never a literal. |
+| `AUTH_PER_USER_SLOT_IS_ENV` | warn | A `scope: "per_user"` source's `secret_key` should be the per-user slot (e.g. `access_token` / `{{ user_oauth:ID }}`), not `{{ env:VAR }}`. |
+| `AUTH_LITERAL_SECRET` | warn | A shared-auth `secret_key` looks like a literal credential — use `{{ env:VAR }}`. See `elliot://docs/authentication`. |
+
+If you see a code not listed here, read its `message` and `suggestion` — every
+issue carries actionable recovery text. Don't guess from the code name alone.
 
 ### 4. Re-lint
 After editing tools with `elliot_update_tool`, call `elliot_build_connector`

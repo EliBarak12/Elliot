@@ -40,6 +40,12 @@ Ask these questions, one topic at a time, in plain language. Wait for answers.
   and should require a confirmation gate.
 - **What is sensitive?** Field names that must never reach an agent (PII,
   secrets, internal flags).
+- **Whose credentials?** Does every caller share one account/key (a service
+  account, public data), or should **each end user act as themselves** with
+  their own token (GitHub, Slack, Gmail, anything per-account)? If per-user,
+  the source uses `auth.scope: "per_user"` and each caller connects via OAuth —
+  don't bake in one shared token or add a `token` parameter to a tool. See
+  `elliot://docs/authentication`.
 - **Scale?** Roughly how much data a typical result spans.
 
 Record the answers with `elliot_record_product_intent`.

@@ -75,6 +75,134 @@ dashboard is for *watching* the agent, not driving it manually.
 """
 
 
+_AUTH_MD = """# Authentication & the Runtime Fetch Model
+
+How a connector authenticates upstream, and *when* it actually calls the
+upstream, is configured per-source and per-tool — not baked once at build time.
+Read this before assuming "Elliot only queries a frozen snapshot with one
+shared credential." It supports live calls at tool-call time **and** per-user
+auth where each caller brings their own credential.
+
+## Common misconception (read this first)
+
+A frequent wrong conclusion: *"Elliot loads data into SQLite at discovery time
+with one credential baked in, so it can't do per-user auth or live calls."*
+That is **false**. Two capabilities cover exactly that:
+
+1. **Live fetch at tool-call time** — see "Tool execution modes" below.
+2. **Per-user auth** — set `auth.scope: "per_user"`; each caller authorizes
+   their own account and their token is used for their calls.
+
+## Auth is a (type × scope) matrix
+
+A source's `auth` block has a `type` and a `scope`.
+
+```json
+"auth": {
+  "type": "bearer",          // api_key | bearer | basic | oauth2
+  "scope": "shared",         // shared | per_user   (default: shared)
+  "secret_key": "{{ env:ACME_TOKEN }}",
+  "header_name": null,       // for type=api_key: which header carries the key
+  "query_param": null        // for type=api_key: OR which query param carries it
+}
+```
+
+**`type`** — how the resolved secret becomes the upstream request auth:
+
+| type | becomes |
+|------|---------|
+| `bearer` | `Authorization: Bearer <secret>` |
+| `oauth2` | `Authorization: Bearer <secret>` (secret is a per-user OAuth access token) |
+| `api_key` | `{header_name: <secret>}` **or** `?{query_param}=<secret>` |
+| `basic` | `Authorization: Basic base64("user:pass")` (secret is `"user:pass"`) |
+
+**`scope`** — *whose* credential is used:
+
+- **`shared`** (default): one credential, same for every caller. Put it in
+  `secret_key` as `{{ env:VAR }}`. Use for public/open data or a single
+  service account (e.g. `data.gov.il`, an internal reporting DB).
+- **`per_user`**: each end user connects their **own** account; their token is
+  resolved per-request from a per-user vault and used only for their calls.
+  Use for GitHub / Slack / Gmail / any "act as the calling user" connector.
+
+## Secret placeholders
+
+- `{{ env:VAR_NAME }}` — a shared secret, resolved from the org vault (cloud)
+  or the environment (self-hosted). Used for `scope: shared` credentials and
+  for an OAuth app's own `client_id` / `client_secret`.
+- `{{ user_oauth:SOURCE_ID }}` — **(Elliot Cloud)** the calling user's stored
+  OAuth access token for the source whose `id` is `SOURCE_ID`. Put this in the
+  `secret_key` of a `per_user` source. Auto-refreshed before expiry; raises
+  `AUTH_REQUIRED` if the user hasn't connected yet.
+- Never put a literal credential in a connector file. Lint rejects it.
+
+## Per-user OAuth — the full pattern
+
+A per-user OAuth2 source declares the **upstream provider's** endpoints plus the
+connector author's (app-level) OAuth client credentials:
+
+```json
+{
+  "id": "github",
+  "type": "rest",
+  "url": "https://api.github.com/user/repos",
+  "auth": {
+    "type": "oauth2",
+    "scope": "per_user",
+    "secret_key": "{{ user_oauth:github }}",
+    "oauth2": {
+      "authorization_url": "https://github.com/login/oauth/authorize",
+      "token_url": "https://github.com/login/oauth/access_token",
+      "scopes": ["repo"],
+      "client_id_secret": "{{ env:GITHUB_CLIENT_ID }}",
+      "client_secret_secret": "{{ env:GITHUB_CLIENT_SECRET }}"
+    }
+  }
+}
+```
+
+At call time:
+1. The runtime resolves the **calling user's** stored token into `secret_key`
+   and builds them an executor bound to it — fully isolated per `(user,
+   connector)`, so no token leaks between callers.
+2. If that user hasn't connected the source, the tool returns **`AUTH_REQUIRED`**
+   with a connect URL. The user opens it, completes the upstream login once,
+   then retries — no token is ever pasted into the agent.
+3. Expired access tokens are refreshed automatically using the stored refresh
+   token + the app credentials.
+
+Self-hosted note: in the standalone connector-runtime, a `per_user` source's
+`secret_key` names the per-user vault slot the resolved token lands in (e.g.
+`"access_token"`); the connect flow lives at `/oauth/start/{source_id}`. The
+cloud uses the `{{ user_oauth:SOURCE_ID }}` placeholder shown above.
+
+## Tool execution modes — when the upstream is actually hit
+
+A connector's data is **not** permanently frozen at build time. Three modes:
+
+1. **READ over a materialized snapshot (default).** On first call the source is
+   fetched, flattened, and loaded into in-memory SQLite; the tool's SQL runs
+   against it. The snapshot is cached with a **TTL (default 300s)** — the next
+   call after the TTL expires re-fetches. This is why fresh upstream rows can
+   appear "stale" for up to the TTL; it is a cache, not a build-time freeze.
+2. **READ passthrough (live).** A READ tool that declares `rest_query_params`
+   forwards those agent arguments as live query-string params and **fetches
+   fresh on every call**, bypassing the snapshot cache. Use when the answer
+   must vary per call (e.g. `?q=<arg>` search, `?resource_id=<arg>` lookups).
+3. **WRITE / ACTION (live).** A `WRITE` or `ACTION` tool is backed by
+   `api_mapping` (not SQL) and makes a fresh HTTP request per invocation,
+   injecting the tool's parameters into the request:
+   - `path_template` → URL path (`/issues/{number}`)
+   - `query_params` → query string
+   - `body_params` → JSON / form body
+   The response is returned to the agent directly (not loaded into SQLite).
+
+Note: auth headers always come from `source.auth` — a tool **parameter** never
+becomes the auth header. "Each caller brings their own token" is expressed with
+`scope: per_user`, not by adding a `token` parameter to a tool.
+"""
+
+
 _ERROR_CODES_MD = """# Elliot Error Codes
 
 Every `ElliotError` raised by the platform uses a stable code. When an agent
@@ -88,6 +216,7 @@ intentionally coarse — fine-grained details live in the `details` field.
 | `TOOL_NOT_FOUND` | Referenced tool id does not exist in the registry | List tools (`elliot_list_tools`); use a valid id |
 | `SOURCE_UNREACHABLE` | A configured source did not respond | Check the env var holding the URL; verify the user has network access |
 | `AUTH_FAILED` | Source rejected credentials | Confirm the env var name and that it's exported in the shell — do NOT ask the user for the secret value |
+| `AUTH_REQUIRED` | A `per_user` source was called by a user who hasn't connected their account yet | Surface the connect URL(s) from `details.connect`; the user logs in once, then retry the tool. See `elliot://docs/authentication`. |
 | `SCHEMA_NOT_FOUND` | Postgres/MySQL schema does not exist | Pick from `details.available` |
 | `QUERY_TIMEOUT` | A DB query exceeded the per-query timeout | Tighten filters, add an index, or split the request |
 | `INVALID_SKILL` | Skill definition failed validation | Read the message; each step needs `{alias, tool_id, params}` |
@@ -111,7 +240,10 @@ None of them brings up the Elliot server itself. You also need ONE of:
 - Run `make dev` in a clone of `EliBarak12/Elliot` (boots plugin + runtime + studio).
 - Run `uvx --from elliot-mcp-plugin uvicorn elliot_mcp_plugin.main:app --port 3000`
   (once the package is published on PyPI).
-- Point at a hosted Elliot endpoint (see "Remote" below) — not yet available.
+- Use **Elliot Cloud**, the hosted builder — connect your agent to its `/b/mcp`
+  endpoint via OAuth (no local server to run; each user authorizes with their
+  own account). Get the URL + per-client setup from the *Connect an agent* page
+  in the Elliot Cloud dashboard.
 
 If the URL is wired but the server isn't running, every Elliot tool call returns
 a connection error. The recovery is always: start the server.
@@ -256,6 +388,13 @@ def register_resources(mcp: FastMCP) -> int:
         "error-codes",
         "Stable ElliotError codes and their recovery paths.",
         _ERROR_CODES_MD,
+    )
+    _add_text(
+        "elliot://docs/authentication",
+        "authentication",
+        "Auth model (shared vs per-user), secret placeholders, and when tools "
+        "fetch upstream (snapshot TTL, live passthrough, WRITE/ACTION).",
+        _AUTH_MD,
     )
     _add_text(
         "elliot://docs/install",

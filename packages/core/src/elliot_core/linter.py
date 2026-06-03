@@ -491,6 +491,17 @@ def lint_connector(
             haystack += " " + " ".join(rf.field for rf in tool.return_fields)
             if tool.output_schema:
                 haystack += " " + " ".join(str(k) for k in tool.output_schema)
+            # A SQL-only haystack missed the non-SQL tool shapes entirely:
+            # WRITE/ACTION tools move fields through ``api_mapping`` (query/body
+            # params, path template), and READ passthrough tools forward
+            # ``rest_query_params`` straight to the upstream. A sensitive field
+            # there is exposed just as much as one in a SELECT — scan them too.
+            haystack += " " + " ".join(tool.rest_query_params)
+            if tool.api_mapping is not None:
+                haystack += " " + " ".join(tool.api_mapping.query_params)
+                haystack += " " + " ".join(tool.api_mapping.body_params)
+                if tool.api_mapping.path_template:
+                    haystack += " " + tool.api_mapping.path_template
             if field_re.search(haystack):
                 issues.append(
                     LintIssue(
@@ -498,11 +509,12 @@ def lint_connector(
                         code="SENSITIVE_FIELD_EXPOSED",
                         tool_id=tool.id,
                         message=(
-                            f"Tool '{tool.id}' appears to return the sensitive "
-                            f"field '{field}', which the product intent marked "
+                            f"Tool '{tool.id}' appears to expose the sensitive "
+                            f"field '{field}' (in its SQL, output, or forwarded "
+                            f"query/body params), which the product intent marked "
                             "as never-expose."
                         ),
-                        suggestion=f"Drop '{field}' from this tool's output, or redact it.",
+                        suggestion=f"Drop '{field}' from this tool's output and request, or redact it.",
                     )
                 )
 

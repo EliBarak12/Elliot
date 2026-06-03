@@ -87,25 +87,25 @@ Then open Studio at <http://localhost:5173>, scaffold a connector, lint it, and 
 A walkthrough of Elliot Studio — the visual dashboard that observes, runs, and edits everything an agent builds.
 
 <div align="center">
-  <img src="docs/screenshots/elliot-demo.gif" alt="Elliot Studio — a walkthrough of every page" width="840" />
+  <img src="dev/docs/screenshots/elliot-demo.gif" alt="Elliot Studio — a walkthrough of every page" width="840" />
 </div>
 
-> The loop above cycles through every Studio page. For the full-quality screencast, [watch the video walkthrough](docs/screenshots/elliot-demo.webm).
+> The loop above cycles through every Studio page. For the full-quality screencast, [watch the video walkthrough](dev/docs/screenshots/elliot-demo.webm).
 
 Studio in detail:
 
 <table>
 <tr>
-<td width="50%"><img src="docs/screenshots/studio-tools.png" alt="Studio Tools page" /></td>
-<td width="50%"><img src="docs/screenshots/studio-metrics.png" alt="Studio Metrics page" /></td>
+<td width="50%"><img src="dev/docs/screenshots/studio-tools.png" alt="Studio Tools page" /></td>
+<td width="50%"><img src="dev/docs/screenshots/studio-metrics.png" alt="Studio Metrics page" /></td>
 </tr>
 <tr>
 <td><b>Tools</b> — verb-first, typed contracts your agents call. Design, validate, and test each one.</td>
 <td><b>Metrics</b> — calls, error rate, latency, and token efficiency across every tool.</td>
 </tr>
 <tr>
-<td width="50%"><img src="docs/screenshots/studio-agent-console.png" alt="Studio Agent Console page" /></td>
-<td width="50%"><img src="docs/screenshots/studio-sources.png" alt="Studio Sources page" /></td>
+<td width="50%"><img src="dev/docs/screenshots/studio-agent-console.png" alt="Studio Agent Console page" /></td>
+<td width="50%"><img src="dev/docs/screenshots/studio-sources.png" alt="Studio Sources page" /></td>
 </tr>
 <tr>
 <td><b>Agent Console</b> — a live trace of every agent session: prompts, tool calls, tokens, errors.</td>
@@ -223,7 +223,7 @@ Full documentation lives at **[elibarak12.github.io/Elliot](https://elibarak12.g
 
 ## Roadmap
 
-Elliot's goal is to be usable by everyone, not just developers. Progress is tracked in [`docs/USER_ONBOARDING.md`](docs/USER_ONBOARDING.md).
+Elliot's goal is to be usable by everyone, not just developers. Progress is tracked in [`dev/docs/USER_ONBOARDING.md`](dev/docs/USER_ONBOARDING.md).
 
 | Status | Milestone |
 |---|---|

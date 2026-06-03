@@ -1,7 +1,0 @@
-{
-  "mcpServers": {
-    "elliot": {
-      "url": "https://api.elliot-cloud.com/b/mcp"
-    }
-  }
-}

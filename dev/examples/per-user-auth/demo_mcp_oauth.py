@@ -13,7 +13,7 @@ This simulates exactly what a client like Claude does:
 One Connect => user authenticated to Elliot AND Elliot authenticated into the
 user's connector.
 
-Run:  uv run python examples/per-user-auth/demo_mcp_oauth.py
+Run:  uv run python dev/examples/per-user-auth/demo_mcp_oauth.py
 """
 
 from __future__ import annotations

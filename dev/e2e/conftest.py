@@ -3,7 +3,7 @@
 All tests in this directory are marked ``e2e`` automatically — they boot
 real services, hit real HTTP, and (for the Claude layer) spend real tokens.
 The mandatory pre-push pytest run does not target this directory, so these
-only run when invoked explicitly (``make e2e`` or ``uv run pytest tests/e2e``).
+only run when invoked explicitly (``make e2e`` or ``uv run pytest dev/e2e``).
 """
 
 from __future__ import annotations
@@ -19,10 +19,10 @@ from .helpers.stack import StackEndpoints, elliot_stack
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Auto-mark everything under ``tests/e2e/`` with ``@pytest.mark.e2e``."""
+    """Auto-mark everything under ``dev/e2e/`` with ``@pytest.mark.e2e``."""
     e2e = pytest.mark.e2e
     for item in items:
-        if "tests/e2e/" in str(item.fspath):
+        if "dev/e2e/" in str(item.fspath):
             item.add_marker(e2e)
 
 

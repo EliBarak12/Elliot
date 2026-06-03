@@ -401,3 +401,44 @@ def test_sensitive_field_not_passed_no_issue() -> None:
     )
     issues = lint_connector(config)
     assert not any(i.code == "SENSITIVE_FIELD_EXPOSED" for i in issues)
+
+
+def test_sensitive_field_in_write_api_mapping_is_error() -> None:
+    # A WRITE tool moves fields through api_mapping, not SQL — the SQL-only
+    # haystack used to miss a never-expose field forwarded in the request body.
+    config = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        tools=[
+            _tool(
+                "update_user",
+                category="WRITE",
+                description="Update a user record in the users table",
+                sql=None,
+                api_mapping={
+                    "method": "POST",
+                    "path_template": "/users",
+                    "body_params": ["ssn"],
+                },
+            )
+        ],
+    )
+    issues = lint_connector(config, sensitive_fields=["ssn"])
+    assert any(i.code == "SENSITIVE_FIELD_EXPOSED" and i.severity == "ERROR" for i in issues)
+
+
+def test_sensitive_field_in_passthrough_query_params_is_error() -> None:
+    # A READ passthrough tool forwards rest_query_params straight to the
+    # upstream — a never-expose field there must be flagged just like a SELECT.
+    config = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        sources=[
+            SourceConfig(id="api", name="API", type="rest", url="https://api.example.com/users")
+        ],
+        tools=[_tool("search_users", sql=None, source_ids=["api"], rest_query_params=["ssn"])],
+    )
+    issues = lint_connector(config, sensitive_fields=["ssn"])
+    assert any(i.code == "SENSITIVE_FIELD_EXPOSED" and i.severity == "ERROR" for i in issues)

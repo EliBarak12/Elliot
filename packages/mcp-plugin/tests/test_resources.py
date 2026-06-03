@@ -13,8 +13,8 @@ from elliot_mcp_plugin.resources import register_resources
 def test_register_resources_returns_count():
     mcp = FastMCP("test")
     count = register_resources(mcp)
-    # 3 inline docs (principles, error-codes, install) + 4 templates
-    assert count == 7
+    # 4 inline docs (principles, error-codes, install, authentication) + 4 templates
+    assert count == 8
 
 
 def test_resource_uris_use_elliot_scheme():
@@ -32,6 +32,7 @@ def test_inline_docs_registered():
     assert "elliot://docs/principles" in uris
     assert "elliot://docs/error-codes" in uris
     assert "elliot://docs/install" in uris
+    assert "elliot://docs/authentication" in uris
 
 
 def test_template_resources_registered():
@@ -69,6 +70,22 @@ async def test_error_codes_resource_lists_known_codes():
         "INTERNAL_ERROR",
     ):
         assert code in text
+
+
+@pytest.mark.asyncio
+async def test_authentication_resource_covers_per_user_auth():
+    mcp = FastMCP("test")
+    register_resources(mcp)
+    contents = await mcp.read_resource("elliot://docs/authentication")
+    text = contents[0].content
+    # The per-user auth capability and its placeholder must be documented.
+    assert "per_user" in text
+    assert "{{ user_oauth:" in text
+    assert "AUTH_REQUIRED" in text
+    # The live-fetch / execution modes must be documented (corrects the
+    # "frozen snapshot only" misconception).
+    assert "rest_query_params" in text
+    assert "api_mapping" in text
 
 
 @pytest.mark.asyncio

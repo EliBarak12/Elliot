@@ -85,12 +85,24 @@ When the user wants to build a new connector, follow this exact order. Each numb
 
 If the user is somewhere mid-workflow, jump straight to the right prompt. Don't start from step 1 every time.
 
+> **Auth & live data — don't assume the narrow case.** Elliot connectors are
+> **not** limited to one shared, build-time credential over a frozen snapshot.
+> Sources support **per-user auth** (each caller brings their own OAuth token via
+> `auth.scope: "per_user"` + `{{ user_oauth:SOURCE_ID }}`), and tools can **fetch
+> live at call time** (READ passthrough via `rest_query_params`, or WRITE/ACTION
+> via `api_mapping`) — not just SQL over a cached snapshot. If a user wants "each
+> caller acts as themselves" or fresh-every-call data, that is supported. Read
+> `elliot://docs/authentication` before concluding otherwise.
+
 ## Reference resources you should know about
 
 These are accessible via `resources/read`:
 
 - `elliot://docs/principles` — the five principles in full.
 - `elliot://docs/error-codes` — every `ElliotError` code and how to recover.
+- `elliot://docs/authentication` — shared vs per-user auth, the `{{ env: }}` /
+  `{{ user_oauth: }}` placeholders, and when tools fetch live (snapshot TTL,
+  passthrough, WRITE/ACTION). Read before building anything that needs auth.
 - `elliot://templates/rest-api-key` — starter REST API connector with bearer/key auth.
 - `elliot://templates/postgres-readonly` — starter Postgres read-only connector.
 - `elliot://templates/paginated-rest` — REST API with cursor/offset pagination.

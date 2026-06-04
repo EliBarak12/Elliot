@@ -14,6 +14,7 @@ import structlog
 from elliot_core.errors import SourceFetchError
 from elliot_core.http import SSRFError, safe_client, validate_url
 from elliot_core.redaction import redact_url
+from elliot_core.sources.envelope import extract_rows, looks_like_unextracted_envelope
 from elliot_core.types.source import FetchResult, SourceConfig
 
 log = structlog.get_logger(__name__)
@@ -143,31 +144,10 @@ def _build_auth_query_params(config: SourceConfig, secrets: dict[str, str]) -> d
     return {}
 
 
-def _extract_rows(data: Any, data_path: str | None) -> list[dict[str, Any]]:
-    if data_path:
-        import jmespath
-
-        extracted = jmespath.search(data_path, data)
-        return extracted if isinstance(extracted, list) else ([extracted] if extracted else [])
-    if isinstance(data, list):
-        return data
-    if not isinstance(data, dict):
-        return []
-    # Common wrapper keys, in deterministic priority order.
-    for key in ("data", "items", "results", "records", "rows"):
-        if isinstance(data.get(key), list):
-            return data[key]
-    # Fallback auto-detect: many APIs wrap the row set under a resource-named
-    # key (dummyjson -> "products", openlibrary -> "docs", ...) alongside
-    # pagination scalars like total/skip/limit. If exactly one top-level field
-    # is a list of objects, it's unambiguously the data — extract it instead of
-    # returning the whole envelope as a single row.
-    object_lists = [
-        v for v in data.values() if isinstance(v, list) and (not v or isinstance(v[0], dict))
-    ]
-    if len(object_lists) == 1:
-        return object_lists[0]
-    return [data]
+# Row extraction lives in the shared `envelope` module so the design-time
+# fetcher and the runtime executor stay in lockstep. Re-exported under the
+# historical name for callers/tests that import it from here.
+_extract_rows = extract_rows
 
 
 def _parse_link_next(link_header: str) -> str | None:
@@ -276,6 +256,16 @@ async def fetch_endpoint(config: SourceConfig, secrets: dict[str, str]) -> Fetch
             _enforce_response_size(resp, config.url)
             data = resp.json()
             rows = _extract_rows(data, config.data_path)
+            # On the first page, flag the tell-tale sign of a shape we couldn't
+            # auto-unwrap: a single row that still hides a record array inside
+            # it. Surfaced to the connector builder so they set `data_path`
+            # instead of silently shipping a connector whose tools return [].
+            if page_count == 0 and looks_like_unextracted_envelope(rows):
+                warnings.append(
+                    "Could not locate the records array in the response; returned the raw "
+                    "response as a single row. Set the source 'data_path' to the records array "
+                    "(e.g. 'result.results' for CKAN-style APIs)."
+                )
             all_rows.extend(rows)
             page_count += 1
 

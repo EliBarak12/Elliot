@@ -258,6 +258,31 @@ async def test_fetch_endpoint_link_header_pagination():
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_fetch_endpoint_extracts_nested_envelope():
+    # CKAN-style: rows nested under result.results, no data_path configured.
+    respx.get("https://api.example.com/items").mock(
+        return_value=Response(
+            200, json={"success": True, "result": {"results": [{"id": 1}, {"id": 2}]}}
+        )
+    )
+    result = await fetch_endpoint(_source(), {})
+    assert result.rows == [{"id": 1}, {"id": 2}]
+    assert result.warnings == []
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_endpoint_warns_on_unextracted_envelope():
+    # Two candidate arrays -> can't auto-pick -> wrapped as one row + warning.
+    respx.get("https://api.example.com/items").mock(
+        return_value=Response(200, json={"orders": [{"id": 1}], "customers": [{"id": 2}]})
+    )
+    result = await fetch_endpoint(_source(), {})
+    assert any("data_path" in w for w in result.warnings)
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_fetch_endpoint_max_pages_warning():
     respx.get("https://api.example.com/items").mock(
         return_value=Response(200, json=[{"id": 1}, {"id": 2}])

@@ -8,9 +8,9 @@ import re
 import time
 from typing import Any
 
-import jmespath
 import structlog
 
+from elliot_core.sources.envelope import extract_rows
 from elliot_core.sqlite.engine import SQLiteEngine
 from elliot_core.sqlite.flattener import flatten
 from elliot_core.tools.query_builder import build_select_sql
@@ -360,30 +360,15 @@ class ToolExecutor:
                 pages_fetched += 1
 
                 # Keep the raw response envelope: cursor pagination reads
-                # next_cursor from it, and data_path may narrow `data` to a
-                # bare list that no longer carries the cursor field.
+                # next_cursor from it. Locating the records array — including
+                # one nested under a wrapper object (CKAN's `result.results`,
+                # `{data: {items: []}}`) — is delegated to the SHARED extractor
+                # so the runtime and the design-time api_fetcher can never
+                # drift again. Without this the runtime materialized the wrapper
+                # as a single row and the agent's ``FROM "<source>"`` returned
+                # nothing.
                 envelope = resp.json()
-                data = jmespath.search(source.data_path, envelope) if source.data_path else envelope
-
-                # Unwrap a paginated envelope (``{items: [...], total, ...}``)
-                # the same way the design-time api_fetcher does. Without this
-                # the runtime materializes the wrapper as a single row and
-                # the agent's ``FROM "<source>"`` returns nothing.
-                rows: list[dict[str, Any]]
-                if isinstance(data, list):
-                    rows = data
-                elif isinstance(data, dict):
-                    found: list[dict[str, Any]] | None = None
-                    for key in ("data", "items", "results", "records", "rows"):
-                        value = data.get(key)
-                        if isinstance(value, list):
-                            found = value
-                            break
-                    rows = found if found is not None else [data]
-                else:
-                    raise ExecutorError(
-                        f"REST source {source.id!r} returned unexpected type: {type(data)}"
-                    )
+                rows = extract_rows(envelope, source.data_path)
 
                 all_rows.extend(rows)
 

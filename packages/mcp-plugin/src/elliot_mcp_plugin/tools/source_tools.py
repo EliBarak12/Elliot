@@ -288,12 +288,17 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 table=name,
                 rows=len(rows),
             )
+            # Surface BOTH flatten warnings and fetch/read warnings. The latter
+            # carry the build-time smoke-test signal — e.g. "couldn't locate the
+            # records array; set data_path" — which previously never reached the
+            # builder, so a connector whose tools return [] looked healthy.
+            warnings = list(flat.warnings) + list(getattr(result, "warnings", []) or [])
             return {
                 "source_id": source_id,
                 "table_name": name,
                 "row_count": len(rows),
                 "columns": [c.name for c in flat.primary_table.columns],
-                "warnings": flat.warnings,
+                "warnings": warnings,
             }
 
         except ElliotError as exc:

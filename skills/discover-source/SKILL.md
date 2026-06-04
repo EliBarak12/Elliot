@@ -126,7 +126,31 @@ per-user connector.
 
 To learn the schema, discover still needs *a* token to fetch sample rows — but
 **never ask the user to paste one** for an `oauth2` source. Instead, log the
-builder in the same way their end users will be:
+builder in the same way their end users will be.
+
+**Step A — tell the user what to set up first (do this proactively).** An
+`oauth2` source needs an **OAuth app** registered with the provider. Don't wait
+for an error — explain it in plain language the moment you choose `oauth2`:
+
+> "This API uses OAuth, so I won't ask you for a token. Instead you'll log in
+> through <Provider>'s own page. First I need you to register an OAuth app so
+> the provider knows it's us asking:
+> 1. Go to <Provider>'s developer settings and create an **OAuth app**
+>    (GitHub: *Settings → Developer settings → OAuth Apps*; most APIs have an
+>    equivalent).
+> 2. Set an allowed redirect / callback URL that permits **loopback**, i.e.
+>    `http://127.0.0.1` (any port). This is the standard 'desktop/native app'
+>    setting.
+> 3. Copy the **Client ID** and **Client Secret** it gives you and set them as
+>    env vars — e.g. `ACME_CLIENT_ID` and `ACME_CLIENT_SECRET`.
+> These are your *app's* credentials (registered once for the whole connector),
+> NOT a personal token, and your end users will never see them. They're also
+> required for the runtime login your users will use, so this is one-time setup."
+
+Reference those env vars in the config as `client_id_secret: "{{ env:ACME_CLIENT_ID }}"`
+and `client_secret_secret: "{{ env:ACME_CLIENT_SECRET }}"`.
+
+**Step B — run the login + discover:**
 
 1. Call `elliot_connect_source(source_type, config, name)` with the **same**
    args you'll pass to discover. It returns
@@ -138,10 +162,12 @@ builder in the same way their end users will be:
    login completes, then uses that token to fetch the schema. If it returns
    `AUTH_REQUIRED` ("still waiting"), the user hasn't finished — wait and retry.
 
-Prerequisite: the OAuth **app** credentials (`client_id_secret` /
-`client_secret_secret`, e.g. `ACME_CLIENT_ID` / `ACME_CLIENT_SECRET`) must be set
-as env vars. Those are your registered OAuth app's credentials, not an end-user
-token. The builder token from this login is used for discovery only and is never
+**If `elliot_connect_source` returns `AUTH_REQUIRED` saying the client id isn't
+set**, the user hasn't done Step A (or the env var name doesn't match). Re-state
+Step A — register the OAuth app and export the client id/secret env vars — then
+retry. Do **not** work around it by switching to a pasted token.
+
+The builder token from this login is used for discovery only and is never
 written into the connector file — end users authenticate themselves at runtime.
 
 ### Postgres / MySQL
@@ -212,7 +238,8 @@ If `elliot_discover_source` returns an error:
 |-----------|--------|
 | `SOURCE_UNREACHABLE` | Confirm the URL / env var with the user, retry once. If it still fails, stop and ask. |
 | `AUTH_FAILED` | Confirm the env var name and that the variable is actually set in the shell. Do **not** ask the user to paste the secret. |
-| `AUTH_REQUIRED` | An `oauth2` source needs a login. During **discovery**, call `elliot_connect_source` (same args), surface the returned `authorize_url`, let the user log in, then retry discover. At **runtime**, a `per_user` source surfaces connect URL(s) in `details.connect`; the user logs in once, then retry. Never paste a token. |
+| `AUTH_REQUIRED` (from `elliot_discover_source` / `elliot_connect_source`, "client id is not set") | The user hasn't registered the OAuth **app** yet. Tell them to create an OAuth app with the provider, allow a `http://127.0.0.1` loopback redirect, and export the **Client ID** + **Client Secret** as the env vars named in `client_id_secret` / `client_secret_secret`. Then retry. These are app-level, one-time, not a personal token. |
+| `AUTH_REQUIRED` (login) | An `oauth2` source needs a login. During **discovery**, call `elliot_connect_source` (same args), surface the returned `authorize_url`, let the user log in, then retry discover. At **runtime**, a `per_user` source surfaces connect URL(s) in `details.connect`; the user logs in once, then retry. Never paste a token. |
 | `SCHEMA_NOT_FOUND` | List available schemas (the error `details` will include them) and ask which one. |
 | anything else | Surface the error message verbatim and ask the user how they want to proceed. |
 

@@ -315,6 +315,15 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
               }
             }
 
+        PREREQUISITE — tell the user before calling this: an oauth2 source needs
+        an OAuth *app* registered with the provider. Proactively explain that
+        they must (1) create an OAuth app in the provider's developer settings,
+        (2) allow a http://127.0.0.1 loopback redirect URL, and (3) export the
+        resulting Client ID + Client Secret as the env vars named in
+        client_id_secret / client_secret_secret. These are app-level, one-time
+        credentials (also used by their end users' runtime login), NOT a personal
+        token. If they aren't set this tool returns AUTH_REQUIRED.
+
         Returns {status: "awaiting_authorization", authorize_url, connect_id}.
         Surface authorize_url to the user; they open it, log in to the upstream
         API, and Elliot captures the token on a loopback callback. Then call
@@ -357,11 +366,17 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             if not client_id or "{{" in client_id:
                 raise ElliotError(
                     "AUTH_REQUIRED",
-                    "Your OAuth app's client id is not set. Resolve "
-                    f"{oauth2.client_id_secret!r} (and the client secret) by setting "
-                    "those env vars before connecting — they are your registered "
-                    "OAuth app credentials, not an end-user token.",
-                    detail={"client_id_secret": oauth2.client_id_secret},
+                    "Your OAuth app's client id is not set. Tell the user to register "
+                    "an OAuth app with the provider (in its developer settings), allow a "
+                    "http://127.0.0.1 loopback redirect URL, and export the Client ID and "
+                    f"Client Secret as the env vars {oauth2.client_id_secret} and "
+                    f"{oauth2.client_secret_secret}. These are app-level, one-time "
+                    "credentials (the same ones their end users' login uses), NOT a "
+                    "personal token — do not ask the user to paste a token instead.",
+                    detail={
+                        "client_id_secret": oauth2.client_id_secret,
+                        "client_secret_secret": oauth2.client_secret_secret,
+                    },
                 )
 
             # Restart cleanly if a previous login for this name is still around.

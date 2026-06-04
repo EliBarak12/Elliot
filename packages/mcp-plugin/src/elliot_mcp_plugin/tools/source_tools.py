@@ -15,11 +15,12 @@ from mcp.server.fastmcp import FastMCP
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.paths import PathEscape, safe_join
-from elliot_core.sources.api_fetcher import fetch_endpoint
+from elliot_core.sources.api_fetcher import _resolve_secret, fetch_endpoint
 from elliot_core.sources.db_connector import query_database
 from elliot_core.sources.file_reader import read_file
 from elliot_core.sqlite.flattener import flatten
 from elliot_core.types.source import SourceConfig
+from elliot_mcp_plugin.oauth_login import LOGIN_TTL_S, start_login
 from elliot_mcp_plugin.session import ElliotSession
 
 log = structlog.get_logger(__name__)
@@ -118,6 +119,69 @@ def _build_source_config(
     config = _normalize_auth(config)
     merged = {"id": source_id, "type": mapped_type, "name": name, **config}
     return SourceConfig.model_validate(merged)
+
+
+async def _resolve_build_oauth_token(
+    session: ElliotSession, cfg: SourceConfig, name: str, secrets: dict[str, str]
+) -> str | None:
+    """Return a bearer token to fetch discovery samples for an OAuth source.
+
+    For ``auth.type == "oauth2"`` sources the connector ships ``scope:
+    per_user`` so end users authenticate themselves at runtime — but the
+    *builder* still needs a token to fetch sample rows now. If they've started
+    an interactive login via ``elliot_connect_source``, block briefly for it to
+    complete and return that token. If a real static token happens to be
+    configured (a shared-auth env var), return ``None`` so the normal
+    secret-resolution path handles it. Otherwise raise an actionable
+    ``AUTH_REQUIRED`` telling the agent to run ``elliot_connect_source`` first.
+
+    The returned token is used only for this fetch — it is never written into
+    the connector file.
+    """
+    auth = cfg.auth
+    if auth is None or auth.type != "oauth2":
+        return None
+
+    login = session.oauth_logins.get(name)
+    if login is not None:
+        try:
+            token = await login.wait_and_exchange()
+        except TimeoutError as exc:
+            raise ElliotError(
+                "AUTH_REQUIRED",
+                f"Still waiting for you to finish logging in to '{name}'. Open the "
+                "authorize_url from elliot_connect_source, complete the login, then "
+                "re-run elliot_discover_source.",
+                detail={"source": name, "connect_id": login.connect_id},
+            ) from exc
+        except Exception as exc:
+            session.oauth_logins.pop(name, None)
+            login.shutdown()
+            raise ElliotError(
+                "AUTH_FAILED",
+                f"OAuth login for '{name}' failed; restart it with elliot_connect_source.",
+                detail={"source": name},
+            ) from exc
+        # Token captured — the loopback listener is no longer needed, but keep
+        # the login (with its cached token) so a re-discover/refresh in this
+        # session reuses it without forcing another login.
+        login.shutdown()
+        return token
+
+    # No interactive login in progress. If a concrete static token is wired up
+    # (e.g. shared oauth2 against a service-account env var), let the normal
+    # path use it. An empty or still-templated value means "no token yet".
+    resolved = _resolve_secret(auth.secret_key, secrets)
+    if resolved and "{{" not in resolved:
+        return None
+    raise ElliotError(
+        "AUTH_REQUIRED",
+        f"Source '{name}' uses OAuth and no token is available yet. Call "
+        "elliot_connect_source(source_type, config, name) with these same "
+        "arguments to log in via your browser, then re-run elliot_discover_source. "
+        "Do not ask the user to paste a token.",
+        detail={"source": name},
+    )
 
 
 def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
@@ -226,6 +290,128 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", "upload failed"))
 
     @mcp.tool()
+    def elliot_connect_source(
+        source_type: str,
+        config: dict,  # type: ignore[type-arg]
+        name: str,
+    ) -> dict:  # type: ignore[type-arg]
+        """Start a browser OAuth login so discover can fetch an auth'd API as you.
+
+        Use this BEFORE elliot_discover_source when the source's auth.type is
+        "oauth2" and you don't already have a token in an env var. Do NOT ask the
+        user to paste a token — that's exactly what this avoids.
+
+        Pass the SAME source_type / config / name you'll pass to
+        elliot_discover_source. The config must include an oauth2 auth block, e.g.:
+            "auth": {
+              "type": "oauth2", "scope": "per_user",
+              "secret_key": "{{ user_oauth:acme }}",
+              "oauth2": {
+                "authorization_url": "https://acme.com/oauth/authorize",
+                "token_url": "https://acme.com/oauth/token",
+                "scopes": ["read"],
+                "client_id_secret": "{{ env:ACME_CLIENT_ID }}",
+                "client_secret_secret": "{{ env:ACME_CLIENT_SECRET }}"
+              }
+            }
+
+        PREREQUISITE — tell the user before calling this: an oauth2 source needs
+        an OAuth *app* registered with the provider. Proactively explain that
+        they must (1) create an OAuth app in the provider's developer settings,
+        (2) allow a http://127.0.0.1 loopback redirect URL, and (3) export the
+        resulting Client ID + Client Secret as the env vars named in
+        client_id_secret / client_secret_secret. These are app-level, one-time
+        credentials (also used by their end users' runtime login), NOT a personal
+        token. If they aren't set this tool returns AUTH_REQUIRED.
+
+        Returns {status: "awaiting_authorization", authorize_url, connect_id}.
+        Surface authorize_url to the user; they open it, log in to the upstream
+        API, and Elliot captures the token on a loopback callback. Then call
+        elliot_discover_source with the same arguments — it blocks until the
+        login completes and uses that token to fetch the schema.
+
+        The builder token is used for discovery ONLY: it is never written into
+        the connector file. End users still authenticate themselves at runtime
+        via the per_user OAuth flow you configured here.
+        """
+        try:
+            key = source_type.lower()
+            if key not in _TYPE_MAP:
+                return {
+                    "error": (
+                        f"Unknown source_type: {source_type!r}. "
+                        f"Valid values: {', '.join(sorted(_TYPE_MAP))}"
+                    )
+                }
+            source_id = str(uuid.uuid4())
+            cfg = _build_source_config(key, config, source_id, name)
+            if cfg.type != "rest" or cfg.auth is None or cfg.auth.type != "oauth2":
+                raise ElliotError(
+                    "VALIDATION_ERROR",
+                    "elliot_connect_source is only for REST sources with auth.type "
+                    "'oauth2'. For api_key/bearer/basic auth, set the credential as a "
+                    "{{ env:VAR }} secret and call elliot_discover_source directly.",
+                    detail={"type": cfg.type, "auth": cfg.auth.type if cfg.auth else None},
+                )
+            oauth2 = cfg.auth.oauth2
+            if oauth2 is None:
+                raise ElliotError(
+                    "VALIDATION_ERROR",
+                    "auth.oauth2 block is required (authorization_url, token_url, "
+                    "client_id_secret, client_secret_secret).",
+                )
+            secrets = session.workspace.load_secrets()
+            client_id = _resolve_secret(oauth2.client_id_secret, secrets)
+            client_secret = _resolve_secret(oauth2.client_secret_secret, secrets)
+            if not client_id or "{{" in client_id:
+                raise ElliotError(
+                    "AUTH_REQUIRED",
+                    "Your OAuth app's client id is not set. Tell the user to register "
+                    "an OAuth app with the provider (in its developer settings), allow a "
+                    "http://127.0.0.1 loopback redirect URL, and export the Client ID and "
+                    f"Client Secret as the env vars {oauth2.client_id_secret} and "
+                    f"{oauth2.client_secret_secret}. These are app-level, one-time "
+                    "credentials (the same ones their end users' login uses), NOT a "
+                    "personal token — do not ask the user to paste a token instead.",
+                    detail={
+                        "client_id_secret": oauth2.client_id_secret,
+                        "client_secret_secret": oauth2.client_secret_secret,
+                    },
+                )
+
+            # Restart cleanly if a previous login for this name is still around.
+            prev = session.oauth_logins.pop(name, None)
+            if prev is not None:
+                prev.shutdown()
+
+            connect_id = str(uuid.uuid4())
+            login = start_login(
+                oauth2=oauth2,
+                client_id=client_id,
+                client_secret=client_secret,
+                name=name,
+                connect_id=connect_id,
+            )
+            session.oauth_logins[name] = login
+            log.info("source.connect.start", name=name, connect_id=connect_id, port=login.port)
+            return {
+                "status": "awaiting_authorization",
+                "connect_id": connect_id,
+                "authorize_url": login.authorize_url,
+                "expires_in": int(LOGIN_TTL_S),
+                "next_step": (
+                    "Open authorize_url in a browser and log in to the API, then call "
+                    "elliot_discover_source with the same source_type/config/name."
+                ),
+            }
+        except ElliotError as exc:
+            log.error("source.connect.failed", error=exc.message)
+            return to_mcp_error_content(exc)
+        except Exception as exc:
+            log.error("source.connect.failed", error=str(exc), exc_info=True)
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", "connect failed"))
+
+    @mcp.tool()
     async def elliot_discover_source(
         source_type: str,
         config: dict,  # type: ignore[type-arg]
@@ -266,7 +452,11 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 rows = result.rows
 
             elif cfg.type == "rest":
-                result = await fetch_endpoint(cfg, secrets)
+                token_override = await _resolve_build_oauth_token(session, cfg, name, secrets)
+                if token_override is not None:
+                    result = await fetch_endpoint(cfg, secrets, auth_token_override=token_override)
+                else:
+                    result = await fetch_endpoint(cfg, secrets)
                 rows = result.rows
 
             else:  # postgres / mysql

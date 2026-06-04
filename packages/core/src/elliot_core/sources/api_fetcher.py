@@ -123,10 +123,20 @@ def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
     return secrets.get(key, key)
 
 
-def _build_auth_headers(config: SourceConfig, secrets: dict[str, str]) -> dict[str, str]:
+def _build_auth_headers(
+    config: SourceConfig,
+    secrets: dict[str, str],
+    auth_token_override: str | None = None,
+) -> dict[str, str]:
     if not config.auth:
         return {}
     auth = config.auth
+    # An override is a ready-to-use bearer token resolved out-of-band — e.g. the
+    # design-time discover flow logging the builder in via OAuth and using that
+    # access token to fetch sample rows. It only applies to bearer/oauth2 and is
+    # never persisted into the connector file.
+    if auth_token_override and auth.type in ("bearer", "oauth2"):
+        return {"Authorization": f"Bearer {auth_token_override}"}
     secret = _resolve_secret(auth.secret_key, secrets)
     if auth.type in ("bearer", "oauth2"):
         return {"Authorization": f"Bearer {secret}"}
@@ -155,8 +165,13 @@ def _parse_link_next(link_header: str) -> str | None:
     return m.group(1) if m else None
 
 
-async def fetch_endpoint(config: SourceConfig, secrets: dict[str, str]) -> FetchResult:
-    headers = _build_auth_headers(config, secrets)
+async def fetch_endpoint(
+    config: SourceConfig,
+    secrets: dict[str, str],
+    *,
+    auth_token_override: str | None = None,
+) -> FetchResult:
+    headers = _build_auth_headers(config, secrets, auth_token_override)
     base_params: dict[str, Any] = _build_auth_query_params(config, secrets)
     pagination = config.pagination
     all_rows: list[dict[str, Any]] = []

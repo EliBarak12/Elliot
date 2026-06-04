@@ -122,6 +122,28 @@ app-level OAuth credentials from `{{ env:... }}`. Read
 `elliot://docs/authentication` for the full auth + fetch model before building a
 per-user connector.
 
+#### Discovering an `oauth2` source (log in instead of pasting a token)
+
+To learn the schema, discover still needs *a* token to fetch sample rows — but
+**never ask the user to paste one** for an `oauth2` source. Instead, log the
+builder in the same way their end users will be:
+
+1. Call `elliot_connect_source(source_type, config, name)` with the **same**
+   args you'll pass to discover. It returns
+   `{status: "awaiting_authorization", authorize_url, connect_id}`.
+2. Show the `authorize_url` to the user: "Open this to log in to <API>." They
+   sign in on the provider's own page; Elliot catches the redirect on a local
+   loopback port and captures the token underground.
+3. Call `elliot_discover_source(source_type, config, name)`. It blocks until the
+   login completes, then uses that token to fetch the schema. If it returns
+   `AUTH_REQUIRED` ("still waiting"), the user hasn't finished — wait and retry.
+
+Prerequisite: the OAuth **app** credentials (`client_id_secret` /
+`client_secret_secret`, e.g. `ACME_CLIENT_ID` / `ACME_CLIENT_SECRET`) must be set
+as env vars. Those are your registered OAuth app's credentials, not an end-user
+token. The builder token from this login is used for discovery only and is never
+written into the connector file — end users authenticate themselves at runtime.
+
 ### Postgres / MySQL
 
 ```json
@@ -190,7 +212,7 @@ If `elliot_discover_source` returns an error:
 |-----------|--------|
 | `SOURCE_UNREACHABLE` | Confirm the URL / env var with the user, retry once. If it still fails, stop and ask. |
 | `AUTH_FAILED` | Confirm the env var name and that the variable is actually set in the shell. Do **not** ask the user to paste the secret. |
-| `AUTH_REQUIRED` | A `per_user` source needs the calling user to connect their own account. Surface the connect URL(s) from `details.connect`; the user logs in once, then retry. Never paste a token. |
+| `AUTH_REQUIRED` | An `oauth2` source needs a login. During **discovery**, call `elliot_connect_source` (same args), surface the returned `authorize_url`, let the user log in, then retry discover. At **runtime**, a `per_user` source surfaces connect URL(s) in `details.connect`; the user logs in once, then retry. Never paste a token. |
 | `SCHEMA_NOT_FOUND` | List available schemas (the error `details` will include them) and ask which one. |
 | anything else | Surface the error message verbatim and ask the user how they want to proceed. |
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import respx
 from mcp.server.fastmcp import FastMCP
 
 from elliot_core.errors import ElliotError
@@ -602,3 +603,113 @@ def test_upload_file_overwrite_is_atomic(mcp: FastMCP, session: ElliotSession):
     assert Path(out["managed_path"]).read_text() == '{"v":2}'
     leftover = Path(out["managed_path"]).with_name("x.json.tmp")
     assert not leftover.exists()
+
+
+# ---------------------------------------------------------------------------
+# elliot_connect_source — design-time interactive OAuth login for discover
+# ---------------------------------------------------------------------------
+
+
+def _oauth_config(url: str = "https://api.example.com/items") -> dict:  # type: ignore[type-arg]
+    return {
+        "url": url,
+        "auth": {
+            "type": "oauth2",
+            "scope": "per_user",
+            "secret_key": "{{ user_oauth:acme }}",
+            "oauth2": {
+                "authorization_url": "https://acme.example.com/oauth/authorize",
+                "token_url": "https://acme.example.com/oauth/token",
+                "scopes": ["read"],
+                "client_id_secret": "{{ env:ACME_CLIENT_ID }}",
+                "client_secret_secret": "{{ env:ACME_CLIENT_SECRET }}",
+            },
+        },
+    }
+
+
+def test_connect_source_rejects_non_oauth2(mcp: FastMCP):
+    result = _tool(mcp, "elliot_connect_source")(
+        source_type="rest",
+        config={"url": "https://api.example.com/items", "auth": {"type": "bearer", "token": "x"}},
+        name="x",
+    )
+    assert _is_error(result) and "VALIDATION_ERROR" in result["text"]
+
+
+def test_connect_source_requires_client_id_env(mcp: FastMCP, monkeypatch):
+    monkeypatch.delenv("ACME_CLIENT_ID", raising=False)
+    result = _tool(mcp, "elliot_connect_source")(
+        source_type="rest", config=_oauth_config(), name="acme"
+    )
+    assert _is_error(result) and "AUTH_REQUIRED" in result["text"]
+
+
+def test_connect_source_starts_login(mcp: FastMCP, session: ElliotSession, monkeypatch):
+    monkeypatch.setenv("ACME_CLIENT_ID", "cid")
+    monkeypatch.setenv("ACME_CLIENT_SECRET", "csec")
+    try:
+        result = _tool(mcp, "elliot_connect_source")(
+            source_type="rest", config=_oauth_config(), name="acme"
+        )
+        assert result["status"] == "awaiting_authorization"
+        assert "acme.example.com/oauth/authorize" in result["authorize_url"]
+        assert "acme" in session.oauth_logins
+    finally:
+        login = session.oauth_logins.pop("acme", None)
+        if login is not None:
+            login.shutdown()
+
+
+def test_discover_oauth2_without_login_returns_auth_required(mcp: FastMCP):
+    """An oauth2 source with no started login and no static token is actionable."""
+    result = _tool(mcp, "elliot_discover_source")(
+        source_type="rest", config=_oauth_config(), name="acme"
+    )
+    assert _is_error(result) and "AUTH_REQUIRED" in result["text"]
+
+
+@respx.mock
+async def test_connect_then_discover_oauth2_end_to_end(
+    mcp: FastMCP, session: ElliotSession, monkeypatch
+):
+    """Full flow: connect starts the login, the browser redirect is simulated on
+    the loopback port, and discover uses the captured token to fetch the schema."""
+    import urllib.request
+
+    from httpx import Response
+
+    monkeypatch.setenv("ACME_CLIENT_ID", "cid")
+    monkeypatch.setenv("ACME_CLIENT_SECRET", "csec")
+
+    respx.post("https://acme.example.com/oauth/token").mock(
+        return_value=Response(200, json={"access_token": "live-tok"})
+    )
+    api = respx.get("https://api.example.com/items").mock(
+        return_value=Response(200, json=[{"id": 1, "v": "a"}, {"id": 2, "v": "b"}])
+    )
+
+    connect = _tool(mcp, "elliot_connect_source")(
+        source_type="rest", config=_oauth_config(), name="acme"
+    )
+    assert connect["status"] == "awaiting_authorization"
+
+    login = session.oauth_logins["acme"]
+    # Simulate the provider redirect landing on the loopback callback (urllib so
+    # respx doesn't intercept it).
+    with urllib.request.urlopen(
+        f"http://127.0.0.1:{login.port}/callback?code=authcode&state={login.state}", timeout=5
+    ) as resp:
+        assert resp.status == 200
+
+    discover = mcp._tool_manager._tools["elliot_discover_source"].fn
+    result = await discover(source_type="rest", config=_oauth_config(), name="acme")
+
+    assert "error" not in result, result
+    assert result["row_count"] == 2
+    assert result["table_name"] == "acme"
+    # The API was called with the captured bearer token.
+    assert api.calls.last.request.headers["Authorization"] == "Bearer live-tok"
+    # Token stays in memory only — never serialized into a stored SourceConfig.
+    dumped = json.dumps([s.model_dump() for s in session.sources.values()])
+    assert "live-tok" not in dumped

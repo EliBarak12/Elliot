@@ -12,6 +12,7 @@ from elliot_core.sql import safe_ident
 from elliot_core.types.connector import ConnectorConfig, ProductContext
 from elliot_core.types.source import SourceConfig
 from elliot_core.types.tool import SkillDefinition, ToolDefinition
+from elliot_mcp_plugin.oauth_login import BuildOAuthLogin
 
 log = structlog.get_logger(__name__)
 
@@ -23,6 +24,11 @@ class ElliotSession:
         self.builder = ConnectorBuilder()
         self.workspace = WorkspaceStore(cwd)
         self.sources: dict[str, SourceConfig] = {}
+        # In-flight / completed builder OAuth logins for discover, keyed by
+        # source name. In-memory only and never persisted: the builder's token
+        # is used to fetch discovery samples and discarded, never written into
+        # session.json or the connector file.
+        self.oauth_logins: dict[str, BuildOAuthLogin] = {}
         self.product_context: ProductContext | None = None
         self.runtime_process: subprocess.Popen[Any] | None = None
         self.runtime_log_path: Path | None = None

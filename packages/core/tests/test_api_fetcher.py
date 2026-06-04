@@ -87,6 +87,29 @@ def test_build_auth_headers_no_auth():
     assert _build_auth_headers(_source(), {}) == {}
 
 
+def test_build_auth_headers_override_wins_for_oauth2():
+    auth = AuthConfig(type="oauth2", secret_key="{{ user_oauth:acme }}")
+    headers = _build_auth_headers(_source(auth=auth), {}, "live-token")
+    assert headers["Authorization"] == "Bearer live-token"
+
+
+def test_build_auth_headers_override_ignored_for_api_key():
+    # An override is a bearer token; it must not hijack api_key header injection.
+    auth = AuthConfig(type="api_key", secret_key="tok", header_name="X-Api-Key")
+    headers = _build_auth_headers(_source(auth=auth), {"tok": "k123"}, "live-token")
+    assert headers == {"X-Api-Key": "k123"}
+
+
+@respx.mock
+async def test_fetch_endpoint_uses_auth_token_override():
+    route = respx.get("https://api.example.com/items").mock(
+        return_value=Response(200, json=[{"id": 1}])
+    )
+    auth = AuthConfig(type="oauth2", secret_key="{{ user_oauth:acme }}")
+    await fetch_endpoint(_source(auth=auth), {}, auth_token_override="live-token")
+    assert route.calls.last.request.headers["Authorization"] == "Bearer live-token"
+
+
 # ── _build_auth_query_params ──────────────────────────────────────────────────
 
 

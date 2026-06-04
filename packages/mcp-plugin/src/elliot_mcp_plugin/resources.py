@@ -176,6 +176,16 @@ Self-hosted note: in the standalone connector-runtime, a `per_user` source's
 `"access_token"`); the connect flow lives at `/oauth/start/{source_id}`. The
 cloud uses the `{{ user_oauth:SOURCE_ID }}` placeholder shown above.
 
+Build time (discovering an `oauth2` source): to learn the schema, discover needs
+a token to fetch sample rows — but **never ask the user to paste one**. Call
+`elliot_connect_source(source_type, config, name)` first; it returns an
+`authorize_url`. The builder opens it, logs in to the upstream on the provider's
+own page, and Elliot captures the token on a loopback callback. Then
+`elliot_discover_source` (same args) uses that token to fetch. The OAuth **app**
+credentials (`client_id_secret` / `client_secret_secret`) must be set as env
+vars first. This builder token is used for discovery only and is never written
+into the connector file — end users still authenticate themselves at runtime.
+
 ## Tool execution modes — when the upstream is actually hit
 
 A connector's data is **not** permanently frozen at build time. Three modes:

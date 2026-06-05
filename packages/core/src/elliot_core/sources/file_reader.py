@@ -81,49 +81,53 @@ def _raise_csv_field_limit() -> None:
 _raise_csv_field_limit()
 
 
+def _resolve_file_path(raw_path: str) -> Path:
+    """Resolve a source file path and assert it is allowed to be read.
+
+    Audit finding H3: previously ``Path(config.path)`` was opened verbatim, so
+    a writeable connector could read arbitrary host files. Unless
+    ELLIOT_FILE_READER_ALLOW_ABSOLUTE is set, the resolved path must live under
+    one of the allowed roots (ELLIOT_FILE_ROOT plus the framework-managed
+    .elliot/sources/). Raises ElliotError(FILE_NOT_ALLOWED) otherwise.
+    """
+    if _file_root_unrestricted():
+        return Path(raw_path).resolve()
+
+    roots = _allowed_roots()
+    last_err: PathEscape | None = None
+    for root in roots:
+        try:
+            return ensure_under(root, raw_path)
+        except PathEscape as exc:
+            last_err = exc
+
+    # Surface the actual allowed roots in the message itself. The MCP
+    # transport drops `detail`, so without this the agent only sees
+    # "outside the allowed roots" and has to probe with elliot_upload_file
+    # just to discover where files belong.
+    roots_str = ", ".join(str(r) for r in roots)
+    attempted = last_err.candidate if last_err else raw_path
+    raise ElliotError(
+        "FILE_NOT_ALLOWED",
+        f"File path {attempted!r} is outside the allowed roots. "
+        f"Allowed roots: {roots_str}. "
+        "Prefer elliot_upload_file (stages the file under the managed "
+        "sources directory automatically); or copy the file under one "
+        "of the allowed roots; or set ELLIOT_FILE_ROOT / "
+        "ELLIOT_FILE_READER_ALLOW_ABSOLUTE=1 for trusted absolute paths.",
+        detail={
+            "path": attempted,
+            "allowed_roots": [str(r) for r in roots],
+        },
+    ) from last_err
+
+
 def read_file(config: SourceConfig) -> FetchResult:
     raw_path = config.path or ""
     if not raw_path:
         raise ElliotError("FILE_NOT_FOUND", "File path is empty")
 
-    # Audit finding H3: previously `Path(config.path)` was opened verbatim,
-    # so a writeable connector could read arbitrary host files. Resolve and
-    # assert containment under one of the allowed roots (ELLIOT_FILE_ROOT
-    # plus the framework-managed .elliot/sources/). Operators who need
-    # absolute access can set ELLIOT_FILE_READER_ALLOW_ABSOLUTE=1.
-    if _file_root_unrestricted():
-        path: Path = Path(raw_path).resolve()
-    else:
-        roots = _allowed_roots()
-        last_err: PathEscape | None = None
-        resolved: Path | None = None
-        for root in roots:
-            try:
-                resolved = ensure_under(root, raw_path)
-                break
-            except PathEscape as exc:
-                last_err = exc
-        if resolved is None:
-            # Surface the actual allowed roots in the message itself. The MCP
-            # transport drops `detail`, so without this the agent only sees
-            # "outside the allowed roots" and has to probe with elliot_upload_file
-            # just to discover where files belong.
-            roots_str = ", ".join(str(r) for r in roots)
-            attempted = last_err.candidate if last_err else raw_path
-            raise ElliotError(
-                "FILE_NOT_ALLOWED",
-                f"File path {attempted!r} is outside the allowed roots. "
-                f"Allowed roots: {roots_str}. "
-                "Prefer elliot_upload_file (stages the file under the managed "
-                "sources directory automatically); or copy the file under one "
-                "of the allowed roots; or set ELLIOT_FILE_ROOT / "
-                "ELLIOT_FILE_READER_ALLOW_ABSOLUTE=1 for trusted absolute paths.",
-                detail={
-                    "path": attempted,
-                    "allowed_roots": [str(r) for r in roots],
-                },
-            ) from last_err
-        path = resolved
+    path = _resolve_file_path(raw_path)
 
     if not path.exists():
         raise ElliotError("FILE_NOT_FOUND", f"File not found: {config.path}")

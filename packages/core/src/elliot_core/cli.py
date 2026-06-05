@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -538,19 +539,24 @@ def _cmd_trace(args: argparse.Namespace) -> None:
         print(f"✓ Elliot trace hook removed for {harness} ({target})")
 
 
-def main() -> None:
-    # Windows consoles default to cp1252, which cannot encode the box-drawing
-    # rules and check-mark glyphs (U+2500, U+2713, U+2717, U+2514) used in
-    # `connect`/`status`/`scan` output — printing them raises UnicodeEncodeError
-    # and crashes the command. Force UTF-8 on the standard streams so the CLI
-    # behaves the same everywhere; errors="replace" keeps output flowing if a
-    # stream still can't encode a glyph.
-    for _stream in (sys.stdout, sys.stderr):
-        _reconfigure = getattr(_stream, "reconfigure", None)
-        if _reconfigure is not None:
-            with contextlib.suppress(ValueError, OSError):
-                _reconfigure(encoding="utf-8", errors="replace")
+def _force_utf8_streams() -> None:
+    """Force UTF-8 on stdout/stderr.
 
+    Windows consoles default to cp1252, which cannot encode the box-drawing
+    rules and check-mark glyphs (U+2500, U+2713, U+2717, U+2514) used in
+    ``connect``/``status``/``scan`` output — printing them raises
+    UnicodeEncodeError and crashes the command. ``errors="replace"`` keeps
+    output flowing if a stream still can't encode a glyph.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            with contextlib.suppress(ValueError, OSError):
+                reconfigure(encoding="utf-8", errors="replace")
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Construct the ``elliot`` argument parser with every subcommand."""
     parser = argparse.ArgumentParser(prog="elliot", description="Elliot developer tools")
     sub = parser.add_subparsers(dest="command")
 
@@ -628,24 +634,30 @@ def main() -> None:
         help="Which coding agent to wire up",
     )
 
+    return parser
+
+
+# Subcommand name -> handler. A dispatch table instead of an if/elif chain so
+# a new command is a single entry alongside its parser definition.
+_COMMANDS: dict[str, Callable[[argparse.Namespace], None]] = {
+    "lint": _cmd_lint,
+    "scan": _cmd_scan,
+    "eval": _cmd_eval,
+    "init": _cmd_init,
+    "export-plugin": _cmd_export_plugin,
+    "status": _cmd_status,
+    "connect": _cmd_connect,
+    "trace": _cmd_trace,
+}
+
+
+def main() -> None:
+    _force_utf8_streams()
+    parser = _build_parser()
     args = parser.parse_args()
 
-    if args.command == "lint":
-        _cmd_lint(args)
-    elif args.command == "scan":
-        _cmd_scan(args)
-    elif args.command == "eval":
-        _cmd_eval(args)
-    elif args.command == "init":
-        _cmd_init(args)
-    elif args.command == "export-plugin":
-        _cmd_export_plugin(args)
-    elif args.command == "status":
-        _cmd_status(args)
-    elif args.command == "connect":
-        _cmd_connect(args)
-    elif args.command == "trace":
-        _cmd_trace(args)
-    else:
+    handler = _COMMANDS.get(args.command)
+    if handler is None:
         parser.print_help()
         sys.exit(1)
+    handler(args)

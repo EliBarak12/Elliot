@@ -12,6 +12,11 @@ import structlog
 
 from elliot_core.env import env_flag
 from elliot_core.sources.envelope import extract_rows
+from elliot_core.sources.pagination import (
+    next_cursor,
+    pagination_request_params,
+    parse_link_next,
+)
 from elliot_core.sqlite.engine import SQLiteEngine
 from elliot_core.sqlite.flattener import flatten
 from elliot_core.tools.query_builder import build_select_sql
@@ -385,7 +390,7 @@ class ToolExecutor:
                 # base; pagination params are layered on top.
                 params: dict[str, Any] = dict(extra_params or {})
                 params.update(
-                    _pagination_request_params(pagination, offset=offset, page=page, cursor=cursor)
+                    pagination_request_params(pagination, offset=offset, page=page, cursor=cursor)
                 )
 
                 resp = await client.get(request_url, headers=headers, params=params or None)
@@ -429,11 +434,11 @@ class ToolExecutor:
                         break
                     page += 1
                 elif pagination.strategy == "cursor":
-                    cursor = _next_cursor(envelope, pagination)
+                    cursor = next_cursor(envelope, pagination)
                     if not cursor:
                         break
                 elif pagination.strategy == "link_header":
-                    next_url = _parse_link_next(resp.headers.get("link", ""))
+                    next_url = parse_link_next(resp.headers.get("link", ""))
                     if not next_url:
                         break
                 else:
@@ -553,40 +558,6 @@ class ToolExecutor:
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
-
-
-def _pagination_request_params(
-    pagination: Any, *, offset: int, page: int, cursor: str | None
-) -> dict[str, Any]:
-    """Build the query params for the current page given the pagination strategy.
-
-    Layered on top of any forwarded passthrough params by the caller; cursor
-    params are only emitted once a cursor has been captured.
-    """
-    if pagination.strategy == "offset":
-        return {"offset": offset, "limit": pagination.page_size}
-    if pagination.strategy == "page":
-        return {"page": page}
-    if pagination.strategy == "cursor" and cursor:
-        return {"cursor": cursor}
-    return {}
-
-
-def _next_cursor(envelope: Any, pagination: Any) -> str | None:
-    """Read the next cursor from a response envelope, preferring ``next_cursor``
-    then the configured ``cursor_field`` (default ``cursor``). None when the
-    envelope is not a dict or carries no cursor."""
-    if not isinstance(envelope, dict):
-        return None
-    return envelope.get("next_cursor") or envelope.get(pagination.cursor_field or "cursor")
-
-
-def _parse_link_next(link_header: str) -> str | None:
-    """Return the next URL from an RFC 5988 ``Link: <url>; rel="next"`` header."""
-    import re
-
-    m = re.search(r'<([^>]+)>;\s*rel="next"', link_header or "")
-    return m.group(1) if m else None
 
 
 def _extract_table_names(sql: str) -> list[str]:

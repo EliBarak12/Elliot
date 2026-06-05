@@ -15,6 +15,11 @@ from elliot_core.errors import SourceFetchError
 from elliot_core.http import SSRFError, safe_client, validate_url
 from elliot_core.redaction import redact_url
 from elliot_core.sources.envelope import extract_rows, looks_like_unextracted_envelope
+from elliot_core.sources.pagination import (
+    next_cursor,
+    pagination_request_params,
+    parse_link_next,
+)
 from elliot_core.types.source import FetchResult, SourceConfig
 
 log = structlog.get_logger(__name__)
@@ -160,11 +165,6 @@ def _build_auth_query_params(config: SourceConfig, secrets: dict[str, str]) -> d
 _extract_rows = extract_rows
 
 
-def _parse_link_next(link_header: str) -> str | None:
-    m = re.search(r'<([^>]+)>;\s*rel="next"', link_header)
-    return m.group(1) if m else None
-
-
 async def _request_with_retries(
     client: httpx.AsyncClient,
     *,
@@ -272,14 +272,9 @@ async def fetch_endpoint(
             except SSRFError as exc:
                 raise SourceFetchError(f"Refusing to fetch: {exc.message}") from exc
             request_params: dict[str, Any] = dict(base_params)
-
-            if pagination.strategy == "offset":
-                request_params["offset"] = offset
-                request_params["limit"] = pagination.page_size
-            elif pagination.strategy == "page":
-                request_params["page"] = page
-            elif pagination.strategy == "cursor" and cursor:
-                request_params["cursor"] = cursor
+            request_params.update(
+                pagination_request_params(pagination, offset=offset, page=page, cursor=cursor)
+            )
 
             resp, retry_budget = await _request_with_retries(
                 client,
@@ -331,15 +326,11 @@ async def fetch_endpoint(
                     break
                 page += 1
             elif pagination.strategy == "cursor":
-                cursor = (
-                    data.get("next_cursor") or data.get(pagination.cursor_field or "cursor")
-                    if isinstance(data, dict)
-                    else None
-                )
+                cursor = next_cursor(data, pagination)
                 if not cursor:
                     break
             elif pagination.strategy == "link_header":
-                next_url = _parse_link_next(resp.headers.get("link", ""))
+                next_url = parse_link_next(resp.headers.get("link", ""))
                 if not next_url:
                     break
             else:

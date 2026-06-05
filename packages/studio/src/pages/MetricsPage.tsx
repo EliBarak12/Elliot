@@ -17,6 +17,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatCard } from "@/components/ui/stat-card";
 import { useMetrics } from "@/hooks/useMetrics";
+import { formatMs } from "@/lib/format";
 import { httpJson } from "@/lib/http";
 import { severityBadgeVariant } from "@/lib/severity";
 import { tokenToneClass } from "@/lib/tokenRisk";
@@ -238,7 +239,7 @@ export default function MetricsPage() {
             />
             <StatCard
               label="Avg latency"
-              value={`${avgLatency.toFixed(0)}ms`}
+              value={formatMs(avgLatency)}
               icon={Timer}
               tone={avgLatency > 500 ? "warning" : "default"}
               hint="Across all tools"
@@ -298,7 +299,7 @@ export default function MetricsPage() {
                           </Badge>
                         </td>
                         <td className="text-right py-2.5 px-5 text-xs tabular-nums">
-                          {m.avg_duration_ms.toFixed(0)}ms
+                          {formatMs(m.avg_duration_ms)}
                         </td>
                       </tr>
                     ))}

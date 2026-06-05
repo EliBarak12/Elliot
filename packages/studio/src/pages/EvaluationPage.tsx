@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { formatMs } from "@/lib/format";
 import { callTool } from "@/lib/mcp-client";
 import { cn } from "@/lib/utils";
 
@@ -167,7 +168,7 @@ function CaseTable({ cases }: { cases: EvalCaseResult[] }) {
                 )}
               </td>
               <td className="text-right py-2.5 px-5 text-xs tabular-nums">
-                {c.latency_ms.toFixed(0)}ms
+                {formatMs(c.latency_ms)}
               </td>
             </tr>
           ))}

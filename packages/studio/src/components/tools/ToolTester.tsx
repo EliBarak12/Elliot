@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useCallTool } from "@/hooks/useTools";
+import { formatMs } from "@/lib/format";
 import type { ParameterDefinition } from "@/types/api";
 
 interface Props {
@@ -84,7 +85,7 @@ export function ToolTester({ toolId, parameters }: Props) {
           <div className="flex items-center gap-2 mb-2">
             <span className="text-xs font-medium">Result</span>
             <Badge variant="outline" className="text-xs">
-              {result.latency.toFixed(0)}ms
+              {formatMs(result.latency)}
             </Badge>
           </div>
           {result.error ? (

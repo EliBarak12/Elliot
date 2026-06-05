@@ -96,57 +96,64 @@ def _wait_for_runtime(
     return False, f"timeout after {_RUNTIME_HEALTH_TIMEOUT_S}s waiting for /health"
 
 
+def _connector_path_allowed(dest: str | Path, workspace_dir: Path) -> bool:
+    """Whether ``dest`` resolves under an allowed connector root.
+
+    Allowed roots are the project root (the workspace ``.elliot`` dir's parent),
+    ``$ELLIOT_CONNECTORS_DIR``, and the ``$ELLIOT_CONNECTOR`` parent. Shared by
+    the runtime-start and export paths so the containment rule stays identical.
+    """
+    from elliot_core.paths import PathEscape, ensure_under
+
+    allowed_roots = [Path(workspace_dir).resolve().parent]
+    connectors_dir_env = os.environ.get("ELLIOT_CONNECTORS_DIR")
+    if connectors_dir_env:
+        allowed_roots.append(Path(connectors_dir_env).resolve())
+    env_connector = os.environ.get("ELLIOT_CONNECTOR")
+    if env_connector:
+        allowed_roots.append(Path(env_connector).resolve().parent)
+
+    for root in allowed_roots:
+        try:
+            ensure_under(root, dest)
+            return True
+        except PathEscape:
+            continue
+    return False
+
+
 def _resolve_runtime_connector_path(workspace_dir: Path, connector_path: str | None) -> str:
     """Resolve and security-check the connector file the runtime will serve.
 
     Defaults to the explicit arg, then ``$ELLIOT_CONNECTOR``, then
     ``<workspace>/connector.json``. Unless
     ``ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH`` is set, the resolved path must
-    live under an allowed root — the project root, ``$ELLIOT_CONNECTORS_DIR``,
-    or the ``$ELLIOT_CONNECTOR`` parent. Audit finding C5: an agent-supplied
-    path was written straight into the child uvicorn's env, so without this an
-    attacker could point the runtime at any file on disk.
+    live under an allowed root (see :func:`_connector_path_allowed`). Audit
+    finding C5: an agent-supplied path was written straight into the child
+    uvicorn's env, so without this an attacker could point the runtime at any
+    file on disk.
 
     Returns the validated path, or raises ElliotError
     (RUNTIME_BAD_CONNECTOR_PATH / RUNTIME_NO_CONNECTOR).
     """
-    from elliot_core.paths import PathEscape, ensure_under
-
     chosen_connector = (
         connector_path
         or os.environ.get("ELLIOT_CONNECTOR")
         or str(workspace_dir / "connector.json")
     )
 
-    if not env_flag("ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH"):
-        # Workspace _dir is e.g. <cwd>/.elliot, so the project root
-        # (workspace._dir.parent) is the default allowlist root.
-        allowed_roots = [Path(workspace_dir).resolve().parent]
-        connectors_dir_env = os.environ.get("ELLIOT_CONNECTORS_DIR")
-        if connectors_dir_env:
-            allowed_roots.append(Path(connectors_dir_env).resolve())
-        env_connector = os.environ.get("ELLIOT_CONNECTOR")
-        if env_connector:
-            allowed_roots.append(Path(env_connector).resolve().parent)
-
-        contained = False
-        for root in allowed_roots:
-            try:
-                ensure_under(root, chosen_connector)
-                contained = True
-                break
-            except PathEscape:
-                continue
-        if not contained:
-            raise ElliotError(
-                "RUNTIME_BAD_CONNECTOR_PATH",
-                (
-                    "connector_path is outside the allowed roots "
-                    "(project root, ELLIOT_CONNECTORS_DIR, ELLIOT_CONNECTOR parent). "
-                    "Set ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH=1 to opt out."
-                ),
-                detail={"connector_path": chosen_connector},
-            )
+    if not env_flag("ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH") and not _connector_path_allowed(
+        chosen_connector, workspace_dir
+    ):
+        raise ElliotError(
+            "RUNTIME_BAD_CONNECTOR_PATH",
+            (
+                "connector_path is outside the allowed roots "
+                "(project root, ELLIOT_CONNECTORS_DIR, ELLIOT_CONNECTOR parent). "
+                "Set ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH=1 to opt out."
+            ),
+            detail={"connector_path": chosen_connector},
+        )
 
     if not Path(chosen_connector).exists():
         raise ElliotError(
@@ -159,6 +166,27 @@ def _resolve_runtime_connector_path(workspace_dir: Path, connector_path: str | N
             detail={"connector_path": chosen_connector},
         )
     return chosen_connector
+
+
+def _export_staleness_warnings(session: ElliotSession) -> list[str]:
+    """Warn when the registry has drifted from the last built connector: tools
+    added or removed since build, or a tool whose SQL changed."""
+    if session.connector is None:
+        return []
+    warnings: list[str] = []
+    built_ids = {t.id for t in session.connector.tools}
+    current_ids = {t.id for t in session.registry.get_all()}
+    added = current_ids - built_ids
+    removed = built_ids - current_ids
+    if added:
+        warnings.append(f"New tools not in connector: {', '.join(sorted(added))}")
+    if removed:
+        warnings.append(f"Tools removed since build: {', '.join(sorted(removed))}")
+    for t in session.connector.tools:
+        current_sql = session.tool_sql.get(t.id)
+        if current_sql and current_sql != t.sql:
+            warnings.append(f"Tool '{t.id}' SQL changed since last build — rebuild recommended")
+    return warnings
 
 
 def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
@@ -234,45 +262,27 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
     def elliot_export_connector(path: str = ".elliot/connector.json") -> dict:  # type: ignore[type-arg]
         """Write the built ConnectorConfig to disk as JSON."""
         try:
-            from elliot_core.paths import PathEscape, ensure_under
-
             if session.connector is None:
                 return {"error": "No connector built yet — call elliot_build_connector first"}
-            # Containment: the resolved destination must live under the
-            # session cwd (workspace._dir.parent), ELLIOT_CONNECTORS_DIR, or
-            # the parent of ELLIOT_CONNECTOR. Opt-out via
-            # ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH=1 for non-standard layouts.
-            project_root = Path(session.workspace._dir).resolve().parent
-            allowed_roots = [project_root]
-            connectors_dir_env = os.environ.get("ELLIOT_CONNECTORS_DIR")
-            if connectors_dir_env:
-                allowed_roots.append(Path(connectors_dir_env).resolve())
-            env_connector = os.environ.get("ELLIOT_CONNECTOR")
-            if env_connector:
-                allowed_roots.append(Path(env_connector).resolve().parent)
             # Resolve relative paths against the project root so the default
             # ".elliot/connector.json" continues to land where it always did.
+            project_root = Path(session.workspace._dir).resolve().parent
             candidate = path if os.path.isabs(path) else str(project_root / path)
             dest = Path(candidate)
-            if not env_flag("ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH"):
-                contained = False
-                for root in allowed_roots:
-                    try:
-                        ensure_under(root, dest)
-                        contained = True
-                        break
-                    except PathEscape:
-                        continue
-                if not contained:
-                    return to_mcp_error_content(
-                        ElliotError(
-                            "EXPORT_PATH_NOT_ALLOWED",
-                            "Export path is outside the allowed roots (project root, "
-                            "ELLIOT_CONNECTORS_DIR, ELLIOT_CONNECTOR parent). "
-                            "Set ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH=1 to opt out.",
-                            detail={"path": str(dest)},
-                        )
+            # Containment: the resolved destination must live under an allowed
+            # root. Opt-out via ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH=1.
+            if not env_flag("ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH") and not _connector_path_allowed(
+                dest, session.workspace._dir
+            ):
+                return to_mcp_error_content(
+                    ElliotError(
+                        "EXPORT_PATH_NOT_ALLOWED",
+                        "Export path is outside the allowed roots (project root, "
+                        "ELLIOT_CONNECTORS_DIR, ELLIOT_CONNECTOR parent). "
+                        "Set ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH=1 to opt out.",
+                        detail={"path": str(dest)},
                     )
+                )
             dest.parent.mkdir(parents=True, exist_ok=True)
             # Atomic write — never leave a half-written connector file on disk
             # if the write is interrupted (audit Low 33).
@@ -281,24 +291,8 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             os.replace(tmp, dest)
             log.info("connector.exported", path=str(dest))
 
-            # Staleness check: warn if tools or SQL changed since last build
-            stale_warnings: list[str] = []
-            built_ids = {t.id for t in session.connector.tools}
-            current_ids = {t.id for t in session.registry.get_all()}
-            added = current_ids - built_ids
-            removed = built_ids - current_ids
-            if added:
-                stale_warnings.append(f"New tools not in connector: {', '.join(sorted(added))}")
-            if removed:
-                stale_warnings.append(f"Tools removed since build: {', '.join(sorted(removed))}")
-            for t in session.connector.tools:
-                current_sql = session.tool_sql.get(t.id)
-                if current_sql and current_sql != t.sql:
-                    stale_warnings.append(
-                        f"Tool '{t.id}' SQL changed since last build — rebuild recommended"
-                    )
-
             result: dict[str, object] = {"status": "exported", "path": str(dest)}
+            stale_warnings = _export_staleness_warnings(session)
             if stale_warnings:
                 result["warnings"] = stale_warnings
             return result

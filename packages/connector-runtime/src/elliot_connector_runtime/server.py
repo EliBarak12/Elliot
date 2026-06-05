@@ -971,130 +971,76 @@ def _register_skill_prompt(mcp: FastMCP, skill: Any) -> None:
     mcp.prompt(name=skill_id, description=skill_description)(prompt_fn)
 
 
-def create_app(
-    connector_path: str | None = None,
-    secrets: dict[str, str] | None = None,
-) -> FastAPI:
-    # Default MUST match where elliot_export_connector writes and where
-    # elliot_start_runtime points (.elliot/connector.json) — otherwise the
-    # runtime looks in the wrong place and starts with no connector.
-    connector_path = connector_path or os.environ.get("ELLIOT_CONNECTOR", ".elliot/connector.json")
-    secrets = secrets or {}
-    audit_path = os.environ.get("ELLIOT_AUDIT_LOG", ".elliot/audit.ndjson")
-    sessions_path = os.environ.get("ELLIOT_SESSIONS_LOG", ".elliot/sessions.ndjson")
-    db_url = os.environ.get("ELLIOT_DB_URL", "sqlite:///.elliot/observations.db")
+def _build_no_connector_app(connector_path: str) -> FastAPI:
+    """Minimal app served when no connector is loaded at startup.
 
-    try:
-        config = _cache.get(connector_path)
-    except ConnectorLoadError:
-        # No connector at this path yet. Return a minimal app so the module
-        # still imports — but mount /mcp so clients get an actionable 503
-        # instead of a bare 404, and re-check the connector on every /health
-        # call so an operator can see once one becomes available.
-        _app = FastAPI(redirect_slashes=False)
-        _path = connector_path or ""
+    Keeps the module importable but answers every route with an actionable
+    503 (rather than a bare 404) so MCP clients and Studio show a real
+    "waiting for a connector" state. ``/health`` re-checks the path on every
+    call so an operator can see once one becomes available.
+    """
+    app = FastAPI(redirect_slashes=False)
 
-        def _no_connector_error() -> dict[str, dict[str, str]]:
-            return {
-                "error": {
-                    "code": "RUNTIME_NO_CONNECTOR",
-                    "message": (
-                        f"The connector runtime has no connector loaded (looked for "
-                        f"'{_path}'). Build and export a connector with "
-                        f"elliot_build_connector + elliot_export_connector, then start "
-                        f"the runtime with elliot_start_runtime."
-                    ),
-                }
+    def _no_connector_error() -> dict[str, dict[str, str]]:
+        return {
+            "error": {
+                "code": "RUNTIME_NO_CONNECTOR",
+                "message": (
+                    f"The connector runtime has no connector loaded (looked for "
+                    f"'{connector_path}'). Build and export a connector with "
+                    f"elliot_build_connector + elliot_export_connector, then start "
+                    f"the runtime with elliot_start_runtime."
+                ),
             }
+        }
 
-        @_app.get("/health")
-        async def _health() -> dict[str, str]:
-            try:
-                _cache.get(_path)
-            except ConnectorLoadError:
-                return {"status": "no_connector", "connector": _path}
-            # A connector has appeared since startup — the runtime must be
-            # restarted (elliot_start_runtime) to actually serve it.
-            return {"status": "connector_available", "connector": _path}
+    @app.get("/health")
+    async def _health() -> dict[str, str]:
+        try:
+            _cache.get(connector_path)
+        except ConnectorLoadError:
+            return {"status": "no_connector", "connector": connector_path}
+        # A connector has appeared since startup — the runtime must be
+        # restarted (elliot_start_runtime) to actually serve it.
+        return {"status": "connector_available", "connector": connector_path}
 
-        @_app.api_route("/mcp", methods=["GET", "POST", "DELETE", "OPTIONS"])
-        @_app.api_route("/mcp/", methods=["GET", "POST", "DELETE", "OPTIONS"])
-        @_app.api_route("/mcp/{rest:path}", methods=["GET", "POST", "DELETE", "OPTIONS"])
-        async def _mcp_unavailable() -> JSONResponse:
-            return JSONResponse(status_code=503, content=_no_connector_error())
+    @app.api_route("/mcp", methods=["GET", "POST", "DELETE", "OPTIONS"])
+    @app.api_route("/mcp/", methods=["GET", "POST", "DELETE", "OPTIONS"])
+    @app.api_route("/mcp/{rest:path}", methods=["GET", "POST", "DELETE", "OPTIONS"])
+    async def _mcp_unavailable() -> JSONResponse:
+        return JSONResponse(status_code=503, content=_no_connector_error())
 
-        # The /v1/* observability + task routes only exist on the connector-loaded
-        # app. Without this catch-all, Studio's Dashboard / Agent Console / Metrics
-        # get a bare 404 (rendered as "no data yet") and nothing signals that the
-        # runtime is simply waiting for a connector. Return the same actionable 503
-        # so Studio can show a real empty state.
-        @_app.api_route(
-            "/v1/{rest:path}",
-            methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        )
-        async def _v1_unavailable() -> JSONResponse:
-            return JSONResponse(status_code=503, content=_no_connector_error())
-
-        return _app
-
-    executor = ToolExecutor(config, secrets)
-    audit = AuditLog(audit_path)
-    tracker = SessionTracker(sessions_path)
-    store = ObservationStore(db_url)
-
-    # Per-user auth: a vault + executor pool serve per-user credentials. The
-    # pool is a no-op passthrough for connectors whose sources are all
-    # shared-auth, so single-tenant connectors behave exactly as before.
-    vault_path = os.environ.get("ELLIOT_VAULT_DB", ".elliot/credentials.db")
-    vault = CredentialVault(vault_path)
-    pool = ExecutorPool(config, secrets, vault=vault)
-
-    mcp = create_runtime_server(
-        config, executor, audit=audit, tracker=tracker, store=store, executor_pool=pool
+    # The /v1/* observability + task routes only exist on the connector-loaded
+    # app. Without this catch-all, Studio's Dashboard / Agent Console / Metrics
+    # get a bare 404 (rendered as "no data yet") and nothing signals that the
+    # runtime is simply waiting for a connector. Return the same actionable 503
+    # so Studio can show a real empty state.
+    @app.api_route(
+        "/v1/{rest:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     )
+    async def _v1_unavailable() -> JSONResponse:
+        return JSONResponse(status_code=503, content=_no_connector_error())
 
-    _mcp_app = mcp.streamable_http_app()
+    return app
 
-    @asynccontextmanager
-    async def lifespan(app: FastAPI) -> Any:
-        # Fail-closed: raise if ELLIOT_API_KEY is unset in production/staging,
-        # otherwise log a warning. The helper decides which.
-        enforce_auth_configured("connector-runtime")
-        sweeper = asyncio.create_task(_session_idle_sweeper(tracker, store))
-        async with mcp.session_manager.run():
-            yield
-        sweeper.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await sweeper
-        # Flush any still-open agent sessions so the trace survives shutdown.
-        with contextlib.suppress(Exception):
-            tracker.flush_all()
-        # Audit H7: cancel any in-flight background tasks so we don't leave
-        # them in `running` state after the loop closes.
-        with contextlib.suppress(Exception):
-            await get_task_store().cancel_all()
 
-    limiter = _build_limiter()
-    # redirect_slashes=False so that a POST to /mcp does not 307-redirect to
-    # /mcp/. Strict MCP clients (Codex / rmcp) discard the POST body on the
-    # redirect and the JSON-RPC `initialize` handshake fails. Auto-config in
-    # `elliot connect` and `elliot_get_connection_config` writes the URL with
-    # a trailing slash so clients reach FastMCP directly.
-    app = FastAPI(lifespan=lifespan, redirect_slashes=False)
-    app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
-    # Wire ElliotError + generic exception handlers so raw exceptions and DB
-    # errors are returned as structured {error:{code,message}} JSON instead of
-    # leaking a default Starlette 500 with a stack trace.
-    register_error_handlers(app)
-    # Order matters: Starlette inserts each add_middleware at index 0, so the
-    # LAST call wraps the others. Final stack (outermost first):
-    #   CORS  →  BodySizeLimit  →  SlowAPI  →  ApiKey  →  app
-    # CORS first so preflight (OPTIONS) is answered before anything else;
-    # body-size cap rejects oversized requests before they reach rate-limit
-    # accounting; SlowAPI rate-limits both authed and unauthed traffic so
-    # the auth check itself can't be brute-forced; ApiKey is innermost so
-    # it runs on the surviving requests only.
+def _install_middleware(app: FastAPI, *, token_store: TokenStore | None) -> None:
+    """Wire the connector-runtime middleware stack onto ``app``.
+
+    Order matters: Starlette inserts each add_middleware at index 0, so the
+    LAST call wraps the others. Final stack (outermost first):
+        CORS  →  BodySizeLimit  →  SlowAPI  →  ApiKey  →  app
+    CORS first so preflight (OPTIONS) is answered before anything else;
+    body-size cap rejects oversized requests before they reach rate-limit
+    accounting; SlowAPI rate-limits both authed and unauthed traffic so the
+    auth check itself can't be brute-forced; ApiKey is innermost so it runs
+    on the surviving requests only.
+
+    ``token_store`` selects the end-user identity layer: when MCP OAuth is
+    enabled (boundary 1) the MCPAuthMiddleware validates minted bearers,
+    otherwise the X-Elliot-User header is trusted.
+    """
     app.add_middleware(ApiKeyMiddleware)
     # Audit finding H5: the rate limiter was instantiated but never enforced
     # because SlowAPIMiddleware was missing. Wire it now so the
@@ -1106,18 +1052,6 @@ def create_app(
     # Bind the parsed AX agent identity to a contextvar so tool handlers can
     # attribute calls to a specific client/model rather than a generic 'mcp'.
     app.add_middleware(AgentIdentityMiddleware)
-    # End-user identity (auth boundary 1). Two modes:
-    #   * Default: trust an X-Elliot-User header (gateway / manual config).
-    #   * ELLIOT_MCP_OAUTH=1: Elliot is the MCP OAuth authorization server, so a
-    #     client like Claude shows a native Connect button; the bearer it mints
-    #     carries the user id and a 401 challenge advertises the metadata. The
-    #     same Connect chains the upstream per-user connect (boundary 2).
-    mcp_oauth_enabled = os.environ.get("ELLIOT_MCP_OAUTH", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-    token_store = TokenStore() if mcp_oauth_enabled else None
     if token_store is not None:
         app.add_middleware(MCPAuthMiddleware, store=token_store)
     else:
@@ -1139,16 +1073,23 @@ def create_app(
             "X-Elliot-User",
         ],
     )
-    # Per-user OAuth connect/callback endpoints (auth boundary 2).
-    register_oauth_routes(app, config, secrets, vault, pool)
-    # MCP OAuth authorization server (auth boundary 1) + chained upstream connect.
-    if token_store is not None:
-        register_mcp_oauth(app, config, secrets, vault, pool, token_store)
-    app.mount("/mcp", _mcp_app)
 
-    openai_router = APIRouter(prefix="/v1")
-    register_openai_routes(openai_router, config, executor, audit)
-    app.include_router(openai_router)
+
+def _register_observability_routes(
+    app: FastAPI,
+    *,
+    config: Any,
+    audit: AuditLog,
+    tracker: SessionTracker,
+    store: ObservationStore,
+    connector_path: str | None,
+) -> None:
+    """Register the /v1 observability + task routes and health checks.
+
+    Covers audit/session feeds (incl. the SSE stream), harness trace ingest,
+    token-efficiency + harness metrics, agent feedback, observation/task
+    pruning, task lookup, and the shallow/deep health endpoints.
+    """
 
     @app.get("/v1/audit")
     async def get_audit(n: int = 100) -> list[dict[str, Any]]:
@@ -1354,6 +1295,112 @@ def create_app(
             "observation_db": {"status": db_status, "tool_calls_total": db_count},
             "uptime_seconds": int(time.time() - _start_time),
         }
+
+
+def create_app(
+    connector_path: str | None = None,
+    secrets: dict[str, str] | None = None,
+) -> FastAPI:
+    # Default MUST match where elliot_export_connector writes and where
+    # elliot_start_runtime points (.elliot/connector.json) — otherwise the
+    # runtime looks in the wrong place and starts with no connector.
+    connector_path = connector_path or os.environ.get("ELLIOT_CONNECTOR", ".elliot/connector.json")
+    secrets = secrets or {}
+    audit_path = os.environ.get("ELLIOT_AUDIT_LOG", ".elliot/audit.ndjson")
+    sessions_path = os.environ.get("ELLIOT_SESSIONS_LOG", ".elliot/sessions.ndjson")
+    db_url = os.environ.get("ELLIOT_DB_URL", "sqlite:///.elliot/observations.db")
+
+    try:
+        config = _cache.get(connector_path)
+    except ConnectorLoadError:
+        # No connector at this path yet. Return a minimal app so the module
+        # still imports but every route reports an actionable 503.
+        return _build_no_connector_app(connector_path or "")
+
+    executor = ToolExecutor(config, secrets)
+    audit = AuditLog(audit_path)
+    tracker = SessionTracker(sessions_path)
+    store = ObservationStore(db_url)
+
+    # Per-user auth: a vault + executor pool serve per-user credentials. The
+    # pool is a no-op passthrough for connectors whose sources are all
+    # shared-auth, so single-tenant connectors behave exactly as before.
+    vault_path = os.environ.get("ELLIOT_VAULT_DB", ".elliot/credentials.db")
+    vault = CredentialVault(vault_path)
+    pool = ExecutorPool(config, secrets, vault=vault)
+
+    mcp = create_runtime_server(
+        config, executor, audit=audit, tracker=tracker, store=store, executor_pool=pool
+    )
+
+    _mcp_app = mcp.streamable_http_app()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> Any:
+        # Fail-closed: raise if ELLIOT_API_KEY is unset in production/staging,
+        # otherwise log a warning. The helper decides which.
+        enforce_auth_configured("connector-runtime")
+        sweeper = asyncio.create_task(_session_idle_sweeper(tracker, store))
+        async with mcp.session_manager.run():
+            yield
+        sweeper.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await sweeper
+        # Flush any still-open agent sessions so the trace survives shutdown.
+        with contextlib.suppress(Exception):
+            tracker.flush_all()
+        # Audit H7: cancel any in-flight background tasks so we don't leave
+        # them in `running` state after the loop closes.
+        with contextlib.suppress(Exception):
+            await get_task_store().cancel_all()
+
+    limiter = _build_limiter()
+    # redirect_slashes=False so that a POST to /mcp does not 307-redirect to
+    # /mcp/. Strict MCP clients (Codex / rmcp) discard the POST body on the
+    # redirect and the JSON-RPC `initialize` handshake fails. Auto-config in
+    # `elliot connect` and `elliot_get_connection_config` writes the URL with
+    # a trailing slash so clients reach FastMCP directly.
+    app = FastAPI(lifespan=lifespan, redirect_slashes=False)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+    # Wire ElliotError + generic exception handlers so raw exceptions and DB
+    # errors are returned as structured {error:{code,message}} JSON instead of
+    # leaking a default Starlette 500 with a stack trace.
+    register_error_handlers(app)
+
+    # End-user identity (auth boundary 1). Two modes:
+    #   * Default: trust an X-Elliot-User header (gateway / manual config).
+    #   * ELLIOT_MCP_OAUTH=1: Elliot is the MCP OAuth authorization server, so a
+    #     client like Claude shows a native Connect button; the bearer it mints
+    #     carries the user id and a 401 challenge advertises the metadata. The
+    #     same Connect chains the upstream per-user connect (boundary 2).
+    mcp_oauth_enabled = os.environ.get("ELLIOT_MCP_OAUTH", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    token_store = TokenStore() if mcp_oauth_enabled else None
+    _install_middleware(app, token_store=token_store)
+
+    # Per-user OAuth connect/callback endpoints (auth boundary 2).
+    register_oauth_routes(app, config, secrets, vault, pool)
+    # MCP OAuth authorization server (auth boundary 1) + chained upstream connect.
+    if token_store is not None:
+        register_mcp_oauth(app, config, secrets, vault, pool, token_store)
+    app.mount("/mcp", _mcp_app)
+
+    openai_router = APIRouter(prefix="/v1")
+    register_openai_routes(openai_router, config, executor, audit)
+    app.include_router(openai_router)
+
+    _register_observability_routes(
+        app,
+        config=config,
+        audit=audit,
+        tracker=tracker,
+        store=store,
+        connector_path=connector_path,
+    )
 
     return app
 

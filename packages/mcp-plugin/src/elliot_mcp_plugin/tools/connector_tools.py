@@ -15,6 +15,7 @@ import structlog
 from mcp.server.fastmcp import FastMCP
 
 from elliot_core.connector.serializer import serialize_connector
+from elliot_core.env import env_flag
 from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -117,12 +118,7 @@ def _resolve_runtime_connector_path(workspace_dir: Path, connector_path: str | N
         or str(workspace_dir / "connector.json")
     )
 
-    if os.environ.get("ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH", "").strip().lower() not in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }:
+    if not env_flag("ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH"):
         # Workspace _dir is e.g. <cwd>/.elliot, so the project root
         # (workspace._dir.parent) is the default allowlist root.
         allowed_roots = [Path(workspace_dir).resolve().parent]
@@ -258,12 +254,7 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             # ".elliot/connector.json" continues to land where it always did.
             candidate = path if os.path.isabs(path) else str(project_root / path)
             dest = Path(candidate)
-            if os.environ.get("ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH", "").strip().lower() not in {
-                "1",
-                "true",
-                "yes",
-                "on",
-            }:
+            if not env_flag("ELLIOT_ALLOW_ABSOLUTE_CONNECTOR_PATH"):
                 contained = False
                 for root in allowed_roots:
                     try:

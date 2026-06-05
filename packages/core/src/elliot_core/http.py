@@ -49,6 +49,7 @@ from urllib.parse import urlsplit
 import httpx
 import structlog
 
+from elliot_core.env import env_flag
 from elliot_core.errors import ElliotError
 
 log = structlog.get_logger(__name__)
@@ -76,12 +77,7 @@ class SSRFError(ElliotError):
 
 
 def _allow_private_env() -> bool:
-    return os.environ.get("ELLIOT_SSRF_ALLOW_PRIVATE", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return env_flag("ELLIOT_SSRF_ALLOW_PRIVATE")
 
 
 def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:

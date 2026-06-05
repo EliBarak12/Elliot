@@ -32,6 +32,7 @@ from elliot_core.agent_identity import (
     set_current_agent_identity,
 )
 from elliot_core.auth_middleware import ApiKeyMiddleware, enforce_auth_configured
+from elliot_core.env import env_flag
 from elliot_core.error_middleware import register_error_handlers
 from elliot_core.http_middleware import AgentIdentityMiddleware, UserIdentityMiddleware
 from elliot_core.user_identity import get_current_user_id
@@ -237,8 +238,7 @@ def _require_destructive_confirmation() -> bool:
     so existing connectors keep working; turn it on to enforce the AX
     interactivity pattern for sensitive operations.
     """
-    raw = os.environ.get("ELLIOT_REQUIRE_DESTRUCTIVE_CONFIRMATION", "")
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return env_flag("ELLIOT_REQUIRE_DESTRUCTIVE_CONFIRMATION")
 
 
 def _identity_payload(identity: AgentIdentity | None) -> dict[str, Any] | None:

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from elliot_core.env import env_flag
 from elliot_core.errors import ElliotError
 from elliot_core.paths import PathEscape, ensure_under
 from elliot_core.types.source import FetchResult, SourceConfig
@@ -56,12 +57,7 @@ def _allowed_roots() -> list[Path]:
 
 
 def _file_root_unrestricted() -> bool:
-    return os.environ.get("ELLIOT_FILE_READER_ALLOW_ABSOLUTE", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return env_flag("ELLIOT_FILE_READER_ALLOW_ABSOLUTE")
 
 
 # Real business CSVs routinely embed JSON-shaped fields that blow past

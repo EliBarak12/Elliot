@@ -10,6 +10,7 @@ from typing import Any
 
 import structlog
 
+from elliot_core.env import env_flag
 from elliot_core.sources.envelope import extract_rows
 from elliot_core.sqlite.engine import SQLiteEngine
 from elliot_core.sqlite.flattener import flatten
@@ -662,12 +663,7 @@ def _host_env_secrets_allowed() -> bool:
     ``DATABASE_URL``, or the platform's own ``ELLIOT_CLOUD_SECRETS_ENCRYPTION_KEY``)
     and have the server inject its own environment into an outbound request.
     """
-    return os.environ.get("ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS", "").strip().lower() not in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return not env_flag("ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS")
 
 
 def _resolve_secret(key: str, secrets: dict[str, str]) -> str:

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ChevronDown, ChevronRight, MonitorDot, RefreshCw } from "lucide-react";
 import { httpJson } from "@/lib/http";
+import { severityBadgeVariant } from "@/lib/severity";
 import { tokenToneClass } from "@/lib/tokenRisk";
 import {
   type AgentSession,
@@ -22,12 +23,6 @@ import { cn } from "@/lib/utils";
 
 function tokenTone(tokens: number): string {
   return tokenToneClass(tokens);
-}
-
-function signalVariant(severity: string): "destructive" | "warning" | "secondary" {
-  if (severity === "high") return "destructive";
-  if (severity === "medium") return "warning";
-  return "secondary";
 }
 
 function sessionBadge(session: AgentSession) {
@@ -121,7 +116,11 @@ function SignalRow({ signals }: { signals: SessionSignal[] }) {
   return (
     <div className="flex flex-wrap gap-1.5">
       {signals.map((sig) => (
-        <Badge key={sig.type} variant={signalVariant(sig.severity)} className="text-2xs">
+        <Badge
+          key={sig.type}
+          variant={severityBadgeVariant(sig.severity, "secondary")}
+          className="text-2xs"
+        >
           {sig.message}
         </Badge>
       ))}

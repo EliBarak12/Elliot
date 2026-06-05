@@ -18,6 +18,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { StatCard } from "@/components/ui/stat-card";
 import { useMetrics } from "@/hooks/useMetrics";
 import { httpJson } from "@/lib/http";
+import { severityBadgeVariant } from "@/lib/severity";
 import { tokenToneClass } from "@/lib/tokenRisk";
 import { cn } from "@/lib/utils";
 
@@ -59,12 +60,6 @@ interface HarnessRow {
 
 interface HarnessResponse {
   harnesses: HarnessRow[];
-}
-
-function tokenRiskVariant(risk: TokenEfficiencyRow["risk"]) {
-  if (risk === "high") return "destructive";
-  if (risk === "medium") return "warning";
-  return "success";
 }
 
 function TokenBar({ avg, max }: { avg: number; max: number }) {
@@ -437,7 +432,9 @@ export default function MetricsPage() {
                         <TokenBar avg={row.avg_tokens} max={row.max_tokens} />
                       </td>
                       <td className="text-center py-3 px-5">
-                        <Badge variant={tokenRiskVariant(row.risk)}>{row.risk}</Badge>
+                        <Badge variant={severityBadgeVariant(row.risk, "success")}>
+                          {row.risk}
+                        </Badge>
                       </td>
                       <td className="py-3 px-5 text-xs text-muted-foreground">
                         {row.suggestion ?? "—"}

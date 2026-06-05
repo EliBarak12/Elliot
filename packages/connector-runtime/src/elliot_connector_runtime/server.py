@@ -373,6 +373,91 @@ def create_runtime_server(
     return mcp
 
 
+async def _resolve_call_context(mcp: FastMCP, td: Any) -> tuple[Any, str | None]:
+    """Pull the per-call MCP context for a tool invocation.
+
+    Emits the ``tool.call.start`` log, derives a stable session id (preferring
+    the MCP protocol session id, which spans the whole agent connection, over
+    the per-call request id), and binds the connected client's identity so the
+    call is attributed to a specific harness rather than a generic 'mcp'.
+
+    Returns ``(ctx, session_id)``; ``ctx`` is None when no MCP context is active.
+    """
+    from mcp.server.fastmcp import Context
+
+    ctx: Context[Any, Any, Any] | None = None
+    session_id: str | None = None
+    mcp_session_id: str | None = None
+    client_name: str | None = None
+    client_version: str | None = None
+    with contextlib.suppress(Exception):
+        ctx = mcp.get_context()
+        await ctx.info(f"tool.call.start: {td.id}", logger="elliot.runtime")
+    if ctx is not None:
+        # request_id is per-call — only a last-resort correlation id.
+        with contextlib.suppress(Exception):
+            session_id = ctx.request_id
+        # Prefer the MCP protocol session id (stable for the whole agent
+        # connection) so a multi-step run groups into one trace.
+        with contextlib.suppress(Exception):
+            request = ctx.request_context.request
+            if request is not None:
+                mcp_session_id = request.headers.get("mcp-session-id")
+        # clientInfo from the MCP `initialize` handshake is the most
+        # reliable signal of which harness is connected.
+        with contextlib.suppress(Exception):
+            client_params = ctx.session.client_params
+            if client_params is not None and client_params.clientInfo is not None:
+                client_name = client_params.clientInfo.name
+                client_version = client_params.clientInfo.version
+    if mcp_session_id:
+        session_id = mcp_session_id
+    if client_name:
+        with contextlib.suppress(Exception):
+            set_current_agent_identity(
+                merge_client_info(get_current_agent_identity(), client_name, client_version)
+            )
+    return ctx, session_id
+
+
+# JSON parameter type -> Python annotation FastMCP introspects to build the
+# tool's input schema. Anything unmapped (e.g. "string") falls back to str.
+_PARAM_TYPE_ANNOTATIONS: dict[str, type] = {
+    "integer": int,
+    "number": float,
+    "boolean": bool,
+}
+
+
+def _build_tool_signature(td: Any, require_confirmation: bool) -> inspect.Signature:
+    """Build the keyword-only call signature FastMCP introspects to derive the
+    tool's JSON schema: one parameter per ToolDefinition parameter (typed from
+    its declared type, optional ones defaulting to None), plus a ``confirm``
+    flag for destructive tools that require confirmation."""
+    params = []
+    for p in td.parameters:
+        annotation: Any = _PARAM_TYPE_ANNOTATIONS.get(p.type, str)
+        default = inspect.Parameter.empty if p.required else None
+        params.append(
+            inspect.Parameter(
+                p.name,
+                inspect.Parameter.KEYWORD_ONLY,
+                annotation=annotation,
+                default=default,
+            )
+        )
+    if require_confirmation:
+        params.append(
+            inspect.Parameter(
+                "confirm",
+                inspect.Parameter.KEYWORD_ONLY,
+                annotation=bool,
+                default=False,
+            )
+        )
+    return inspect.Signature(params, return_annotation=dict[str, Any])
+
+
 def _register_tool(
     mcp: FastMCP,
     executor: ToolExecutor,
@@ -499,40 +584,7 @@ def _register_tool(
     async def _handler(**kwargs: Any) -> dict[str, Any]:
         import time
 
-        from mcp.server.fastmcp import Context
-
-        ctx: Context[Any, Any, Any] | None = None
-        session_id: str | None = None
-        mcp_session_id: str | None = None
-        client_name: str | None = None
-        client_version: str | None = None
-        with contextlib.suppress(Exception):
-            ctx = mcp.get_context()
-            await ctx.info(f"tool.call.start: {td.id}", logger="elliot.runtime")
-        if ctx is not None:
-            # request_id is per-call — only a last-resort correlation id.
-            with contextlib.suppress(Exception):
-                session_id = ctx.request_id
-            # Prefer the MCP protocol session id (stable for the whole agent
-            # connection) so a multi-step run groups into one trace.
-            with contextlib.suppress(Exception):
-                request = ctx.request_context.request
-                if request is not None:
-                    mcp_session_id = request.headers.get("mcp-session-id")
-            # clientInfo from the MCP `initialize` handshake is the most
-            # reliable signal of which harness is connected.
-            with contextlib.suppress(Exception):
-                client_params = ctx.session.client_params
-                if client_params is not None and client_params.clientInfo is not None:
-                    client_name = client_params.clientInfo.name
-                    client_version = client_params.clientInfo.version
-        if mcp_session_id:
-            session_id = mcp_session_id
-        if client_name:
-            with contextlib.suppress(Exception):
-                set_current_agent_identity(
-                    merge_client_info(get_current_agent_identity(), client_name, client_version)
-                )
+        ctx, session_id = await _resolve_call_context(mcp, td)
 
         if require_confirmation:
             confirmed = bool(kwargs.pop("confirm", False))
@@ -630,39 +682,7 @@ def _register_tool(
     _handler.__name__ = td.id
     _handler.__doc__ = td.description
 
-    params = []
-    for p in td.parameters:
-        if p.type == "integer":
-            annotation: Any = int
-        elif p.type == "number":
-            annotation = float
-        elif p.type == "boolean":
-            annotation = bool
-        else:
-            annotation = str
-        default = inspect.Parameter.empty if p.required else None
-        params.append(
-            inspect.Parameter(
-                p.name,
-                inspect.Parameter.KEYWORD_ONLY,
-                annotation=annotation,
-                default=default,
-            )
-        )
-    if require_confirmation:
-        params.append(
-            inspect.Parameter(
-                "confirm",
-                inspect.Parameter.KEYWORD_ONLY,
-                annotation=bool,
-                default=False,
-            )
-        )
-    object.__setattr__(
-        _handler,
-        "__signature__",
-        inspect.Signature(params, return_annotation=dict[str, Any]),
-    )
+    object.__setattr__(_handler, "__signature__", _build_tool_signature(td, require_confirmation))
     _handler.__annotations__["return"] = dict[str, Any]
 
     mcp.tool(name=td.id, title=td.name, description=td.description, annotations=annotations)(

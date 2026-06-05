@@ -19,6 +19,7 @@ from elliot_core.openapi_analyzer import (
     ProposedParameter,
     ProposedSource,
     ProposedTool,
+    field_count_risk,
 )
 
 log = structlog.get_logger(__name__)
@@ -175,9 +176,7 @@ def _build_tool(item: dict[str, Any], variables: dict[str, str]) -> ProposedTool
         )
 
     response_fields = _example_response_fields(item)
-    token_risk = (
-        "high" if len(response_fields) > 15 else "medium" if len(response_fields) > 7 else "low"
-    )
+    token_risk = field_count_risk(len(response_fields))
     return ProposedTool(
         id=tool_id,
         name=name,

@@ -120,6 +120,21 @@ def analyze_spec(spec: dict[str, Any] | str) -> ProposedConnector:
     )
 
 
+# Response-field count -> token-risk estimate: a wide response (many fields)
+# likely returns large rows, so it's flagged as higher token risk.
+_WIDE_RESPONSE_FIELDS = 15
+_MODERATE_RESPONSE_FIELDS = 7
+
+
+def field_count_risk(field_count: int) -> str:
+    """Estimate a proposed tool's token risk from its response field count."""
+    if field_count > _WIDE_RESPONSE_FIELDS:
+        return "high"
+    if field_count > _MODERATE_RESPONSE_FIELDS:
+        return "medium"
+    return "low"
+
+
 def _build_tool(
     path: str,
     method: str,
@@ -140,9 +155,7 @@ def _build_tool(
     params += _request_body_params(operation, spec)
 
     response_fields = _extract_response_fields(operation, spec)
-    token_risk = (
-        "high" if len(response_fields) > 15 else "medium" if len(response_fields) > 7 else "low"
-    )
+    token_risk = field_count_risk(len(response_fields))
 
     return ProposedTool(
         id=tool_id,

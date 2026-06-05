@@ -19,7 +19,7 @@ from elliot_core.sources.api_fetcher import _resolve_secret, fetch_endpoint
 from elliot_core.sources.db_connector import query_database
 from elliot_core.sources.file_reader import read_file
 from elliot_core.sqlite.flattener import flatten
-from elliot_core.types.source import SourceConfig
+from elliot_core.types.source import OAuth2Config, SourceConfig
 from elliot_mcp_plugin.oauth_login import LOGIN_TTL_S, start_login
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -233,6 +233,50 @@ def _decode_upload(file_name: str, content: str, encoding: str) -> bytes:
     return data
 
 
+def _resolve_oauth_app(session: ElliotSession, cfg: SourceConfig) -> tuple[OAuth2Config, str, str]:
+    """Validate that ``cfg`` is a REST + oauth2 source and resolve its OAuth
+    *app* credentials from the workspace secrets.
+
+    Returns (oauth2_config, client_id, client_secret). Raises ElliotError when
+    the source isn't oauth2, the oauth2 block is missing, or the client id is
+    unset/unresolved (AUTH_REQUIRED, naming the env vars to set).
+    """
+    if cfg.type != "rest" or cfg.auth is None or cfg.auth.type != "oauth2":
+        raise ElliotError(
+            "VALIDATION_ERROR",
+            "elliot_connect_source is only for REST sources with auth.type "
+            "'oauth2'. For api_key/bearer/basic auth, set the credential as a "
+            "{{ env:VAR }} secret and call elliot_discover_source directly.",
+            detail={"type": cfg.type, "auth": cfg.auth.type if cfg.auth else None},
+        )
+    oauth2 = cfg.auth.oauth2
+    if oauth2 is None:
+        raise ElliotError(
+            "VALIDATION_ERROR",
+            "auth.oauth2 block is required (authorization_url, token_url, "
+            "client_id_secret, client_secret_secret).",
+        )
+    secrets = session.workspace.load_secrets()
+    client_id = _resolve_secret(oauth2.client_id_secret, secrets)
+    client_secret = _resolve_secret(oauth2.client_secret_secret, secrets)
+    if not client_id or "{{" in client_id:
+        raise ElliotError(
+            "AUTH_REQUIRED",
+            "Your OAuth app's client id is not set. Tell the user to register "
+            "an OAuth app with the provider (in its developer settings), allow a "
+            "http://127.0.0.1 loopback redirect URL, and export the Client ID and "
+            f"Client Secret as the env vars {oauth2.client_id_secret} and "
+            f"{oauth2.client_secret_secret}. These are app-level, one-time "
+            "credentials (the same ones their end users' login uses), NOT a "
+            "personal token — do not ask the user to paste a token instead.",
+            detail={
+                "client_id_secret": oauth2.client_id_secret,
+                "client_secret_secret": oauth2.client_secret_secret,
+            },
+        )
+    return oauth2, client_id, client_secret
+
+
 def _unknown_source_type_error(source_type: str) -> dict[str, str] | None:
     """The error dict an MCP source tool returns for an unrecognized
     ``source_type``, or None when the type is valid. Shared by
@@ -364,39 +408,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             key = source_type.lower()
             source_id = str(uuid.uuid4())
             cfg = _build_source_config(key, config, source_id, name)
-            if cfg.type != "rest" or cfg.auth is None or cfg.auth.type != "oauth2":
-                raise ElliotError(
-                    "VALIDATION_ERROR",
-                    "elliot_connect_source is only for REST sources with auth.type "
-                    "'oauth2'. For api_key/bearer/basic auth, set the credential as a "
-                    "{{ env:VAR }} secret and call elliot_discover_source directly.",
-                    detail={"type": cfg.type, "auth": cfg.auth.type if cfg.auth else None},
-                )
-            oauth2 = cfg.auth.oauth2
-            if oauth2 is None:
-                raise ElliotError(
-                    "VALIDATION_ERROR",
-                    "auth.oauth2 block is required (authorization_url, token_url, "
-                    "client_id_secret, client_secret_secret).",
-                )
-            secrets = session.workspace.load_secrets()
-            client_id = _resolve_secret(oauth2.client_id_secret, secrets)
-            client_secret = _resolve_secret(oauth2.client_secret_secret, secrets)
-            if not client_id or "{{" in client_id:
-                raise ElliotError(
-                    "AUTH_REQUIRED",
-                    "Your OAuth app's client id is not set. Tell the user to register "
-                    "an OAuth app with the provider (in its developer settings), allow a "
-                    "http://127.0.0.1 loopback redirect URL, and export the Client ID and "
-                    f"Client Secret as the env vars {oauth2.client_id_secret} and "
-                    f"{oauth2.client_secret_secret}. These are app-level, one-time "
-                    "credentials (the same ones their end users' login uses), NOT a "
-                    "personal token — do not ask the user to paste a token instead.",
-                    detail={
-                        "client_id_secret": oauth2.client_id_secret,
-                        "client_secret_secret": oauth2.client_secret_secret,
-                    },
-                )
+            oauth2, client_id, client_secret = _resolve_oauth_app(session, cfg)
 
             # Restart cleanly if a previous login for this name is still around.
             prev = session.oauth_logins.pop(name, None)

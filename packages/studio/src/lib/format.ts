@@ -4,3 +4,8 @@
 export function formatMs(ms: number): string {
   return `${ms.toFixed(0)}ms`;
 }
+
+// Render a 0-1 ratio as a percentage string, e.g. 0.024 -> "2.4%".
+export function formatPercent(ratio: number, fractionDigits = 1): string {
+  return `${(ratio * 100).toFixed(fractionDigits)}%`;
+}

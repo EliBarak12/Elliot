@@ -17,7 +17,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatCard } from "@/components/ui/stat-card";
 import { useMetrics } from "@/hooks/useMetrics";
-import { formatMs } from "@/lib/format";
+import { formatMs, formatPercent } from "@/lib/format";
 import { httpJson } from "@/lib/http";
 import { severityBadgeVariant } from "@/lib/severity";
 import { tokenToneClass } from "@/lib/tokenRisk";
@@ -232,7 +232,7 @@ export default function MetricsPage() {
             />
             <StatCard
               label="Error rate"
-              value={`${(avgErrorRate * 100).toFixed(1)}%`}
+              value={formatPercent(avgErrorRate)}
               icon={AlertCircle}
               tone={avgErrorRate > 0.05 ? "destructive" : "success"}
               hint="Average across tools"
@@ -295,7 +295,7 @@ export default function MetricsPage() {
                             variant={m.error_rate > 0.1 ? "destructive" : "success"}
                             className="tabular-nums"
                           >
-                            {((1 - m.error_rate) * 100).toFixed(1)}%
+                            {formatPercent(1 - m.error_rate)}
                           </Badge>
                         </td>
                         <td className="text-right py-2.5 px-5 text-xs tabular-nums">

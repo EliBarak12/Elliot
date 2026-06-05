@@ -304,14 +304,31 @@ def _result_truncated(result: Any) -> bool:
     return False
 
 
+# Per-call token-estimate risk thresholds (must match the studio's
+# lib/tokenRisk.ts so the UI and API agree): over HIGH is "high" risk, over
+# MEDIUM is "medium"; a single call peaking over PEAK warrants a suggestion.
+_HIGH_TOKEN_THRESHOLD = 1000
+_MEDIUM_TOKEN_THRESHOLD = 300
+_PEAK_TOKEN_THRESHOLD = 2000
+
+
+def _token_risk(avg_tokens: float) -> str:
+    """Bucket an average per-call token estimate into high/medium/low."""
+    if avg_tokens > _HIGH_TOKEN_THRESHOLD:
+        return "high"
+    if avg_tokens > _MEDIUM_TOKEN_THRESHOLD:
+        return "medium"
+    return "low"
+
+
 def _suggest(tool_id: str, avg_tokens: float, max_tokens: float) -> str | None:
-    if avg_tokens > 1000:
+    if avg_tokens > _HIGH_TOKEN_THRESHOLD:
         return f"Average {avg_tokens:.0f} tokens is very high. Add LIMIT clause or SELECT only needed columns."
-    if max_tokens > 2000:
+    if max_tokens > _PEAK_TOKEN_THRESHOLD:
         return (
             f"Peak {max_tokens:.0f} tokens. Add a LIMIT or pagination parameter to cap result size."
         )
-    if avg_tokens > 300:
+    if avg_tokens > _MEDIUM_TOKEN_THRESHOLD:
         return "Consider adding LIMIT or selecting fewer columns to reduce token cost."
     return None
 
@@ -1221,13 +1238,7 @@ def _register_observability_routes(
         tools = [
             {
                 **row,
-                "risk": (
-                    "high"
-                    if (row["avg_tokens"] or 0) > 1000
-                    else "medium"
-                    if (row["avg_tokens"] or 0) > 300
-                    else "low"
-                ),
+                "risk": _token_risk(float(row["avg_tokens"] or 0)),
                 "suggestion": _suggest(
                     str(row["tool_id"]),
                     float(row["avg_tokens"] or 0),

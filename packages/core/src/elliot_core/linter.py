@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .sql import extract_table_names
-from .types import ConnectorConfig
+from .types import ConnectorConfig, ToolDefinition
 
 Severity = Literal["ERROR", "WARN", "INFO"]
 
@@ -258,39 +258,28 @@ def _is_list_tool(tool_id: str) -> bool:
     return first in _LIST_TOOL_PREFIXES
 
 
-def lint_connector(
-    config: ConnectorConfig,
-    sensitive_fields: list[str] | None = None,
-) -> list[LintIssue]:
-    """Statically analyse ``config`` for agent-readiness.
-
-    ``sensitive_fields`` — when supplied (typically from the captured
-    ``ProductIntent``) — flags any tool that returns one of those fields.
-    """
-    issues: list[LintIssue] = []
-
-    # ── connector-level checks ──────────────────────────────────────────────
-    if len(config.tools) > _MAX_TOOLS:
-        issues.append(
-            LintIssue(
-                severity="WARN",
-                code="TOO_MANY_TOOLS",
-                tool_id=None,
-                message=(
-                    f"Connector exposes {len(config.tools)} tools "
-                    f"(> {_MAX_TOOLS}). Large tool sets raise token cost on "
-                    "every call and make tool selection harder."
-                ),
-                suggestion="Keep the 5-15 tools agents actually need; drop or merge the rest.",
-            )
+def _lint_tool_count(config: ConnectorConfig) -> list[LintIssue]:
+    """Warn when a connector exposes more tools than agents can reason about."""
+    if len(config.tools) <= _MAX_TOOLS:
+        return []
+    return [
+        LintIssue(
+            severity="WARN",
+            code="TOO_MANY_TOOLS",
+            tool_id=None,
+            message=(
+                f"Connector exposes {len(config.tools)} tools "
+                f"(> {_MAX_TOOLS}). Large tool sets raise token cost on "
+                "every call and make tool selection harder."
+            ),
+            suggestion="Keep the 5-15 tools agents actually need; drop or merge the rest.",
         )
+    ]
 
-    # ── source auth checks (per-user / OAuth distribution safety) ────────────
-    issues.extend(_lint_source_auth(config))
 
-    # ── SQL ↔ source_ids coverage (runtime "no such table" guard) ────────────
-    issues.extend(_lint_tool_source_coverage(config))
-
+def _lint_duplicate_tool_ids(config: ConnectorConfig) -> list[LintIssue]:
+    """Flag tool ids that are defined more than once."""
+    issues: list[LintIssue] = []
     seen_ids: set[str] = set()
     for tool in config.tools:
         if tool.id in seen_ids:
@@ -304,172 +293,190 @@ def lint_connector(
                 )
             )
         seen_ids.add(tool.id)
+    return issues
 
-    for tool in config.tools:
-        desc = tool.description or ""
 
-        if len(desc.strip()) < 15:
-            issues.append(
-                LintIssue(
-                    severity="ERROR",
-                    code="DESCRIPTION_TOO_SHORT",
-                    tool_id=tool.id,
-                    message=f"Tool '{tool.id}' description is too short ({len(desc)} chars).",
-                    suggestion='Write at least 15 characters starting with a verb: "Return all...", "Get a single..."',
-                )
-            )
-        elif not _starts_with_verb(desc):
+def _lint_tool_parameters(tool: ToolDefinition) -> list[LintIssue]:
+    """Per-parameter readiness checks: ambiguous/generic names, missing
+    descriptions, enum candidates, and unclear filter match semantics."""
+    issues: list[LintIssue] = []
+    for param in tool.parameters:
+        if len(param.name) <= 2:
             issues.append(
                 LintIssue(
                     severity="WARN",
-                    code="DESCRIPTION_MISSING_VERB",
+                    code="PARAMETER_NAME_TOO_SHORT",
                     tool_id=tool.id,
-                    message=f"Tool '{tool.id}' description should start with a verb.",
-                    suggestion='Rewrite as "Return...", "Get...", "List...", "Create...", "Count..."',
+                    message=f"Tool '{tool.id}' has a parameter named '{param.name}' which is ambiguous.",
+                    suggestion=f"Rename '{param.name}' to something descriptive like 'user_id' or 'status_filter'.",
                 )
             )
-
-        sql_upper = (tool.sql or "").upper()
-        # Word-boundary matching: a plain substring check treats a column named
-        # RATE_LIMIT or WHERE_CLAUSE as a real LIMIT / WHERE clause and
-        # suppresses the warning.
-        has_limit = bool(re.search(r"\bLIMIT\b", sql_upper))
-        has_where = bool(re.search(r"\bWHERE\b", sql_upper))
-        has_select_star = bool(re.search(r"\bSELECT\s+\*", sql_upper))
-        if has_select_star and not has_limit and not has_where:
-            issues.append(
-                LintIssue(
-                    severity="ERROR",
-                    code="UNBOUNDED_SELECT",
-                    tool_id=tool.id,
-                    message=f"Tool '{tool.id}' uses SELECT * with no WHERE or LIMIT.",
-                    suggestion="Add LIMIT 50 or add a required/optional filter parameter.",
-                )
-            )
-        elif has_select_star and not has_limit:
+        param_desc = param.description or ""
+        if len(param_desc.strip()) < 5:
             issues.append(
                 LintIssue(
                     severity="WARN",
-                    code="SELECT_STAR_NO_LIMIT",
+                    code="PARAMETER_MISSING_DESCRIPTION",
                     tool_id=tool.id,
-                    message=f"Tool '{tool.id}' uses SELECT * without a LIMIT.",
-                    suggestion="Add LIMIT :limit with a default, or select only the columns agents need.",
+                    message=f"Tool '{tool.id}' parameter '{param.name}' has no description.",
+                    suggestion="Add a description so agents know what value to pass.",
                 )
             )
 
-        for param in tool.parameters:
-            if len(param.name) <= 2:
-                issues.append(
-                    LintIssue(
-                        severity="WARN",
-                        code="PARAMETER_NAME_TOO_SHORT",
-                        tool_id=tool.id,
-                        message=f"Tool '{tool.id}' has a parameter named '{param.name}' which is ambiguous.",
-                        suggestion=f"Rename '{param.name}' to something descriptive like 'user_id' or 'status_filter'.",
-                    )
+        if len(param.name) > 2 and param.name.lower() in _GENERIC_PARAM_NAMES:
+            issues.append(
+                LintIssue(
+                    severity="WARN",
+                    code="PARAMETER_NAME_GENERIC",
+                    tool_id=tool.id,
+                    message=(
+                        f"Tool '{tool.id}' parameter '{param.name}' is generic — "
+                        "agents cannot tell what value it wants."
+                    ),
+                    suggestion=(
+                        f"Rename '{param.name}' to be specific: 'customer_id', "
+                        "'search_text', 'order_status', ..."
+                    ),
                 )
-            param_desc = param.description or ""
-            if len(param_desc.strip()) < 5:
-                issues.append(
-                    LintIssue(
-                        severity="WARN",
-                        code="PARAMETER_MISSING_DESCRIPTION",
-                        tool_id=tool.id,
-                        message=f"Tool '{tool.id}' parameter '{param.name}' has no description.",
-                        suggestion="Add a description so agents know what value to pass.",
-                    )
-                )
+            )
 
-            if len(param.name) > 2 and param.name.lower() in _GENERIC_PARAM_NAMES:
-                issues.append(
-                    LintIssue(
-                        severity="WARN",
-                        code="PARAMETER_NAME_GENERIC",
-                        tool_id=tool.id,
-                        message=(
-                            f"Tool '{tool.id}' parameter '{param.name}' is generic — "
-                            "agents cannot tell what value it wants."
-                        ),
-                        suggestion=(
-                            f"Rename '{param.name}' to be specific: 'customer_id', "
-                            "'search_text', 'order_status', ..."
-                        ),
-                    )
+        if param.type == "string" and not param.enum and _ENUM_DESC_RE.search(param_desc):
+            issues.append(
+                LintIssue(
+                    severity="WARN",
+                    code="PARAMETER_SHOULD_BE_ENUM",
+                    tool_id=tool.id,
+                    message=(
+                        f"Tool '{tool.id}' parameter '{param.name}' describes a "
+                        "fixed value set but is an open string."
+                    ),
+                    suggestion="Declare the allowed values as an `enum` so agents can't guess wrong.",
                 )
+            )
 
-            if param.type == "string" and not param.enum and _ENUM_DESC_RE.search(param_desc):
-                issues.append(
-                    LintIssue(
-                        severity="WARN",
-                        code="PARAMETER_SHOULD_BE_ENUM",
-                        tool_id=tool.id,
-                        message=(
-                            f"Tool '{tool.id}' parameter '{param.name}' describes a "
-                            "fixed value set but is an open string."
-                        ),
-                        suggestion="Declare the allowed values as an `enum` so agents can't guess wrong.",
-                    )
-                )
-
-            # Only warn when there's already a (non-trivial) description but it
-            # omits the match semantics — the empty-description case is covered
-            # by PARAMETER_MISSING_DESCRIPTION above.
-            if (
-                param.type == "string"
-                and _FILTER_PARAM_RE.search(param.name)
-                and len(param_desc.strip()) >= 5
-                and not _FILTER_SEMANTICS_RE.search(param_desc)
-            ):
-                issues.append(
-                    LintIssue(
-                        severity="WARN",
-                        code="FILTER_SEMANTICS_UNCLEAR",
-                        tool_id=tool.id,
-                        message=(
-                            f"Tool '{tool.id}' parameter '{param.name}' looks like a filter "
-                            "but its description doesn't state the match semantics."
-                        ),
-                        suggestion=(
-                            f"Put it in '{param.name}'s OWN description (not the tool "
-                            "description): say whether matching is exact, substring/contains, "
-                            "prefix, or case-insensitive so agents query it correctly."
-                        ),
-                    )
-                )
-
+        # Only warn when there's already a (non-trivial) description but it
+        # omits the match semantics — the empty-description case is covered
+        # by PARAMETER_MISSING_DESCRIPTION above.
         if (
-            tool.category == "READ"
-            and tool.sql
-            and _is_list_tool(tool.id)
-            and not re.search(r"\bLIMIT\b", (tool.sql or "").upper())
-            and not any(p.name.lower() in _PAGINATION_HINTS for p in tool.parameters)
+            param.type == "string"
+            and _FILTER_PARAM_RE.search(param.name)
+            and len(param_desc.strip()) >= 5
+            and not _FILTER_SEMANTICS_RE.search(param_desc)
         ):
             issues.append(
                 LintIssue(
                     severity="WARN",
-                    code="MISSING_PAGINATION",
+                    code="FILTER_SEMANTICS_UNCLEAR",
                     tool_id=tool.id,
                     message=(
-                        f"List-style tool '{tool.id}' has no LIMIT and no "
-                        "pagination parameter — it can return an unbounded result."
+                        f"Tool '{tool.id}' parameter '{param.name}' looks like a filter "
+                        "but its description doesn't state the match semantics."
                     ),
-                    suggestion="Add `LIMIT :limit` with a default, or a limit/offset/cursor parameter.",
+                    suggestion=(
+                        f"Put it in '{param.name}'s OWN description (not the tool "
+                        "description): say whether matching is exact, substring/contains, "
+                        "prefix, or case-insensitive so agents query it correctly."
+                    ),
                 )
             )
+    return issues
 
-        if tool.category in ("WRITE", "ACTION"):
-            mutation_words = {"write", "create", "update", "delete", "send", "insert", "remove"}
-            if not any(w in desc.lower() for w in mutation_words):
-                issues.append(
-                    LintIssue(
-                        severity="INFO",
-                        code="WRITE_TOOL_DESCRIPTION",
-                        tool_id=tool.id,
-                        message=f"Tool '{tool.id}' is category {tool.category} but description doesn't mention mutation.",
-                        suggestion='Add the mutation verb ("Creates...", "Deletes...", "Sends...") so agents don\'t call it accidentally.',
-                    )
+
+def _lint_tool(tool: ToolDefinition) -> list[LintIssue]:
+    """All per-tool checks: description quality, unbounded SELECT *, parameter
+    clarity, list-tool pagination, and write-tool description hygiene."""
+    issues: list[LintIssue] = []
+    desc = tool.description or ""
+
+    if len(desc.strip()) < 15:
+        issues.append(
+            LintIssue(
+                severity="ERROR",
+                code="DESCRIPTION_TOO_SHORT",
+                tool_id=tool.id,
+                message=f"Tool '{tool.id}' description is too short ({len(desc)} chars).",
+                suggestion='Write at least 15 characters starting with a verb: "Return all...", "Get a single..."',
+            )
+        )
+    elif not _starts_with_verb(desc):
+        issues.append(
+            LintIssue(
+                severity="WARN",
+                code="DESCRIPTION_MISSING_VERB",
+                tool_id=tool.id,
+                message=f"Tool '{tool.id}' description should start with a verb.",
+                suggestion='Rewrite as "Return...", "Get...", "List...", "Create...", "Count..."',
+            )
+        )
+
+    sql_upper = (tool.sql or "").upper()
+    # Word-boundary matching: a plain substring check treats a column named
+    # RATE_LIMIT or WHERE_CLAUSE as a real LIMIT / WHERE clause and
+    # suppresses the warning.
+    has_limit = bool(re.search(r"\bLIMIT\b", sql_upper))
+    has_where = bool(re.search(r"\bWHERE\b", sql_upper))
+    has_select_star = bool(re.search(r"\bSELECT\s+\*", sql_upper))
+    if has_select_star and not has_limit and not has_where:
+        issues.append(
+            LintIssue(
+                severity="ERROR",
+                code="UNBOUNDED_SELECT",
+                tool_id=tool.id,
+                message=f"Tool '{tool.id}' uses SELECT * with no WHERE or LIMIT.",
+                suggestion="Add LIMIT 50 or add a required/optional filter parameter.",
+            )
+        )
+    elif has_select_star and not has_limit:
+        issues.append(
+            LintIssue(
+                severity="WARN",
+                code="SELECT_STAR_NO_LIMIT",
+                tool_id=tool.id,
+                message=f"Tool '{tool.id}' uses SELECT * without a LIMIT.",
+                suggestion="Add LIMIT :limit with a default, or select only the columns agents need.",
+            )
+        )
+
+    issues.extend(_lint_tool_parameters(tool))
+
+    if (
+        tool.category == "READ"
+        and tool.sql
+        and _is_list_tool(tool.id)
+        and not re.search(r"\bLIMIT\b", (tool.sql or "").upper())
+        and not any(p.name.lower() in _PAGINATION_HINTS for p in tool.parameters)
+    ):
+        issues.append(
+            LintIssue(
+                severity="WARN",
+                code="MISSING_PAGINATION",
+                tool_id=tool.id,
+                message=(
+                    f"List-style tool '{tool.id}' has no LIMIT and no "
+                    "pagination parameter — it can return an unbounded result."
+                ),
+                suggestion="Add `LIMIT :limit` with a default, or a limit/offset/cursor parameter.",
+            )
+        )
+
+    if tool.category in ("WRITE", "ACTION"):
+        mutation_words = {"write", "create", "update", "delete", "send", "insert", "remove"}
+        if not any(w in desc.lower() for w in mutation_words):
+            issues.append(
+                LintIssue(
+                    severity="INFO",
+                    code="WRITE_TOOL_DESCRIPTION",
+                    tool_id=tool.id,
+                    message=f"Tool '{tool.id}' is category {tool.category} but description doesn't mention mutation.",
+                    suggestion='Add the mutation verb ("Creates...", "Deletes...", "Sends...") so agents don\'t call it accidentally.',
                 )
+            )
+    return issues
 
+
+def _lint_secrets_in_urls(config: ConnectorConfig) -> list[LintIssue]:
+    """Flag sources whose URL appears to embed the auth secret directly."""
+    issues: list[LintIssue] = []
     for source in config.sources:
         if source.auth and source.auth.secret_key and source.auth.secret_key in (source.url or ""):
             issues.append(
@@ -481,7 +488,15 @@ def lint_connector(
                     suggestion="Use auth.secret_key to reference an env var; never put secrets in URLs.",
                 )
             )
+    return issues
 
+
+def _lint_sensitive_fields(
+    config: ConnectorConfig, sensitive_fields: list[str] | None
+) -> list[LintIssue]:
+    """Flag any tool that exposes a product-intent never-expose field through
+    its SQL, output schema, or forwarded query/body params."""
+    issues: list[LintIssue] = []
     for field in sensitive_fields or []:
         if not field.strip():
             continue
@@ -517,5 +532,30 @@ def lint_connector(
                         suggestion=f"Drop '{field}' from this tool's output and request, or redact it.",
                     )
                 )
+    return issues
 
+
+def lint_connector(
+    config: ConnectorConfig,
+    sensitive_fields: list[str] | None = None,
+) -> list[LintIssue]:
+    """Statically analyse ``config`` for agent-readiness.
+
+    ``sensitive_fields`` — when supplied (typically from the captured
+    ``ProductIntent``) — flags any tool that returns one of those fields.
+
+    Each check group is an independent ``_lint_*`` helper; the order here
+    determines the order issues are reported in.
+    """
+    issues: list[LintIssue] = []
+    issues.extend(_lint_tool_count(config))
+    # Source auth (per-user / OAuth distribution safety) and SQL <-> source_ids
+    # coverage (runtime "no such table" guard).
+    issues.extend(_lint_source_auth(config))
+    issues.extend(_lint_tool_source_coverage(config))
+    issues.extend(_lint_duplicate_tool_ids(config))
+    for tool in config.tools:
+        issues.extend(_lint_tool(tool))
+    issues.extend(_lint_secrets_in_urls(config))
+    issues.extend(_lint_sensitive_fields(config, sensitive_fields))
     return issues

@@ -13,6 +13,7 @@ from typing import Any
 
 import structlog
 
+from elliot_core.naming import slugify
 from elliot_core.openapi_analyzer import (
     ProposedConnector,
     ProposedParameter,
@@ -48,7 +49,7 @@ def analyze_postman(collection: dict[str, Any] | str) -> ProposedConnector:
 
     info = data.get("info", {})
     title = str(info.get("name", "My API"))
-    slug = _slugify(title)
+    slug = slugify(title)
 
     # Collection-level variables ({{baseUrl}}, {{apiVersion}}, ...) are
     # substituted into URLs so requests resolve to real paths/hosts.
@@ -300,10 +301,6 @@ def _detect_auth(collection: dict[str, Any], requests: list[dict[str, Any]]) -> 
         if hint:
             return hint
     return None
-
-
-def _slugify(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
 
 
 def _to_snake(s: str) -> str:

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
+from elliot_core.naming import slugify
 from elliot_core.openapi_analyzer import (
     ProposedConnector,
     _ensure_verb_first,
     _path_to_id,
-    _slugify,
     _to_snake,
     analyze_spec,
 )
@@ -125,8 +125,8 @@ def test_warn_too_many_tools() -> None:
 
 
 def test_slugify() -> None:
-    assert _slugify("Pet Store API") == "pet-store-api"
-    assert _slugify("My-API v2") == "my-api-v2"
+    assert slugify("Pet Store API") == "pet-store-api"
+    assert slugify("My-API v2") == "my-api-v2"
 
 
 def test_to_snake() -> None:

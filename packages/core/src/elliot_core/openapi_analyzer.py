@@ -9,6 +9,8 @@ import httpx
 import structlog
 from pydantic import BaseModel
 
+from elliot_core.naming import slugify
+
 log = structlog.get_logger(__name__)
 
 
@@ -75,7 +77,7 @@ def analyze_spec(spec: dict[str, Any] | str) -> ProposedConnector:
     info = spec.get("info", {})
     servers = spec.get("servers", [{}])
     base_url = (servers[0].get("url", "") if servers else "").rstrip("/")
-    slug = _slugify(info.get("title", "my-api"))
+    slug = slugify(info.get("title", "my-api"))
 
     source = ProposedSource(
         id="api",
@@ -303,10 +305,6 @@ def _schema_type(schema: dict[str, Any]) -> str:
         non_null = [x for x in t if x != "null"]
         return str(non_null[0]) if non_null else "string"
     return str(t)
-
-
-def _slugify(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
 
 
 def _to_snake(s: str) -> str:

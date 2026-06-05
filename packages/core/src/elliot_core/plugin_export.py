@@ -30,12 +30,12 @@ plugin root. Layout (everything resolved relative to the plugin root):
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import structlog
 
 from elliot_core.connector.serializer import deserialize_connector
+from elliot_core.naming import slugify
 from elliot_core.types import ConnectorConfig, SkillDefinition
 
 log = structlog.get_logger(__name__)
@@ -54,8 +54,7 @@ _ELLIOT_AUTHOR = {"name": "Elliot", "url": _ELLIOT_CLOUD_URL}
 
 def _kebab(value: str) -> str:
     """Lowercase kebab-case slug safe for a skill directory + frontmatter name."""
-    out = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    return out or "skill"
+    return slugify(value) or "skill"
 
 
 def _mcp_server(slug: str, connector_filename: str) -> dict[str, object]:

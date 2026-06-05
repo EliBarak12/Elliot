@@ -184,6 +184,69 @@ async def _resolve_build_oauth_token(
     )
 
 
+def _decode_upload(file_name: str, content: str, encoding: str) -> bytes:
+    """Validate an upload's encoding, name, and extension, then return its
+    decoded bytes — enforcing the size cap. Raises ElliotError on any
+    violation so the handler can map it to an MCP error response.
+    """
+    if encoding not in ("text", "base64"):
+        raise ElliotError(
+            "VALIDATION_ERROR",
+            "encoding must be 'text' or 'base64'",
+            detail={"encoding": encoding},
+        )
+    if not _FILENAME_RE.match(file_name):
+        raise ElliotError(
+            "INVALID_FILE_NAME",
+            "file_name must be a plain basename (letters, digits, dot, dash, "
+            "underscore only) with no path separators",
+            detail={"file_name": file_name},
+        )
+    suffix = Path(file_name).suffix.lower()
+    if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
+        raise ElliotError(
+            "INVALID_FILE_NAME",
+            f"unsupported file extension {suffix!r}; allowed: "
+            + ", ".join(sorted(_ALLOWED_UPLOAD_SUFFIXES)),
+            detail={"file_name": file_name},
+        )
+
+    if encoding == "base64":
+        try:
+            data = base64.b64decode(content, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ElliotError(
+                "VALIDATION_ERROR",
+                "content is not valid base64",
+            ) from exc
+    else:
+        data = content.encode("utf-8")
+
+    max_bytes = _upload_max_bytes()
+    if len(data) > max_bytes:
+        raise ElliotError(
+            "FILE_TOO_LARGE",
+            f"file exceeds {max_bytes} bytes; set ELLIOT_UPLOAD_MAX_BYTES "
+            "to raise the cap if the source is genuinely large",
+            detail={"bytes": len(data), "limit": max_bytes},
+        )
+    return data
+
+
+def _unknown_source_type_error(source_type: str) -> dict[str, str] | None:
+    """The error dict an MCP source tool returns for an unrecognized
+    ``source_type``, or None when the type is valid. Shared by
+    elliot_connect_source and elliot_discover_source so the message and shape
+    stay identical."""
+    if source_type.lower() in _TYPE_MAP:
+        return None
+    return {
+        "error": (
+            f"Unknown source_type: {source_type!r}. Valid values: {', '.join(sorted(_TYPE_MAP))}"
+        )
+    }
+
+
 def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
     @mcp.tool()
     def elliot_upload_file(
@@ -217,47 +280,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
         """
         try:
             log.info("source.upload.start", file_name=file_name, encoding=encoding)
-            if encoding not in ("text", "base64"):
-                raise ElliotError(
-                    "VALIDATION_ERROR",
-                    "encoding must be 'text' or 'base64'",
-                    detail={"encoding": encoding},
-                )
-            if not _FILENAME_RE.match(file_name):
-                raise ElliotError(
-                    "INVALID_FILE_NAME",
-                    "file_name must be a plain basename (letters, digits, dot, dash, "
-                    "underscore only) with no path separators",
-                    detail={"file_name": file_name},
-                )
-            suffix = Path(file_name).suffix.lower()
-            if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
-                raise ElliotError(
-                    "INVALID_FILE_NAME",
-                    f"unsupported file extension {suffix!r}; allowed: "
-                    + ", ".join(sorted(_ALLOWED_UPLOAD_SUFFIXES)),
-                    detail={"file_name": file_name},
-                )
-
-            if encoding == "base64":
-                try:
-                    data: bytes = base64.b64decode(content, validate=True)
-                except (ValueError, binascii.Error) as exc:
-                    raise ElliotError(
-                        "VALIDATION_ERROR",
-                        "content is not valid base64",
-                    ) from exc
-            else:
-                data = content.encode("utf-8")
-
-            max_bytes = _upload_max_bytes()
-            if len(data) > max_bytes:
-                raise ElliotError(
-                    "FILE_TOO_LARGE",
-                    f"file exceeds {max_bytes} bytes; set ELLIOT_UPLOAD_MAX_BYTES "
-                    "to raise the cap if the source is genuinely large",
-                    detail={"bytes": len(data), "limit": max_bytes},
-                )
+            data = _decode_upload(file_name, content, encoding)
 
             # safe_join guarantees the resolved destination stays under the
             # session's sources/ directory — even though _FILENAME_RE already
@@ -335,14 +358,10 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
         via the per_user OAuth flow you configured here.
         """
         try:
+            type_error = _unknown_source_type_error(source_type)
+            if type_error is not None:
+                return type_error
             key = source_type.lower()
-            if key not in _TYPE_MAP:
-                return {
-                    "error": (
-                        f"Unknown source_type: {source_type!r}. "
-                        f"Valid values: {', '.join(sorted(_TYPE_MAP))}"
-                    )
-                }
             source_id = str(uuid.uuid4())
             cfg = _build_source_config(key, config, source_id, name)
             if cfg.type != "rest" or cfg.auth is None or cfg.auth.type != "oauth2":
@@ -433,15 +452,10 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
         name: logical name used as the SQLite table prefix
         """
         try:
+            type_error = _unknown_source_type_error(source_type)
+            if type_error is not None:
+                return type_error
             key = source_type.lower()
-            if key not in _TYPE_MAP:
-                return {
-                    "error": (
-                        f"Unknown source_type: {source_type!r}. "
-                        f"Valid values: {', '.join(sorted(_TYPE_MAP))}"
-                    )
-                }
-
             source_id = str(uuid.uuid4())
             cfg = _build_source_config(key, config, source_id, name)
             secrets = session.workspace.load_secrets()

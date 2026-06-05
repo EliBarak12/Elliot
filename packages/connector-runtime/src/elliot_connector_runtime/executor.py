@@ -383,13 +383,9 @@ class ToolExecutor:
                 # Passthrough query params (forwarded from the tool call) are the
                 # base; pagination params are layered on top.
                 params: dict[str, Any] = dict(extra_params or {})
-                if pagination.strategy == "offset":
-                    params["offset"] = offset
-                    params["limit"] = pagination.page_size
-                elif pagination.strategy == "page":
-                    params["page"] = page
-                elif pagination.strategy == "cursor" and cursor:
-                    params["cursor"] = cursor
+                params.update(
+                    _pagination_request_params(pagination, offset=offset, page=page, cursor=cursor)
+                )
 
                 resp = await client.get(request_url, headers=headers, params=params or None)
                 resp.raise_for_status()
@@ -432,13 +428,7 @@ class ToolExecutor:
                         break
                     page += 1
                 elif pagination.strategy == "cursor":
-                    cursor = (
-                        envelope.get("next_cursor") if isinstance(envelope, dict) else None
-                    ) or (
-                        envelope.get(pagination.cursor_field or "cursor")
-                        if isinstance(envelope, dict)
-                        else None
-                    )
+                    cursor = _next_cursor(envelope, pagination)
                     if not cursor:
                         break
                 elif pagination.strategy == "link_header":
@@ -562,6 +552,32 @@ class ToolExecutor:
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
+
+
+def _pagination_request_params(
+    pagination: Any, *, offset: int, page: int, cursor: str | None
+) -> dict[str, Any]:
+    """Build the query params for the current page given the pagination strategy.
+
+    Layered on top of any forwarded passthrough params by the caller; cursor
+    params are only emitted once a cursor has been captured.
+    """
+    if pagination.strategy == "offset":
+        return {"offset": offset, "limit": pagination.page_size}
+    if pagination.strategy == "page":
+        return {"page": page}
+    if pagination.strategy == "cursor" and cursor:
+        return {"cursor": cursor}
+    return {}
+
+
+def _next_cursor(envelope: Any, pagination: Any) -> str | None:
+    """Read the next cursor from a response envelope, preferring ``next_cursor``
+    then the configured ``cursor_field`` (default ``cursor``). None when the
+    envelope is not a dict or carries no cursor."""
+    if not isinstance(envelope, dict):
+        return None
+    return envelope.get("next_cursor") or envelope.get(pagination.cursor_field or "cursor")
 
 
 def _parse_link_next(link_header: str) -> str | None:

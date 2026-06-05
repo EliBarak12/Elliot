@@ -18,6 +18,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { StatCard } from "@/components/ui/stat-card";
 import { useMetrics } from "@/hooks/useMetrics";
 import { httpJson } from "@/lib/http";
+import { tokenToneClass } from "@/lib/tokenRisk";
 import { cn } from "@/lib/utils";
 
 interface ToolMetric {
@@ -69,7 +70,7 @@ function tokenRiskVariant(risk: TokenEfficiencyRow["risk"]) {
 function TokenBar({ avg, max }: { avg: number; max: number }) {
   const barMax = Math.max(max, 1);
   const avgPct = Math.min((avg / barMax) * 100, 100);
-  const tone = avg > 1000 ? "bg-destructive" : avg > 300 ? "bg-warning" : "bg-success";
+  const tone = tokenToneClass(avg, "bg");
   return (
     <div className="flex items-center gap-2">
       <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
@@ -377,11 +378,7 @@ export default function MetricsPage() {
                       <td
                         className={cn(
                           "text-right py-2.5 px-5 text-xs tabular-nums font-medium",
-                          h.tokens > 1000
-                            ? "text-destructive"
-                            : h.tokens > 300
-                              ? "text-warning"
-                              : "text-success"
+                          tokenToneClass(h.tokens)
                         )}
                       >
                         {h.tokens.toLocaleString()}

@@ -15,6 +15,7 @@ from elliot_core.errors import SourceFetchError
 from elliot_core.http import SSRFError, safe_client, validate_url
 from elliot_core.redaction import redact_url
 from elliot_core.sources.envelope import extract_rows, looks_like_unextracted_envelope
+from elliot_core.sources.pagination import PageCursor, advance, page_query_params, parse_link_next
 from elliot_core.types.source import FetchResult, SourceConfig
 
 log = structlog.get_logger(__name__)
@@ -160,11 +161,6 @@ def _build_auth_query_params(config: SourceConfig, secrets: dict[str, str]) -> d
 _extract_rows = extract_rows
 
 
-def _parse_link_next(link_header: str) -> str | None:
-    m = re.search(r'<([^>]+)>;\s*rel="next"', link_header)
-    return m.group(1) if m else None
-
-
 def _more_pages_signal(data: Any, resp: httpx.Response) -> str | None:
     """Detect that the upstream response advertises more pages.
 
@@ -181,7 +177,7 @@ def _more_pages_signal(data: Any, resp: httpx.Response) -> str | None:
             if isinstance(val, str) and val:
                 return f"{key} present"
         # {"object":"list", ...} without has_more set is inconclusive; skip.
-    if _parse_link_next(resp.headers.get("link", "")):
+    if parse_link_next(resp.headers.get("link", "")):
         return 'Link header rel="next"'
     return None
 
@@ -198,10 +194,7 @@ async def fetch_endpoint(
     all_rows: list[dict[str, Any]] = []
     warnings: list[str] = []
     page_count = 0
-    offset = 0
-    page = 1
-    cursor: str | None = None
-    next_url: str | None = None
+    state = PageCursor()
     # Global ceilings: total upstream retries (FIX 4) and accumulated rows
     # (FIX 3) across the whole paginated fetch.
     retry_budget = _MAX_TOTAL_RETRIES
@@ -223,7 +216,7 @@ async def fetch_endpoint(
                 warnings.append(f"Reached max_pages limit ({pagination.max_pages})")
                 break
 
-            request_url = next_url or (config.url or "")
+            request_url = state.next_url or (config.url or "")
             # SSRF guard: validate every URL we're about to call. The initial
             # source.url comes from the connector definition; next_url comes
             # from the upstream response (e.g. rel="next") and is therefore
@@ -233,14 +226,7 @@ async def fetch_endpoint(
             except SSRFError as exc:
                 raise SourceFetchError(f"Refusing to fetch: {exc.message}") from exc
             request_params: dict[str, Any] = dict(base_params)
-
-            if pagination.strategy == "offset":
-                request_params["offset"] = offset
-                request_params["limit"] = pagination.page_size
-            elif pagination.strategy == "page":
-                request_params["page"] = page
-            elif pagination.strategy == "cursor" and cursor:
-                request_params["cursor"] = cursor
+            request_params.update(page_query_params(pagination, state))
 
             resp: httpx.Response | None = None
             for attempt in range(_MAX_RETRIES):
@@ -313,8 +299,10 @@ async def fetch_endpoint(
                         f"Fetched only the first page ({len(rows)} rows) but the response "
                         f"indicates more data is available ({signal}) and no pagination is "
                         "configured — tools will see ONLY this page. Set the source's "
-                        "'pagination' (strategy 'cursor' with cursor_field, or 'page'/'offset') "
-                        "to fetch all records."
+                        "'pagination'. For a Stripe-style API (has_more + starting_after), use: "
+                        '{"strategy":"cursor","cursor_param":"starting_after",'
+                        '"cursor_record_field":"id","has_more_field":"has_more","page_size":100}. '
+                        "For offset/page APIs use strategy 'offset' or 'page'."
                     )
             all_rows.extend(rows)
             page_count += 1
@@ -333,29 +321,9 @@ async def fetch_endpoint(
                 warnings.append(f"Reached max row cap ({row_cap}); result truncated")
                 break
 
-            if pagination.strategy == "none" or not rows:
-                break
-            elif pagination.strategy == "offset":
-                if len(rows) < pagination.page_size:
-                    break
-                offset += pagination.page_size
-            elif pagination.strategy == "page":
-                if len(rows) < pagination.page_size:
-                    break
-                page += 1
-            elif pagination.strategy == "cursor":
-                cursor = (
-                    data.get("next_cursor") or data.get(pagination.cursor_field or "cursor")
-                    if isinstance(data, dict)
-                    else None
-                )
-                if not cursor:
-                    break
-            elif pagination.strategy == "link_header":
-                next_url = _parse_link_next(resp.headers.get("link", ""))
-                if not next_url:
-                    break
-            else:
+            if not advance(
+                pagination, state, rows=rows, data=data, link_header=resp.headers.get("link", "")
+            ):
                 break
 
     return FetchResult(

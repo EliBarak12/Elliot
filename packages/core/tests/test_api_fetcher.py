@@ -11,7 +11,6 @@ from elliot_core.sources.api_fetcher import (
     _build_auth_headers,
     _build_auth_query_params,
     _extract_rows,
-    _parse_link_next,
     _resolve_secret,
     fetch_endpoint,
 )
@@ -134,6 +133,33 @@ async def test_fetch_endpoint_no_pagination_warning_when_complete():
     assert not any("more data is available" in w for w in result.warnings)
 
 
+@respx.mock
+async def test_fetch_endpoint_stripe_style_cursor_pagination():
+    # Stripe idiom: ?limit=N&starting_after=<last_id>, has_more signals the end,
+    # next cursor = last record's id. Elliot must walk all pages.
+    def responder(request):
+        after = request.url.params.get("starting_after")
+        all_ids = list(range(1, 6))  # 5 records total
+        start = all_ids.index(int(after)) + 1 if after else 0
+        page = all_ids[start : start + 2]  # page_size 2
+        has_more = (start + 2) < len(all_ids)
+        return Response(
+            200, json={"object": "list", "has_more": has_more, "data": [{"id": i} for i in page]}
+        )
+
+    respx.get("https://api.example.com/items").mock(side_effect=responder)
+    pag = PaginationConfig(
+        strategy="cursor",
+        cursor_param="starting_after",
+        cursor_record_field="id",
+        has_more_field="has_more",
+        page_size=2,
+    )
+    result = await fetch_endpoint(_source(data_path="data", pagination=pag), {})
+    assert [r["id"] for r in result.rows] == [1, 2, 3, 4, 5]
+    assert result.page_count == 3
+
+
 # ── _build_auth_query_params ──────────────────────────────────────────────────
 
 
@@ -206,16 +232,8 @@ def test_extract_rows_data_path_not_found_returns_empty():
     assert rows == []
 
 
-# ── _parse_link_next ──────────────────────────────────────────────────────────
-
-
-def test_parse_link_next_found():
-    header = '<https://api.example.com/page2>; rel="next"'
-    assert _parse_link_next(header) == "https://api.example.com/page2"
-
-
-def test_parse_link_next_not_found():
-    assert _parse_link_next('<https://api.example.com/page1>; rel="prev"') is None
+# Link-header parsing now lives in elliot_core.sources.pagination (see
+# test_pagination.py) — shared by api_fetcher and the runtime executor.
 
 
 # ── fetch_endpoint ────────────────────────────────────────────────────────────

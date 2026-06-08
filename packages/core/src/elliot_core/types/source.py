@@ -69,6 +69,14 @@ class PaginationConfig(BaseModel):
     max_pages: int = 10
     cursor_field: str | None = None  # response field that holds the next cursor
     next_url_field: str | None = None  # response field that holds the next page URL
+    # Stripe-style cursor pagination: the cursor is sent under a custom query
+    # param (e.g. ``starting_after``), the next cursor is the value of a field on
+    # the LAST returned record (e.g. ``id``), and ``has_more_field`` signals when
+    # to stop. These make the common "GET ?limit=N&starting_after=<last_id>"
+    # idiom expressible.
+    cursor_param: str = "cursor"  # query-param name the cursor is sent under
+    cursor_record_field: str | None = None  # take next cursor from last row's field
+    has_more_field: str | None = None  # response bool field; stop paginating when false
 
 
 class SourceConfig(BaseModel):

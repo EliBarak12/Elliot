@@ -11,6 +11,7 @@ from typing import Any
 import structlog
 
 from elliot_core.sources.envelope import extract_rows
+from elliot_core.sources.pagination import PageCursor, advance, page_query_params
 from elliot_core.sqlite.engine import SQLiteEngine
 from elliot_core.sqlite.flattener import flatten
 from elliot_core.tools.query_builder import build_select_sql
@@ -336,10 +337,7 @@ class ToolExecutor:
         headers = _build_auth_headers(source.auth, self._secrets) if source.auth else {}
         pagination = source.pagination
         all_rows: list[dict[str, Any]] = []
-        page = 1
-        offset = 0
-        cursor: str | None = None
-        next_url: str | None = None
+        state = PageCursor()
         pages_fetched = 0
         # FIX 3: overall accumulated-row cap so a source with huge pages can't
         # OOM the worker even before max_pages bites.
@@ -362,22 +360,17 @@ class ToolExecutor:
                 if pages_fetched >= pagination.max_pages:
                     break
 
-                request_url = next_url or url
+                request_url = state.next_url or url
                 try:
                     validate_url(request_url)
                 except SSRFError as exc:
                     raise ExecutorError(f"Refusing to fetch REST source: {exc.message}") from exc
 
                 # Passthrough query params (forwarded from the tool call) are the
-                # base; pagination params are layered on top.
+                # base; pagination params (shared engine) are layered on top so
+                # the runtime walks pages identically to design-time discovery.
                 params: dict[str, Any] = dict(extra_params or {})
-                if pagination.strategy == "offset":
-                    params["offset"] = offset
-                    params["limit"] = pagination.page_size
-                elif pagination.strategy == "page":
-                    params["page"] = page
-                elif pagination.strategy == "cursor" and cursor:
-                    params["cursor"] = cursor
+                params.update(page_query_params(pagination, state))
 
                 resp = await client.get(request_url, headers=headers, params=params or None)
                 resp.raise_for_status()
@@ -409,31 +402,13 @@ class ToolExecutor:
                         del all_rows[row_cap:]
                     break
 
-                if pagination.strategy == "none" or not rows:
-                    break
-                if pagination.strategy == "offset":
-                    if len(rows) < pagination.page_size:
-                        break
-                    offset += pagination.page_size
-                elif pagination.strategy == "page":
-                    if len(rows) < pagination.page_size:
-                        break
-                    page += 1
-                elif pagination.strategy == "cursor":
-                    cursor = (
-                        envelope.get("next_cursor") if isinstance(envelope, dict) else None
-                    ) or (
-                        envelope.get(pagination.cursor_field or "cursor")
-                        if isinstance(envelope, dict)
-                        else None
-                    )
-                    if not cursor:
-                        break
-                elif pagination.strategy == "link_header":
-                    next_url = _parse_link_next(resp.headers.get("link", ""))
-                    if not next_url:
-                        break
-                else:
+                if not advance(
+                    pagination,
+                    state,
+                    rows=rows,
+                    data=envelope,
+                    link_header=resp.headers.get("link", ""),
+                ):
                     break
 
         return all_rows
@@ -559,14 +534,6 @@ class ToolExecutor:
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
-
-
-def _parse_link_next(link_header: str) -> str | None:
-    """Return the next URL from an RFC 5988 ``Link: <url>; rel="next"`` header."""
-    import re
-
-    m = re.search(r'<([^>]+)>;\s*rel="next"', link_header or "")
-    return m.group(1) if m else None
 
 
 def _extract_table_names(sql: str) -> list[str]:

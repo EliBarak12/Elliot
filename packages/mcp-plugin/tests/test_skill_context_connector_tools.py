@@ -410,3 +410,46 @@ def test_create_skill_missing_alias_gives_clear_error(
     payload = result.get("text") or result.get("error") or ""
     assert "alias" in payload
     assert "INVALID_SKILL" in payload
+
+
+def test_create_write_tool_registers_api_mapping(mcp: FastMCP, session: ElliotSession):
+    # Agents must be able to AUTHOR a WRITE tool (api_mapping), not only READ.
+    from elliot_core.types.source import SourceConfig
+
+    session.sources["crm"] = SourceConfig(
+        id="crm", name="crm", type="rest", url="https://api.example.com/issues"
+    )
+    result = _tool(mcp, "elliot_create_write_tool")(
+        name="create_issue",
+        description="Creates a new issue with the given title.",
+        source_id="crm",
+        method="POST",
+        parameters=[{"name": "title", "type": "string", "required": True, "description": "t"}],
+        body_params=["title"],
+        category="write",
+    )
+    assert result["status"] == "created"
+    tool = session.registry.get(result["tool_id"])
+    assert tool is not None
+    assert tool.category == "WRITE"
+    assert tool.api_mapping is not None
+    assert tool.api_mapping.method == "POST"
+    assert tool.api_mapping.body_params == ["title"]
+
+
+def test_create_write_tool_rejects_undeclared_body_param(mcp: FastMCP, session: ElliotSession):
+    from elliot_core.types.source import SourceConfig
+
+    session.sources["crm"] = SourceConfig(
+        id="crm", name="crm", type="rest", url="https://api.example.com/issues"
+    )
+    result = _tool(mcp, "elliot_create_write_tool")(
+        name="bad_write",
+        description="Creates something.",
+        source_id="crm",
+        method="POST",
+        parameters=[{"name": "title", "type": "string", "required": True, "description": "t"}],
+        body_params=["title", "ghost"],  # 'ghost' not declared
+        category="write",
+    )
+    assert "error" in result and "ghost" in str(result["error"])

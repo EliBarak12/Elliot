@@ -307,6 +307,101 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
+    def elliot_create_write_tool(
+        name: str,
+        description: str,
+        source_id: str,
+        method: str,
+        parameters: list[dict],  # type: ignore[type-arg]
+        path_template: str | None = None,
+        query_params: list[str] | None = None,
+        body_params: list[str] | None = None,
+        category: str = "write",
+        body_format: str = "json",
+    ) -> dict:  # type: ignore[type-arg]
+        """Define a WRITE/ACTION tool that performs an HTTP request against a REST
+        source (create/update/delete/trigger), instead of reading a snapshot.
+
+        Use this for operations that MUTATE the upstream system — the runtime
+        sends a live ``method`` request built from the mapping below, and the
+        server gates destructive calls behind ``confirm=True``.
+
+        Args:
+            source_id: a REST source (from elliot_discover_source) whose ``url``
+                is the base endpoint.
+            method: HTTP verb — POST / PUT / PATCH / DELETE (or GET for a
+                read-style ACTION).
+            parameters: the tool's declared inputs (each {"name","type"?,
+                "required"?,"description"?,"enum"?,"default"?}).
+            path_template: optional, e.g. ``/issues/{issue_id}`` — declared
+                params named in ``{...}`` are URL-encoded and substituted.
+            query_params / body_params: names of declared parameters to send as
+                URL query params / request body fields respectively.
+            category: "write" (creates/updates/deletes) or "action" (triggers an
+                operation). The description MUST name the mutation verb
+                (Creates/Updates/Deletes/Sends) or the linter flags it.
+            body_format: "json" (default) or "form".
+        """
+        try:
+            mapped_category = _CATEGORY_MAP.get(category.lower())
+            if mapped_category not in ("WRITE", "ACTION"):
+                return {
+                    "error": (
+                        f"category must be 'write' or 'action' for a write tool, got {category!r}."
+                    )
+                }
+            source = session.sources.get(source_id)
+            if source is None:
+                return {"error": f"Source not found: {source_id}. Discover a REST source first."}
+            if source.type != "rest":
+                return {"error": f"Source '{source_id}' is type '{source.type}', not 'rest'."}
+            mu = method.upper()
+            if mu not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+                return {"error": f"Unsupported method {method!r}. Use GET/POST/PUT/PATCH/DELETE."}
+
+            tool_id = slugify_identifier(name)
+            if not is_valid_identifier(tool_id):
+                raise ElliotError(
+                    "INVALID_TOOL_NAME", f"Could not derive a valid tool id from name {name!r}."
+                )
+            declared = {p.get("name") for p in parameters}
+            unknown = [p for p in (query_params or []) + (body_params or []) if p not in declared]
+            if unknown:
+                return {
+                    "error": (
+                        f"query_params/body_params reference undeclared parameters: {unknown}. "
+                        "Declare each in 'parameters'."
+                    )
+                }
+            tool = ToolDefinition.model_validate(
+                {
+                    "id": tool_id,
+                    "name": name,
+                    "description": description,
+                    "category": mapped_category,
+                    "source_ids": [source_id],
+                    "parameters": parameters,
+                    "api_mapping": {
+                        "method": mu,
+                        "path_template": path_template,
+                        "query_params": query_params or [],
+                        "body_params": body_params or [],
+                        "body_format": body_format,
+                    },
+                }
+            )
+            session.registry.add(tool)
+            session.tool_sql.pop(tool.id, None)
+            session.save()
+            log.info("tool.created.write", tool_id=tool.id, source_id=source_id, method=mu)
+            return {"tool_id": tool.id, "status": "created", "mode": "write", "method": mu}
+        except ElliotError as exc:
+            return to_mcp_error_content(exc)
+        except Exception as exc:
+            log.error("tool.create_write.failed", error=str(exc))
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+
+    @mcp.tool()
     def elliot_update_tool(tool_id: str, patch: dict) -> dict:  # type: ignore[type-arg]
         """Partially update a tool definition (name, description, sql, parameters)."""
         try:

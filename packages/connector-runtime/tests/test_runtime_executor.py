@@ -16,6 +16,7 @@ from elliot_connector_runtime.executor import (
 from elliot_core.sqlite.engine import SQLiteEngine
 from elliot_core.sqlite.flattener import flatten
 from elliot_core.types import (
+    ApiRequestMapping,
     ConnectorConfig,
     ParameterDefinition,
     ReturnField,
@@ -172,6 +173,57 @@ async def test_executor_rest_source() -> None:
     assert len(result.rows) == 1
     assert result.rows[0]["name"] == "Whiskers"
     assert result.tool_id == "list_animals"
+
+
+@respx.mock
+async def test_executor_runs_write_tool_via_api_mapping() -> None:
+    """A WRITE tool issues the HTTP request described by api_mapping (method +
+    path_template + body params). Regression: the runtime used to fail these
+    with 'no sql or filter_groups defined'."""
+    captured = {}
+
+    def responder(request):
+        import json as _json
+
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        captured["body"] = _json.loads(request.content) if request.content else None
+        return httpx.Response(
+            201, json={"id": 7, "title": captured["body"]["title"], "status": "open"}
+        )
+
+    respx.post("https://api.example.com/issues").mock(side_effect=responder)
+    connector = ConnectorConfig(
+        name="Tracker",
+        slug="tracker",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="tracker", name="Tracker", type="rest", url="https://api.example.com/issues"
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="create_issue",
+                name="Create issue",
+                description="Creates a new issue.",
+                category="WRITE",
+                source_ids=["tracker"],
+                parameters=[
+                    ParameterDefinition(
+                        name="title", type="string", required=True, description="issue title"
+                    )
+                ],
+                api_mapping=ApiRequestMapping(method="POST", body_params=["title"]),
+            )
+        ],
+        skills=[],
+    )
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(connector.tools[0], {"title": "Fix login"})
+    assert captured["method"] == "POST"
+    assert captured["body"] == {"title": "Fix login"}
+    assert result.rows[0]["id"] == 7
 
 
 @respx.mock

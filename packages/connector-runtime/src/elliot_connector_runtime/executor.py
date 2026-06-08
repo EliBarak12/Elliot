@@ -135,6 +135,12 @@ class ToolExecutor:
         if tool.category == "READ" and tool.rest_query_params:
             return await self._execute_passthrough(tool, arguments)
 
+        # WRITE / ACTION: send an HTTP request built from api_mapping. The
+        # server layer already gated this behind confirm=True for destructive
+        # categories; here we just perform the call.
+        if tool.category in ("WRITE", "ACTION"):
+            return await self._execute_write(tool, arguments)
+
         # Determine SQL: prefer explicit sql, fall back to build_select_sql for filter_groups tools
         if tool.sql:
             # Even connector-supplied SQL must be a single SELECT/CTE — a
@@ -475,6 +481,82 @@ class ToolExecutor:
             row_count=len(result.rows),
         )
         return self._capped_result(tool.id, result.rows)
+
+    async def _execute_write(
+        self,
+        tool: ToolDefinition,
+        arguments: dict[str, Any],
+    ) -> QueryResult:
+        """Execute a WRITE/ACTION tool by issuing the HTTP request described by
+        ``tool.api_mapping`` (method, path_template, query/body params) through
+        the SSRF-safe client. Confirmation for destructive categories is
+        enforced by the server layer before this runs.
+        """
+        from urllib.parse import quote, urlsplit
+
+        from elliot_core.http import SSRFError, safe_client, validate_url
+
+        mapping = tool.api_mapping
+        if mapping is None:
+            raise ExecutorError(f"{tool.category} tool {tool.id!r} has no api_mapping")
+        if not tool.source_ids:
+            raise ExecutorError(f"{tool.category} tool {tool.id!r} has no source_ids")
+        source = self._sources.get(tool.source_ids[0])
+        if source is None or source.type != "rest":
+            raise ExecutorError(f"{tool.category} tool {tool.id!r} needs a REST source")
+
+        # Apply declared-parameter defaults (an omitted optional arg arrives as
+        # None from MCP), then drop unset params so they aren't sent as null.
+        effective = {
+            p.name: (arguments.get(p.name) if arguments.get(p.name) is not None else p.default)
+            for p in tool.parameters
+        }
+        effective = {k: v for k, v in effective.items() if v is not None}
+
+        base = (source.url or "").rstrip("/")
+        path = mapping.path_template or ""
+        declared = {p.name for p in tool.parameters}
+        # Only substitute declared placeholders, URL-encoded (no path escape).
+        for name, val in effective.items():
+            if name in declared:
+                path = path.replace(f"{{{name}}}", quote(str(val), safe=""))
+        url = base + path
+
+        try:
+            ips = validate_url(url)
+        except SSRFError as exc:
+            raise ExecutorError(f"Refusing to call REST source: {exc.message}") from exc
+        host = urlsplit(url).hostname or ""
+        pinned_hosts = {host: ips[0]} if (host and ips) else None
+
+        query = {k: effective[k] for k in mapping.query_params if k in effective}
+        body = {k: effective[k] for k in mapping.body_params if k in effective}
+        headers = _build_auth_headers(source.auth, self._secrets) if source.auth else {}
+
+        async with safe_client(
+            timeout=source.timeout_ms / 1000, pinned_hosts=pinned_hosts
+        ) as client:
+            resp = await client.request(
+                method=mapping.method,
+                url=url,
+                params=query or None,
+                json=body if mapping.body_format == "json" else None,
+                data=body if mapping.body_format == "form" else None,
+                headers=headers,
+            )
+        if resp.is_error:
+            raise ExecutorError(
+                f"{tool.category} tool {tool.id!r}: upstream returned HTTP {resp.status_code}"
+            )
+        try:
+            data = resp.json()
+        except Exception:
+            data = {"status_code": resp.status_code, "body": resp.text[:500]}
+        rows = data if isinstance(data, list) else [data]
+        log.info(
+            "tool.write.executed", tool_id=tool.id, method=mapping.method, status=resp.status_code
+        )
+        return self._capped_result(tool.id, rows)
 
     async def _execute_passthrough(
         self,

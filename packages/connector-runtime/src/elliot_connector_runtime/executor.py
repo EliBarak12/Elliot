@@ -53,6 +53,30 @@ def max_result_rows() -> int:
         return _DEFAULT_MAX_RESULT_ROWS
 
 
+def _bind_sql_params(tool: ToolDefinition, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Bind a tool's declared parameters to its SQL, applying each parameter's
+    ``default`` when the caller omitted it.
+
+    Without the default fallback an optional parameter such as ``limit`` (used
+    as ``LIMIT :limit``) binds to NULL when an agent calls the tool without it,
+    and SQLite raises ``datatype mismatch`` instead of using the documented
+    default. Agents routinely call a tool with only its required args, so this
+    is the common "list top N (default N)" path.
+
+    Note the MCP layer surfaces an *omitted* optional parameter as an explicit
+    ``None`` in ``arguments`` (the property is declared in the input schema),
+    so a plain ``arguments.get(name, default)`` would still bind ``None`` — the
+    default must also replace an explicit ``None``.
+    """
+    bound: dict[str, Any] = {}
+    for p in tool.parameters:
+        val = arguments.get(p.name)
+        if val is None:
+            val = p.default
+        bound[p.name] = val
+    return bound
+
+
 class ToolExecutor:
     """
     Executes a ToolDefinition against the connector's live data sources.
@@ -119,7 +143,7 @@ class ToolExecutor:
             if not ok:
                 raise ExecutorError(f"Tool {tool.id!r} has invalid SQL: {reason}")
             sql: str = tool.sql
-            params: dict[str, Any] = {p.name: arguments.get(p.name) for p in tool.parameters}
+            params: dict[str, Any] = _bind_sql_params(tool, arguments)
         elif tool.filter_groups or tool.return_fields:
             sql, params = build_select_sql(tool, arguments)
         else:
@@ -517,9 +541,7 @@ class ToolExecutor:
                     if not ok:
                         raise ExecutorError(f"Tool {tool.id!r} has invalid SQL: {reason}")
                     sql = tool.sql
-                    params: dict[str, Any] = {
-                        p.name: arguments.get(p.name) for p in tool.parameters
-                    }
+                    params: dict[str, Any] = _bind_sql_params(tool, arguments)
                 else:
                     sql, params = build_select_sql(tool, arguments)
                 rows = engine.query(sql, params)

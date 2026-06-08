@@ -9,9 +9,12 @@ import respx
 from elliot_connector_runtime.executor import (
     ExecutorError,
     ToolExecutor,
+    _bind_sql_params,
     _extract_table_names,
     _interpolate,
 )
+from elliot_core.sqlite.engine import SQLiteEngine
+from elliot_core.sqlite.flattener import flatten
 from elliot_core.types import (
     ConnectorConfig,
     ParameterDefinition,
@@ -47,6 +50,70 @@ CONNECTOR = ConnectorConfig(
     ],
     skills=[],
 )
+
+
+def test_bind_sql_params_applies_default_when_omitted_or_none() -> None:
+    # The MCP layer surfaces an omitted optional param as an explicit None;
+    # both that and a missing key must fall back to the declared default so
+    # `LIMIT :limit` never binds NULL.
+    tool = ToolDefinition(
+        id="t",
+        name="t",
+        description="d",
+        category="READ",
+        sql="SELECT * FROM x ORDER BY p DESC LIMIT :limit",
+        parameters=[
+            ParameterDefinition(
+                name="limit", type="integer", required=False, description="n", default=5
+            ),
+        ],
+    )
+    assert _bind_sql_params(tool, {}) == {"limit": 5}  # key absent
+    assert _bind_sql_params(tool, {"limit": None}) == {"limit": 5}  # explicit None
+    assert _bind_sql_params(tool, {"limit": 2}) == {"limit": 2}  # supplied wins
+
+
+@pytest.mark.asyncio
+async def test_executor_applies_limit_default_when_agent_omits_it() -> None:
+    # End-to-end through execute(): an agent that calls a "top N" tool with no
+    # args must get the default N rows, not a datatype-mismatch error.
+    connector = ConnectorConfig(
+        name="Shop",
+        slug="shop",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="prods",
+                name="prods",
+                type="rest",
+                url="https://api.example.com/p",
+                table_name="prods",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="top_priced",
+                name="top",
+                description="top priced",
+                category="READ",
+                sql='SELECT id, price FROM "prods" ORDER BY price DESC LIMIT :limit',
+                parameters=[
+                    ParameterDefinition(
+                        name="limit", type="integer", required=False, description="n", default=5
+                    )
+                ],
+            )
+        ],
+        skills=[],
+    )
+    engine = SQLiteEngine()
+    engine.load_result(flatten([{"id": i, "price": i * 1.5} for i in range(20)], "prods"))
+    executor = ToolExecutor(connector, secrets={}, engine=engine)
+    tool = connector.tools[0]
+    omitted = await executor.execute(tool, {})
+    assert len(omitted.rows) == 5
+    explicit = await executor.execute(tool, {"limit": 3})
+    assert len(explicit.rows) == 3
 
 
 def test_extract_table_names() -> None:

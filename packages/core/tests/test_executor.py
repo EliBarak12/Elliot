@@ -193,6 +193,20 @@ def test_coerce_and_validate_uses_default():
     assert result["limit"] == 10
 
 
+def test_coerce_and_validate_explicit_none_uses_default():
+    # The MCP layer surfaces an omitted optional parameter as an explicit
+    # None; it must still fall back to the declared default rather than bind
+    # NULL (which makes `LIMIT :limit` raise a datatype mismatch).
+    tool = _make_read_tool(
+        params=[
+            ParameterDefinition(
+                name="limit", type="integer", required=False, description="Limit", default=10
+            )
+        ]
+    )
+    assert _coerce_and_validate(tool, {"limit": None})["limit"] == 10
+
+
 def test_coerce_and_validate_skips_none_optional():
     tool = _make_read_tool(
         params=[ParameterDefinition(name="q", type="string", required=False, description="Q")]

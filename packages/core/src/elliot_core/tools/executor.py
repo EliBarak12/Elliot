@@ -289,7 +289,14 @@ def _coerce_and_validate(tool: ToolDefinition, params: dict[str, Any]) -> dict[s
 
     result: dict[str, Any] = {}
     for p in tool.parameters:
-        val = params.get(p.name, p.default)
+        # An omitted optional parameter arrives as an explicit ``None`` from the
+        # MCP layer (the property is declared in the input schema), so fall back
+        # to the declared default for both the missing-key and explicit-None
+        # cases — otherwise ``LIMIT :limit`` binds NULL and SQLite raises a
+        # "datatype mismatch".
+        val = params.get(p.name)
+        if val is None:
+            val = p.default
         if val is None and p.required:
             raise ElliotError("MISSING_PARAM", f"Required parameter missing: '{p.name}'")
         if val is not None:

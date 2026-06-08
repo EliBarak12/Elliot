@@ -411,3 +411,12 @@ was half-wired and broken end to end:
    derives api_mapping).
 - Tests: runtime executes a POST write (respx); authoring registers api_mapping + rejects undeclared
   body params. Full suite 1154 green.
+
+### [WRITE] Real-agent end-to-end mutation loop — VERIFIED
+A real builder agent discovered a writable issue API, created a READ tool (list_issues) AND a WRITE
+tool (create_issue, via the new elliot_create_write_tool), built + deployed the connector. A
+separate real consumer agent then called create_issue through the deployed connector to perform an
+actual mutation. Verified against upstream API state: total 0 -> 1, with the exact issue created
+("Payments webhook retries failing", HIGH, open). The deployed runtime executed the write
+(_execute_write), the server's confirm gate was satisfied, and the agent confirmed via list_issues.
+WRITE/ACTION is now functional and demonstrated end to end with real agents — not just unit-tested.

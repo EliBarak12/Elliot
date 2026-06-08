@@ -165,6 +165,27 @@ def _parse_link_next(link_header: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _more_pages_signal(data: Any, resp: httpx.Response) -> str | None:
+    """Detect that the upstream response advertises more pages.
+
+    Returns a short human description of the signal (for a warning) or None.
+    Used to warn when pagination is NOT configured but the API clearly has
+    more data — otherwise a connector silently ships only the first page
+    (e.g. Stripe's default 10-of-N), and every tool computes on partial data.
+    """
+    if isinstance(data, dict):
+        if data.get("has_more") is True:
+            return "has_more=true"
+        for key in ("next_cursor", "next_url", "next"):
+            val = data.get(key)
+            if isinstance(val, str) and val:
+                return f"{key} present"
+        # {"object":"list", ...} without has_more set is inconclusive; skip.
+    if _parse_link_next(resp.headers.get("link", "")):
+        return 'Link header rel="next"'
+    return None
+
+
 async def fetch_endpoint(
     config: SourceConfig,
     secrets: dict[str, str],
@@ -281,6 +302,20 @@ async def fetch_endpoint(
                     "response as a single row. Set the source 'data_path' to the records array "
                     "(e.g. 'result.results' for CKAN-style APIs)."
                 )
+            # Warn when the API clearly has more pages but no pagination is
+            # configured — otherwise the connector silently ships only the first
+            # page and every tool computes on partial data (e.g. Stripe's
+            # default 10-of-N). Surfaced so the builder sets `pagination`.
+            if page_count == 0 and pagination.strategy == "none":
+                signal = _more_pages_signal(data, resp)
+                if signal:
+                    warnings.append(
+                        f"Fetched only the first page ({len(rows)} rows) but the response "
+                        f"indicates more data is available ({signal}) and no pagination is "
+                        "configured — tools will see ONLY this page. Set the source's "
+                        "'pagination' (strategy 'cursor' with cursor_field, or 'page'/'offset') "
+                        "to fetch all records."
+                    )
             all_rows.extend(rows)
             page_count += 1
 

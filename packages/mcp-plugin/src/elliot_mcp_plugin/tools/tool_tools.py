@@ -141,6 +141,11 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
     ) -> dict:  # type: ignore[type-arg]
         """Define a new SQL-backed business tool and register it in the session.
 
+        ``category`` is the tool's ACCESS TYPE, not a business domain. It must be
+        one of: ``read`` (returns rows, no side effects), ``aggregate`` (counts /
+        sums / group-bys), ``write`` (creates/updates), or ``action`` (triggers an
+        operation). Do NOT pass a domain label like "Customers" or "Revenue".
+
         SQL conventions (the runtime executes against in-memory SQLite):
           * Reference tool parameters with a colon prefix — ``WHERE plan = :plan`` —
             and declare each in ``parameters``. ``{{ plan }}`` / Jinja syntax is

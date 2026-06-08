@@ -110,6 +110,30 @@ async def test_fetch_endpoint_uses_auth_token_override():
     assert route.calls.last.request.headers["Authorization"] == "Bearer live-token"
 
 
+@respx.mock
+async def test_fetch_endpoint_warns_when_more_pages_but_no_pagination():
+    # Stripe-style envelope with has_more=true and NO pagination configured:
+    # the connector would silently see only the first page, so we must warn.
+    respx.get("https://api.example.com/items").mock(
+        return_value=Response(
+            200, json={"object": "list", "has_more": True, "data": [{"id": 1}, {"id": 2}]}
+        )
+    )
+    result = await fetch_endpoint(_source(data_path="data"), {})
+    assert len(result.rows) == 2
+    assert any("more data is available" in w and "has_more=true" in w for w in result.warnings)
+
+
+@respx.mock
+async def test_fetch_endpoint_no_pagination_warning_when_complete():
+    # has_more=false → no warning (the page is the whole dataset).
+    respx.get("https://api.example.com/items").mock(
+        return_value=Response(200, json={"object": "list", "has_more": False, "data": [{"id": 1}]})
+    )
+    result = await fetch_endpoint(_source(data_path="data"), {})
+    assert not any("more data is available" in w for w in result.warnings)
+
+
 # ── _build_auth_query_params ──────────────────────────────────────────────────
 
 

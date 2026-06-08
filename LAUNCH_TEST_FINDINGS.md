@@ -206,3 +206,42 @@ Coverage proven end-to-end: 17 real-API build scenarios, 10 connectors used by a
 tasks), 3 multi-step tool chains, full observability loop, Studio UI render (real browser),
 negative/security paths, secret hygiene, and the eval/quality agentic features. Mandatory suite
 green throughout (1141 tests).
+
+---
+
+## REAL AGENTS (not scripts) — builder agents build, consumer agents use
+
+The earlier harnesses spoke Elliot's MCP protocol exactly like an agent but chose tools/params with
+heuristic Python. This section uses **real Claude agents** (the authenticated `claude` CLI with
+`--mcp-config`, reasoning autonomously and calling Elliot's MCP tools).
+
+### LOCAL Elliot
+- Booted the plugin (builder MCP at :3000) in a clean workspace.
+- **Builder agent** (real `claude -p`, MCP=elliot): given a product-engineer prompt, it discovered
+  3 jsonplaceholder sources (posts/users/comments), created 3 verb-first tools
+  (list_posts_by_user, get_post_comments, look_up_user), built + exported + started the runtime at
+  http://localhost:3001/mcp/ — all via Elliot MCP tools, its own decisions.
+- **Consumer agent** (real `claude -p`, MCP=the deployed runtime): given only natural-language
+  questions, it inspected the tools and answered correctly (user 1 → 10 posts; username 'Bret' →
+  Leanne Graham / Sincere@april.biz / Romaguera-Crona; post 1 → 5 comments).
+- Runtime observability recorded the consumer agent's session + per-tool token/latency metrics.
+
+### ELLIOT CLOUD (multi-tenant, apps/api)
+- Ran cloud venv against the FIXED local elliot packages; `pytest` → 107 passed.
+- Booted the Cloud API (dev-mode auth via X-Dev-Email, sqlite). Dev user auto-provisioned an org.
+- Issued a builder token (POST /api/me/builder-tokens) → Cloud builder MCP at /b/mcp.
+- **Builder agent** (real `claude -p`, MCP=Cloud /b/mcp with Bearer token): discovered
+  restcountries/region/europe (53 countries), created 2 tools (list_most_populous_countries with
+  optional limit, lookup_country_by_name), built the connector, and **published it to the cloud**
+  via the `elliot_cloud_publish` MCP tool → public URL http://localhost:8000/c/<id>/mcp/.
+- Minted a per-connector consumer API key (POST .../keys).
+- **Consumer agent** (real `claude -p`, MCP=the published Cloud URL + X-Elliot-Key): answered with
+  live data — top-5 populous European countries (Russia, Germany, UK, France, Italy) and France →
+  Paris / 66,351,959. (The "top 5" call exercised the optional-limit tool — i.e. the BUG-3 fix on
+  the cloud runtime.)
+- Security verified: published URL with no key → 401, wrong key → 401, cross-tenant GET → 404
+  (does not reveal existence). Cloud observability recorded 2 tool calls with per-tool metrics.
+
+Conclusion: real agents BUILD connectors and real (separate) agents USE them — proven end-to-end on
+both local Elliot and the multi-tenant Elliot Cloud, including publish, per-connector API-key auth,
+tenant isolation, and observability.

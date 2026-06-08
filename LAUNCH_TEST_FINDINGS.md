@@ -334,3 +334,32 @@ agent on the same Stripe-like API:
 A consumer agent against the v2 published Cloud connector produced a correct full-data revenue
 report. Loop owned end-to-end on Cloud: build → found issue → fixed (general, template) → rebuilt →
 measurably better → consumed. ✓
+
+---
+
+## ITERATION 2 (harder shape): page-paginated issue-tracker on Elliot Cloud
+
+New realistic product API (different shape from billing): a Linear/Jira-like tracker — PAGE-based
+pagination (?page=&per_page=, {pagination:{total_pages}}), 420 issues, deeply nested
+arrays-of-objects (issue.comments[] -> child table). Drove the full real-agent loop on Cloud.
+
+### Gaps found + fixed (general, shared engine — both discovery & runtime)
+1. [FIXED] `page` strategy sent only ?page=N, never a page-size param, so the API used its own
+   default page size; when it differed from `page_size` the short-page check stopped after page 1
+   (silent ~20-of-420). Added `PaginationConfig.page_size_param` (default "limit"); page/offset/cursor
+   now send the size under that name. (Direct verify: page+per_page fetched all 420 in 5 pages.)
+2. [FIXED] The "more pages" warning only knew cursor/has_more/Link; page-numbered envelopes
+   (total_pages>1, incl. nested under pagination/meta) produced no warning. Extended detection +
+   the suggested config now includes a page-strategy example.
+3. [FIXED] Discoverability: an agent that configures pagination preemptively never hits the warning,
+   so page_size_param + the "page_size is the last-page sentinel" semantics were invisible.
+   Documented the full pagination config (every strategy + page_size_param + the sentinel note) in
+   the `elliot_discover_source` tool description — at the point of use.
+
+### Loop result (real agent, Cloud, same prompt)
+- v1 (before docs): 106 turns / 14 errors, page_size_param used 0×, hit the page_size footgun, still
+  published all 420 via a workaround.
+- v2 (after docs): **39 turns / 0 errors**, page_size_param used correctly, published; published Cloud
+  connector serves complete data; a consumer agent reported 100 open high/urgent issues across the
+  full 420-issue dataset.
+Build → find issue → fix (engine + docs) → rebuild → 106→39 turns, 14→0 errors → consume. ✓

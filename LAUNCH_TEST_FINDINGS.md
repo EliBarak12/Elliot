@@ -390,3 +390,24 @@ not be built. Real-agent build v1: 15× 401, published 0.
 
 This is the first bug located in the Cloud repo itself (vs OSS) — exactly the kind only the Cloud
 auth/secrets path surfaces, found by running real agents against an authed API on Cloud.
+
+---
+
+## ITERATION 4 (WRITE/ACTION): completing the mutate path end to end
+
+Every connector so far was read-only. Real products need agents to *act* (create/update). WRITE/ACTION
+was half-wired and broken end to end:
+
+### Gaps found + fixed
+1. [FIXED] The deployed connector-runtime executor had NO write branch — a WRITE tool failed with the
+   cryptic "no sql or filter_groups defined", even though the runtime *server* already gates these
+   calls behind confirm=True (so writes were clearly intended). Added `_execute_write` to the runtime
+   executor: builds the HTTP request from `api_mapping` (method, path_template with URL-encoded
+   declared-param substitution, query/body params, body_format) via the SSRF-safe pinned client,
+   applying parameter defaults. Confirm gate unchanged. Verified live: POST created the record.
+2. [FIXED] No builder tool authored WRITE tools (`create_tool` is SQL/READ; `create_rest_tool`
+   hardcodes READ) — so agents couldn't create one despite principle #5. Added
+   `elliot_create_write_tool` (validates method + REST source + that query/body params are declared;
+   derives api_mapping).
+- Tests: runtime executes a POST write (respx); authoring registers api_mapping + rejects undeclared
+  body params. Full suite 1154 green.

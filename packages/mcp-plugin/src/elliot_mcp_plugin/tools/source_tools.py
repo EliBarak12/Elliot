@@ -430,6 +430,24 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
               e.g. "products" for {"total":..,"products":[...]}. Usually
               auto-detected; pass it explicitly when the rows are nested under
               a non-obvious key or there are several arrays.
+            - pagination — REST list endpoints usually return ONE page; without
+              this the connector silently sees only the first page. Shapes:
+                * page-numbered (?page=N&per_page=M, {pagination:{total_pages}}):
+                  {"strategy":"page","page_size":100,"page_size_param":"per_page",
+                   "max_pages":50}
+                * offset (?offset=&limit=):
+                  {"strategy":"offset","page_size":100,"page_size_param":"limit"}
+                * cursor, Stripe-style (?limit=&starting_after=<last id>, has_more):
+                  {"strategy":"cursor","page_size":100,"cursor_param":"starting_after",
+                   "cursor_record_field":"id","has_more_field":"has_more"}
+                * cursor, top-level token: {"strategy":"cursor","cursor_field":"next_cursor"}
+                * Link header: {"strategy":"link_header"}
+              IMPORTANT: `page_size` is BOTH the size requested (sent under
+              `page_size_param`, default "limit") AND the last-page sentinel —
+              paging stops when a page returns fewer than `page_size` rows. So set
+              `page_size_param` to the API's real page-size param and make
+              `page_size` match the size the API actually returns, or paging halts
+              after page 1. Cap total fetch with `max_pages`.
         name: logical name used as the SQLite table prefix
         """
         try:

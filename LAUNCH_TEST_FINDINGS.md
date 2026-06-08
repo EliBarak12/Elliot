@@ -162,3 +162,14 @@ aggregates, filters, and single-object endpoints. All pass.
 During one run, coingecko's free API rate-limited at runtime materialization → TABLE_NOT_FOUND.
 The runtime surfaced a clear, actionable error and stayed healthy. Re-running (or a paid key)
 resolves it. Noted so it isn't mistaken for a product defect.
+
+### [CHAINS] Multi-step agent chains — 3/3 PASS (tools compose)
+Tested whether an agent can chain tools: call A, take a value from A's result, feed it to B.
+This only works if A's output exposes the field B needs (principle #2 — results shaped for the
+next step). All three real chains pass:
+- c01: find_user_by_name("Leanne Graham") -> id=1 -> list_posts_by_author(1) -> 10 posts, all userid=1.
+- c02: product_categories() -> "beauty" -> products_in_category("beauty") -> 5 products, all beauty.
+- c10: photo_count_per_album() -> busiest album 100 -> photos_in_album(100) -> 50 photos, all album 100.
+Confirms tool outputs carry the ids/keys needed to drive the next call. (Note: the harness's
+heuristic agent fills params by name then by type; chains are written so the needed value can only
+come from the previous step, making each a real composition test.)

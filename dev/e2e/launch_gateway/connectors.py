@@ -129,6 +129,19 @@ def build_connectors() -> list[Connector]:
                     "Return the directory of all users with their name and email.",
                     'SELECT id, name, email FROM "c01_users" ORDER BY id',
                 ),
+                Tool(
+                    "find_user_by_name",
+                    "Find a single user by their full name, returning their id and email.",
+                    'SELECT id, name, email FROM "c01_users" WHERE name = :name',
+                    [
+                        {
+                            "name": "name",
+                            "type": "string",
+                            "required": True,
+                            "description": "the user's full name",
+                        }
+                    ],
+                ),
             ],
             tasks=[
                 Task(
@@ -178,6 +191,11 @@ def build_connectors() -> list[Connector]:
                             "description": "product category slug, e.g. 'smartphones'",
                         }
                     ],
+                ),
+                Tool(
+                    "product_categories",
+                    "List the distinct product categories available in the catalog.",
+                    'SELECT DISTINCT category FROM "c02_products" ORDER BY category',
                 ),
             ],
             tasks=[

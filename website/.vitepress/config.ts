@@ -184,7 +184,8 @@ export default defineConfig({
     },
 
     footer: {
-      message: "Released under the MIT License.",
+      message:
+        'Released under the MIT License. <a href="/Elliot/legal/privacy">Privacy</a> · <a href="/Elliot/legal/terms">Terms</a>',
       copyright: "© 2026 Elliot — built for the agentic web.",
     },
 

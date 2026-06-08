@@ -363,3 +363,30 @@ arrays-of-objects (issue.comments[] -> child table). Drove the full real-agent l
   connector serves complete data; a consumer agent reported 100 open high/urgent issues across the
   full 420-issue dataset.
 Build → find issue → fix (engine + docs) → rebuild → 106→39 turns, 14→0 errors → consume. ✓
+
+---
+
+## ITERATION 3 (Cloud auth/secrets): first real CLOUD-repo bug found & fixed
+
+New realistic product API: an authenticated CRM (requires `X-API-Key`; 401 without). Drove the
+Cloud secure-secrets flow: founder stores the key in the per-org vault, then a real agent builds
+the connector referencing `{{ env:CRM_API_KEY }}` (never pasting the literal key), publishes, and
+consumer agents use it.
+
+### [CLOUD-BUG — FIXED] Builder discovery didn't resolve org vault secrets (HIGH)
+The Cloud builder's `elliot_discover_source` resolved `{{ env:NAME }}` only from the process
+environment, NOT from the per-org vault where the tenant stored the credential. So the intended
+secure flow was broken: discovery against an auth-gated API returned 401 and the connector could
+not be built. Real-agent build v1: 15× 401, published 0.
+- Fix (elliot-cloud- repo, `runtime/builder_instances._inject_org_secrets`): the builder session
+  now layers the user's org vault secrets onto `session.workspace.load_secrets()` — in memory only
+  (never written to the builder workspace on disk), vault wins, resolved lazily so a secret added
+  after the builder was cached is still picked up. Discovery + re-materialization now authenticate
+  with the vault credential; the `{{ env:NAME }}` the agent references is the same one the runtime
+  resolves at call time. Regression test added (108 cloud tests pass).
+- Verified: real-agent build v2 — 0 errors, published; consumer agent read the full pipeline
+  ($5.36M across 120 deals, $725K won) through the runtime (which resolves the vault secret per
+  request). Build→fix→rebuild→consume loop owned on Cloud.
+
+This is the first bug located in the Cloud repo itself (vs OSS) — exactly the kind only the Cloud
+auth/secrets path surfaces, found by running real agents against an authed API on Cloud.

@@ -27,12 +27,16 @@ The hard requirements for a remote MCP connector. Elliot's hosted backend
 | `WWW-Authenticate` header on 401 pointing at the metadata | ✅ | `_send_unauthorized_for_oauth` in `runtime/asgi.py` |
 | Discovery documents readable cross-origin (`Access-Control-Allow-Origin: *`) | ✅ | `_public_metadata` in `routers/oauth.py` |
 | Per-user identity, revocable grants | ✅ | `scope: per_user`, `/api/me/oauth-grants` |
-| Privacy policy + Terms of Service URLs | ⬜ **publish before submitting** | see §4 |
+| Privacy policy + Terms of Service URLs | ✅ drafted (have counsel review) | `website/legal/privacy.md`, `website/legal/terms.md` |
 | Support contact | ✅ | barak3656@gmail.com / GitHub Security Advisories |
 | Verb-first, typed tool descriptions sized for context | ✅ | enforced by the connector linter (five principles) |
 
-> **Open item before submission:** publish a privacy policy and terms-of-service
-> page at stable URLs (§4) and link them in the connector's dashboard listing.
+> **Open item before submission:** have counsel review the drafted privacy
+> policy and terms (`website/legal/`), then confirm they publish to their stable
+> URLs once the docs site deploys:
+> - https://elibarak12.github.io/Elliot/legal/privacy
+> - https://elibarak12.github.io/Elliot/legal/terms
+>
 > Everything else in the table is already shipping.
 
 ### Not yet implemented (decide before submitting)
@@ -95,16 +99,18 @@ Build, deploy, and observe agent-ready MCP tools for any API or database.
 
 ## 4. Required legal/support pages
 
-Publish these at stable URLs and reference them in the submission:
+These now live in the docs site (`website/legal/`) and publish at:
 
-- **Privacy policy** — what's collected (audit log fields), retention, deletion,
-  sub-processors, contact.
-- **Terms of service** — acceptable use, availability, liability.
+- **Privacy policy** — https://elibarak12.github.io/Elliot/legal/privacy
+  (what's collected — audit-log fields, retention, deletion, sub-processors,
+  contact).
+- **Terms of service** — https://elibarak12.github.io/Elliot/legal/terms
+  (acceptable use, availability, liability).
 - **Support** — barak3656@gmail.com and the GitHub Security Advisories link in
   `SECURITY.md` for vulnerability reports.
 
-A good home for these is the docs site (`website/`) so they live alongside the
-rest of the product documentation.
+Both are drafts written against Elliot's actual data handling — have legal
+counsel review them before the submission.
 
 ---
 

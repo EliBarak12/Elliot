@@ -294,3 +294,33 @@ NOT an Elliot defect: the server's onboarding instructions ALREADY tell the agen
 is correctly served as a prompt (`prompts/get name=getting_started`). The agent guessed a URI instead of
 listing. Adding alias resources to match guesses would be a one-use-case patch for a non-bug, so —
 consistent with the "proper fix, not patch" standard — no code change was made.
+
+---
+
+## ELLIOT CLOUD: full real-agent loop with the OSS fixes (build → publish → consume)
+
+Ran the same Stripe-like billing scenario on the multi-tenant Cloud platform (apps/api), with the
+Cloud venv using the FIXED local OSS packages (editable). Restarted the Cloud API to load the fixes
++ ELLIOT_SSRF_ALLOW_PRIVATE so it could reach the local billing API.
+
+- Dev-mode org bootstrapped; issued a builder token; **real builder agent** connected to Cloud
+  `/b/mcp` and built the "Billing API" connector, configured Stripe cursor pagination
+  (cursor_param/cursor_record_field/has_more_field), and **published** it via `elliot_cloud_publish`
+  → public URL `http://localhost:8000/c/<id>/mcp/`. (0 category errors, 0 pagination-config
+  rejections — the OSS fixes carried over to Cloud.)
+- Minted a per-connector API key. Verified the **published Cloud connector serves COMPLETE data**
+  through the multi-tenant runtime: count_active_subscribers returns full per-tier aggregates
+  (42 scale + 31 enterprise + 24 growth + ...), not a 10-row first page. => the shared pagination
+  engine works on Cloud.
+- **3 real consumer agents** (finance/support/ops) against the PUBLISHED Cloud URL + API key — all
+  succeeded: $118,704 collected / $5,615 write-off exposure / 28 delinquent (finance); per-customer
+  invoice drill-down (support); 114 active subs / 15 past_due / expired-card recovery (ops).
+- Cloud per-connector observability: 11 calls, 0.0 error_rate, 33ms avg, per-tool breakdown.
+
+### [CLOUD-FIX] cursor_record_field not discoverable upfront → fixed in the template
+The Cloud builder agent took many retries (tried cursor_field, cursor_param, JMESPath) before the
+post-fetch warning revealed cursor_record_field. Proper, general fix (not a use-case patch): the
+`paginated-rest` connector template now demonstrates BOTH cursor idioms — top-level `cursor_field`
+AND Stripe-style `cursor_param`/`cursor_record_field`/`has_more_field` — so the fields are
+discoverable from the reference material agents read (resources/read
+elliot://templates/paginated-rest), before any failed fetch.

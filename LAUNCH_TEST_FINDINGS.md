@@ -185,3 +185,24 @@ consumer agents call its tools, then screenshots all Studio pages with real data
 - Agent Console / Tools / Connector / Sources / Skills all render the agent-built state.
 Conclusion: the UI surfaces everything an agent builds and does — confirmed visually, not just at
 the data layer. Screenshots saved under dev/e2e/launch_gateway/screenshots/ (gitignored).
+
+### [SEC+AGENTIC] Secret hygiene + agentic build-loop — 7/7 PASS
+- Auth source fetched via `{{ env:REVIEWS_TOKEN }}` resolution (rows=5).
+- LAUNCH-CRITICAL: exported connector keeps the `{{ env:VAR }}` template and does NOT contain the
+  resolved secret value — connector files are safe to commit (no key leak).
+- quality_scan: well-formed tool 100.0 vs deliberately weak tool ("data"/"get data"/SELECT *) 80.0,
+  overall 90.0 with the weak tool flagged — the quality differentiator works.
+- run_eval: suite executes against live tools, score 100, 1 passed.
+
+---
+
+## SUMMARY (launch gateway)
+3 real bugs found and FIXED (all with regression tests, all pushed):
+- BUG-1 (HIGH): deep-nesting INVALID_IDENTIFIER crash in discovery — flattener now bounds identifiers.
+- BUG-2 (MED): build_connector silently built empty connector for unknown tool_ids — now validates.
+- BUG-3 (HIGH): optional param defaults bound NULL at runtime ("list top N" broke for agents) — both
+  executors now coalesce missing/None to the declared default.
+Coverage proven end-to-end: 17 real-API build scenarios, 10 connectors used by an agent (17/17
+tasks), 3 multi-step tool chains, full observability loop, Studio UI render (real browser),
+negative/security paths, secret hygiene, and the eval/quality agentic features. Mandatory suite
+green throughout (1141 tests).

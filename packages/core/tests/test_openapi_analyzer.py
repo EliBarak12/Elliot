@@ -96,6 +96,8 @@ def test_analyze_extracts_parameters() -> None:
     assert len(list_tool.parameters) == 1
     assert list_tool.parameters[0].name == "limit"
     assert list_tool.parameters[0].type == "integer"
+    # A query param's location is exposed so an agent can map it onto api_mapping.
+    assert list_tool.parameters[0].location == "query"
 
 
 def test_analyze_extracts_response_fields() -> None:

@@ -17,6 +17,11 @@ class ProposedParameter(BaseModel):
     type: str
     description: str
     required: bool
+    # Where the parameter goes in the HTTP request: "query", "path", "header",
+    # or "body". Lets an agent map a write endpoint straight onto api_mapping
+    # (query_params / body_params / {placeholders} in path_template) instead of
+    # guessing.
+    location: str = "query"
 
 
 class ProposedTool(BaseModel):
@@ -173,6 +178,8 @@ def _collect_parameters(
                 type=_schema_type(_deref(resolved.get("schema", {}), spec)),
                 description=resolved.get("description", ""),
                 required=bool(resolved.get("required", False)),
+                # OpenAPI param objects carry their location in ``in``.
+                location=str(resolved.get("in", "query")),
             )
         )
     return out
@@ -200,6 +207,7 @@ def _request_body_params(
                 type=_schema_type(resolved),
                 description=resolved.get("description", ""),
                 required=field in required,
+                location="body",
             )
         )
     return out

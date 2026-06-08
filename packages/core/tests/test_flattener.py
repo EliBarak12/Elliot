@@ -1,4 +1,41 @@
+from elliot_core.sqlite.column_namer import MAX_IDENTIFIER_LENGTH
+from elliot_core.sqlite.engine import SQLiteEngine
 from elliot_core.sqlite.flattener import MAX_ARRAY_ROWS, flatten
+
+
+def test_deeply_nested_object_columns_stay_within_identifier_limit():
+    """Regression: a deeply nested object (as real APIs like pokeapi return)
+    inlines into composite column names that exceed SQLite's 63-char identifier
+    limit. The flattener must bound them so the engine can CREATE TABLE instead
+    of aborting the whole discovery with INVALID_IDENTIFIER."""
+    payload = {
+        "id": 1,
+        "sprites": {
+            "versions": {
+                "generation_viii": {
+                    "brilliant_diamond_shining_pearl": {
+                        "front_default": "a.png",
+                        "front_shiny_female": "b.png",
+                    }
+                }
+            }
+        },
+    }
+    result = flatten([payload], "monster")
+    all_tables = [result.primary_table, *result.related_tables]
+    for table in all_tables:
+        assert len(table.name) <= MAX_IDENTIFIER_LENGTH
+        for col in table.columns:
+            assert len(col.name) <= MAX_IDENTIFIER_LENGTH, col.name
+    # The engine actually accepts every table the flattener produced.
+    engine = SQLiteEngine()
+    for table in all_tables:
+        engine.load_table(table)
+    # Row keys were rewritten in lock-step with the schema, so the bounded
+    # deep column is still backed by a real value.
+    assert set(result.primary_table.rows[0].keys()) == {
+        c.name for c in result.primary_table.columns
+    }
 
 
 def test_primitive_fields():

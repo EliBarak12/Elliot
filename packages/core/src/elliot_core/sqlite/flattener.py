@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from elliot_core.sqlite.column_namer import deduplicate_names, safe_name
+from elliot_core.sqlite.column_namer import (
+    MAX_IDENTIFIER_LENGTH,
+    bound_name,
+    deduplicate_names,
+    safe_name,
+)
 from elliot_core.sqlite.type_inferrer import infer_column_type
 from elliot_core.types.sqlite import ColumnMeta, FlattenedTable, FlattenResult, FlattenWarning
 
@@ -53,16 +58,43 @@ def flatten(data: list[Any], table_name: str) -> FlattenResult:
         row["_id"] = my_id
         primary_rows.append(row)
 
+    # Deeply nested objects inline into composite column names (and array
+    # chains into composite child-table names) that can exceed SQLite's 63-char
+    # identifier limit. Bound them at finalization so CREATE TABLE never fails
+    # with INVALID_IDENTIFIER and aborts the whole discovery. Row keys and the
+    # schema derived from them are rewritten together so they stay consistent.
+    primary_rows = _bound_row_keys(primary_rows)
     primary_table = FlattenedTable(
         name=table_name,
         columns=_build_columns(primary_rows),
         rows=primary_rows,
     )
-    related = [
-        FlattenedTable(name=name, columns=_build_columns(rows), rows=rows)
-        for name, rows in child_tables.items()
-    ]
+    related = []
+    for name, rows in child_tables.items():
+        bounded_rows = _bound_row_keys(rows)
+        related.append(
+            FlattenedTable(
+                name=bound_name(name),
+                columns=_build_columns(bounded_rows),
+                rows=bounded_rows,
+            )
+        )
     return FlattenResult(primary_table=primary_table, related_tables=related, warnings=warnings)
+
+
+def _bound_row_keys(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Shorten any over-long column names so the SQLite identifier limit holds.
+
+    Only rows that actually carry an over-long key are rewritten; the common
+    case (every key already within bounds) returns the rows untouched.
+    """
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if any(len(k) > MAX_IDENTIFIER_LENGTH for k in row):
+            out.append({bound_name(k): v for k, v in row.items()})
+        else:
+            out.append(row)
+    return out
 
 
 def _scalar(value: Any) -> Any:

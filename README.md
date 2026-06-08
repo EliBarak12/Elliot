@@ -187,6 +187,24 @@ OpenClaw also reads the `.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin
 
 Every install path wires the MCP URL only — Elliot's server still needs to be running, locally or at a hosted endpoint. Skills ship in the repo-root `skills/` directory; Claude Code and Codex auto-discover them, and every other MCP client receives the same guidance as MCP prompts.
 
+### Add Elliot to Claude.ai and Claude Desktop
+
+The table above covers the **Claude Code** plugin. To use Elliot from **Claude.ai** (web) or the **Claude Desktop / mobile** apps, add it as a remote **Connector** — Elliot's hosted endpoint speaks the MCP HTTP transport and runs the full OAuth 2.1 handshake, so there are no keys to paste:
+
+1. In Claude, open **Settings → Connectors**.
+2. Click **Add custom connector**.
+3. Paste the Elliot MCP URL and confirm:
+   ```
+   https://api.elliot-cloud.com/b/mcp
+   ```
+4. Claude registers itself (RFC 7591 dynamic client registration), then sends you to the Elliot consent screen. Sign in, click **Allow**, and Claude returns connected.
+
+Elliot's tools now appear in the connector picker for every chat. The access grant is listed under **Connected agents** in the Elliot dashboard and can be revoked there at any time. Because the connector authenticates each user individually (`scope: per_user`), every teammate authorises with their own identity — no shared secret.
+
+> Self-hosting Elliot? Point the connector at your own deployment's `/b/mcp` URL instead. The OAuth discovery documents are served from the same host, so the only requirement is that it's reachable over HTTPS.
+
+To get Elliot listed in Anthropic's built-in **Connectors directory** (so users can add it without pasting a URL), see [`docs/claude-connector-directory.md`](docs/claude-connector-directory.md).
+
 ### Ship a connector as its own plugin
 
 Once you've built a connector, package it as a standalone plugin that installs in Codex *and* Claude Code:

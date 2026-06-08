@@ -87,3 +87,36 @@ come back with `isError=False`. Consequences:
 Recommendation (not changed — broad blast radius, many tests assert the `[CODE]` text): either raise
 inside FastMCP tools so `isError` is set, or standardize on the documented `{"error":{...}}` shape.
 Harness hardened to also flag `[CODE]` sentinels so it doesn't report false passes.
+
+### [BUG-2 — FIXED] build_connector silently builds an empty connector for unknown tool_ids (MEDIUM)
+Found via negative harness check N8. `elliot_build_connector(tool_ids=["does_not_exist"])` filtered
+unknown ids out silently and returned `{"status":"built","tool_count":0}` — an agent with a typo'd
+tool id would think it succeeded and could deploy an EMPTY connector. Violates principle #3.
+- Fix: `connector_tools.elliot_build_connector` now validates `tool_ids`/`skill_ids` against the
+  registry and raises an actionable `VALIDATION_UNKNOWN_TOOL` / `VALIDATION_UNKNOWN_SKILL` listing
+  the missing and the available ids. Added two unit tests. Verified: N8 now returns
+  `[VALIDATION_UNKNOWN_TOOL] Unknown tool_id(s): does_not_exist. Available: ...`.
+
+### [NEG] Error-path / security checks — 10/10 PASS (after BUG-2 fix)
+Drove the plugin through deliberately bad input over MCP. All handled gracefully with structured,
+actionable errors and the server stayed healthy throughout:
+- 404 upstream → `[UPSTREAM_FETCH_FAILED] HTTP 404 ... after 3 attempts`
+- invalid source_type → lists valid values
+- invalid SQL → `[INVALID_SQL] near "FROM": syntax error`
+- write SQL (DELETE) → `[INVALID_SQL] Forbidden keyword: DELETE` (read-only invariant holds)
+- statement stacking (`SELECT 1; DROP TABLE`) → `[INVALID_SQL] Multiple statements not allowed`
+- missing required param → `[VALIDATION_REQUIRED] Missing required parameter(s): id`
+- server still healthy after the error storm.
+
+### [OBS-3] Non-JSON upstream surfaces as INTERNAL_ERROR (low)
+Discovering an HTML endpoint (https://example.com) returns
+`[INTERNAL_ERROR] Expecting value: line 1 column 1 (char 0)` — a leaked JSON-decoder message.
+Not a crash (handled, server stays up) but not actionable. Recommend mapping JSON-parse failures
+on REST discovery to an `UPSTREAM_*` error like "endpoint did not return JSON (got text/html)".
+Logged as a recommendation; not changed.
+
+### [OBS-4] Plugin tests are order/state-dependent under subset selection (low)
+Running a `-k` subset of `packages/mcp-plugin/tests` fails ~19 tests across unrelated files
+(oauth, session, studio), because they share the module-global `ElliotSession` (see ARCH-1) and
+depend on full-suite ordering. The canonical full-suite run passes (300/300). Recommend per-test
+session isolation so subsets are runnable. Not changed (out of scope; mandatory command is green).

@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 JP = "https://jsonplaceholder.typicode.com"
 RC = "https://restcountries.com/v3.1"
 POKE = "https://pokeapi.co/api/v2"
+DJ = "https://dummyjson.com"
 
 
 @dataclass
@@ -314,6 +315,245 @@ def build_scenarios() -> list[Scenario]:
                     description="Return ditto's id, name, height and weight.",
                     category="READ",
                     sql='SELECT id, name, height, weight FROM "s010_ditto"',
+                    preview_params={},
+                ),
+            ],
+        )
+    )
+
+    # ── dummyjson: envelope unwrap + deep nesting + nested arrays ────────────
+    s.append(
+        Scenario(
+            id="s011_dj_products",
+            title="dummyjson /products — envelope {products:[...]} via data_path",
+            sources=[
+                SourceDef(
+                    "s011_dj_products",
+                    "rest",
+                    {"url": f"{DJ}/products?limit=100", "data_path": "products"},
+                    min_rows=90,
+                    expect_columns=("id", "title", "price", "category"),
+                )
+            ],
+            tools=[
+                ToolDef(
+                    "s011_top_priced",
+                    description="Return the :limit most expensive products.",
+                    category="READ",
+                    sql='SELECT id, title, price, category FROM "s011_dj_products" '
+                    "ORDER BY price DESC LIMIT :limit",
+                    parameters=[
+                        {
+                            "name": "limit",
+                            "type": "integer",
+                            "required": False,
+                            "description": "n",
+                            "default": 10,
+                        }
+                    ],
+                    preview_params={"limit": 5},
+                ),
+                ToolDef(
+                    "s011_by_category",
+                    description="Average price and count per category.",
+                    category="READ",
+                    sql="SELECT category, COUNT(*) AS n, ROUND(AVG(price),2) AS avg_price "
+                    'FROM "s011_dj_products" GROUP BY category ORDER BY n DESC',
+                    preview_params={},
+                ),
+            ],
+            deploy=True,
+        )
+    )
+    s.append(
+        Scenario(
+            id="s012_dj_users",
+            title="dummyjson /users — deeply nested address/company/bank/crypto",
+            sources=[
+                SourceDef(
+                    "s012_dj_users",
+                    "rest",
+                    {"url": f"{DJ}/users?limit=50", "data_path": "users"},
+                    min_rows=30,
+                    expect_columns=("id", "firstname", "lastname", "email", "address_city"),
+                )
+            ],
+            tools=[
+                ToolDef(
+                    "s012_users_by_city",
+                    description="List users in a given :city.",
+                    category="READ",
+                    sql="SELECT id, firstname, lastname, email, address_city "
+                    'FROM "s012_dj_users" WHERE address_city = :city',
+                    parameters=[
+                        {"name": "city", "type": "string", "required": True, "description": "city"}
+                    ],
+                    preview_params={"city": "Phoenix"},
+                    expect_nonempty=False,  # depends on live data; just must not error
+                ),
+            ],
+        )
+    )
+    s.append(
+        Scenario(
+            id="s013_dj_carts",
+            title="dummyjson /carts — nested products[] array → child table join",
+            sources=[
+                SourceDef(
+                    "s013_dj_carts",
+                    "rest",
+                    {"url": f"{DJ}/carts", "data_path": "carts"},
+                    min_rows=1,
+                    expect_columns=("id", "total", "userid"),
+                )
+            ],
+            tools=[
+                ToolDef(
+                    "s013_cart_lines",
+                    description="Line items for cart :cart_id, joining the nested products child table.",
+                    category="READ",
+                    sql="SELECT c.id AS cart_id, li.title, li.quantity, li.price "
+                    'FROM "s013_dj_carts" c '
+                    'JOIN "s013_dj_carts_products" li ON li._parent_id = c._id '
+                    "WHERE c.id = :cart_id",
+                    parameters=[
+                        {
+                            "name": "cart_id",
+                            "type": "integer",
+                            "required": True,
+                            "description": "cart id",
+                        }
+                    ],
+                    preview_params={"cart_id": 1},
+                ),
+            ],
+        )
+    )
+
+    # ── open-meteo: single object with parallel primitive arrays ─────────────
+    s.append(
+        Scenario(
+            id="s014_weather",
+            title="open-meteo forecast — single object, parallel arrays as JSON TEXT",
+            sources=[
+                SourceDef(
+                    "s014_weather",
+                    "rest",
+                    {
+                        "url": "https://api.open-meteo.com/v1/forecast"
+                        "?latitude=52.52&longitude=13.41&hourly=temperature_2m"
+                    },
+                    min_rows=1,
+                    expect_columns=("latitude", "longitude"),
+                )
+            ],
+            tools=[
+                ToolDef(
+                    "s014_location",
+                    description="Return the forecast's latitude, longitude and timezone.",
+                    category="READ",
+                    sql='SELECT latitude, longitude, timezone FROM "s014_weather"',
+                    preview_params={},
+                ),
+            ],
+        )
+    )
+
+    # ── catfact: envelope {data:[...]} ───────────────────────────────────────
+    s.append(
+        Scenario(
+            id="s015_catfacts",
+            title="catfact /facts — envelope {data:[...]} via data_path",
+            sources=[
+                SourceDef(
+                    "s015_catfacts",
+                    "rest",
+                    {"url": "https://catfact.ninja/facts", "data_path": "data"},
+                    min_rows=1,
+                    expect_columns=("fact", "length"),
+                )
+            ],
+            tools=[
+                ToolDef(
+                    "s015_longest",
+                    description="Return the :limit longest cat facts.",
+                    category="READ",
+                    sql='SELECT fact, length FROM "s015_catfacts" '
+                    "ORDER BY length DESC LIMIT :limit",
+                    parameters=[
+                        {
+                            "name": "limit",
+                            "type": "integer",
+                            "required": False,
+                            "description": "n",
+                            "default": 5,
+                        }
+                    ],
+                    preview_params={"limit": 3},
+                ),
+            ],
+        )
+    )
+
+    # ── coingecko: array with nullable nested object (roi) ───────────────────
+    s.append(
+        Scenario(
+            id="s016_coins",
+            title="coingecko markets — array with nullable nested roi object",
+            sources=[
+                SourceDef(
+                    "s016_coins",
+                    "rest",
+                    {
+                        "url": "https://api.coingecko.com/api/v3/coins/markets"
+                        "?vs_currency=usd&per_page=100&page=1"
+                    },
+                    min_rows=50,
+                    expect_columns=("id", "symbol", "current_price"),
+                )
+            ],
+            tools=[
+                ToolDef(
+                    "s016_top_mcap",
+                    description="Top :limit coins by market cap.",
+                    category="READ",
+                    sql='SELECT id, symbol, current_price, market_cap FROM "s016_coins" '
+                    "ORDER BY market_cap DESC LIMIT :limit",
+                    parameters=[
+                        {
+                            "name": "limit",
+                            "type": "integer",
+                            "required": False,
+                            "description": "n",
+                            "default": 10,
+                        }
+                    ],
+                    preview_params={"limit": 5},
+                ),
+            ],
+        )
+    )
+
+    # ── ipify: tiny single object ────────────────────────────────────────────
+    s.append(
+        Scenario(
+            id="s017_ipify",
+            title="ipify — minimal single-object response {ip}",
+            sources=[
+                SourceDef(
+                    "s017_ipify",
+                    "rest",
+                    {"url": "https://api.ipify.org?format=json"},
+                    min_rows=1,
+                    expect_columns=("ip",),
+                )
+            ],
+            tools=[
+                ToolDef(
+                    "s017_ip",
+                    description="Return the caller's public IP.",
+                    category="READ",
+                    sql='SELECT ip FROM "s017_ipify"',
                     preview_params={},
                 ),
             ],

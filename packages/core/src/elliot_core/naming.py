@@ -31,6 +31,16 @@ def slugify_identifier(name: str) -> str:
     return _NON_IDENT.sub("_", s.lower()).strip("_")
 
 
+def slugify(name: str) -> str:
+    """Convert a free-text name to a lowercase dash-separated slug.
+
+    ``"Pet Store API"`` -> ``"pet-store-api"``. Used for connector/skill slugs
+    and directory names (distinct from :func:`slugify_identifier`, which produces
+    a snake_case *identifier*). Returns ``""`` when nothing usable remains.
+    """
+    return _NON_IDENT.sub("-", name.lower()).strip("-")
+
+
 def is_valid_identifier(candidate: str) -> bool:
     """True iff ``candidate`` matches ``^[a-z][a-z0-9_]*$``."""
     return bool(_VALID_IDENT.fullmatch(candidate))

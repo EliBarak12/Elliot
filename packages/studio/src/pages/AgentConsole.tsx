@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ChevronDown, ChevronRight, MonitorDot, RefreshCw } from "lucide-react";
+import { formatMs } from "@/lib/format";
 import { httpJson } from "@/lib/http";
+import { severityBadgeVariant } from "@/lib/severity";
+import { tokenToneClass } from "@/lib/tokenRisk";
 import {
   type AgentSession,
   type SessionEvent,
@@ -20,15 +23,7 @@ import { TraceHookPanel } from "@/components/TraceHookPanel";
 import { cn } from "@/lib/utils";
 
 function tokenTone(tokens: number): string {
-  if (tokens > 1000) return "text-destructive";
-  if (tokens > 300) return "text-warning";
-  return "text-success";
-}
-
-function signalVariant(severity: string): "destructive" | "warning" | "secondary" {
-  if (severity === "high") return "destructive";
-  if (severity === "medium") return "warning";
-  return "secondary";
+  return tokenToneClass(tokens);
 }
 
 function sessionBadge(session: AgentSession) {
@@ -93,7 +88,7 @@ function EventRow({ event }: { event: SessionEvent }) {
             <span className={cn("tabular-nums font-medium", tokenTone(tokens))}>{tokens} tok</span>
           )}
           <span className="text-muted-foreground tabular-nums w-12 text-right">
-            {event.duration_ms.toFixed(0)}ms
+            {formatMs(event.duration_ms)}
           </span>
           {event.error && (
             <Badge variant="destructive" className="shrink-0">
@@ -122,7 +117,11 @@ function SignalRow({ signals }: { signals: SessionSignal[] }) {
   return (
     <div className="flex flex-wrap gap-1.5">
       {signals.map((sig) => (
-        <Badge key={sig.type} variant={signalVariant(sig.severity)} className="text-2xs">
+        <Badge
+          key={sig.type}
+          variant={severityBadgeVariant(sig.severity, "secondary")}
+          className="text-2xs"
+        >
           {sig.message}
         </Badge>
       ))}
@@ -198,7 +197,7 @@ function SessionRow({ session }: { session: AgentSession }) {
             {session.total_tokens_estimated} tok
           </span>
           <span className="text-xs text-muted-foreground tabular-nums w-14 text-right">
-            {session.total_duration_ms.toFixed(0)}ms
+            {formatMs(session.total_duration_ms)}
           </span>
           <Badge variant={badge.variant}>{badge.label}</Badge>
         </div>

@@ -22,7 +22,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { formatMs } from "@/lib/format";
 import { callTool } from "@/lib/mcp-client";
+import { scoreTone, scoreToneClass } from "@/lib/score";
 import { cn } from "@/lib/utils";
 
 interface EvalCaseResult {
@@ -80,10 +82,8 @@ interface QualityScanResult {
 }
 
 function ScoreRing({ score }: { score: number }) {
-  const tone =
-    score >= 90 ? "text-success" : score >= 60 ? "text-warning" : "text-destructive";
-  const ringTone =
-    score >= 90 ? "stroke-success" : score >= 60 ? "stroke-warning" : "stroke-destructive";
+  const tone = scoreToneClass(score, "text");
+  const ringTone = scoreToneClass(score, "stroke");
   const circumference = 2 * Math.PI * 44;
   const offset = circumference - (score / 100) * circumference;
 
@@ -167,7 +167,7 @@ function CaseTable({ cases }: { cases: EvalCaseResult[] }) {
                 )}
               </td>
               <td className="text-right py-2.5 px-5 text-xs tabular-nums">
-                {c.latency_ms.toFixed(0)}ms
+                {formatMs(c.latency_ms)}
               </td>
             </tr>
           ))}
@@ -426,7 +426,7 @@ function QualityScanTab() {
                 <div className="flex items-center justify-between gap-3">
                   <CardTitle className="font-mono text-sm">{ts.tool_id}</CardTitle>
                   <Badge
-                    variant={ts.score >= 90 ? "success" : ts.score >= 60 ? "warning" : "destructive"}
+                    variant={scoreTone(ts.score)}
                     className="tabular-nums"
                   >
                     {ts.score.toFixed(0)} / 100

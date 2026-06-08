@@ -173,3 +173,15 @@ next step). All three real chains pass:
 Confirms tool outputs carry the ids/keys needed to drive the next call. (Note: the harness's
 heuristic agent fills params by name then by type; chains are written so the needed value can only
 come from the previous step, making each a real composition test.)
+
+### [UI] Studio renders what agents build — verified in a real browser
+Installed Playwright Chromium and ran the repo's layer-3 Studio e2e (PASS) plus a new
+`studio_screenshots.py` that boots the full stack, seeds a connector via MCP, deploys it, has two
+consumer agents call its tools, then screenshots all Studio pages with real data:
+- Dashboard: 5 sources / 5 tools / 1 skill, "Connector Live", "What your agent has built" 100%,
+  Recent activity listing real tool invocations with row counts + latency.
+- Metrics: Total Calls 6, Error Rate 0.0%, Avg Latency 24ms, top-tools chart, per-tool
+  calls/success/latency table.
+- Agent Console / Tools / Connector / Sources / Skills all render the agent-built state.
+Conclusion: the UI surfaces everything an agent builds and does — confirmed visually, not just at
+the data layer. Screenshots saved under dev/e2e/launch_gateway/screenshots/ (gitignored).

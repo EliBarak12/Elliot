@@ -110,16 +110,38 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             effective_version = (
                 version or (session.connector.version if session.connector else None) or "1.0.0"
             )
-            selected_tools = (
-                [t for t in session.registry.get_all() if t.id in tool_ids]
-                if tool_ids is not None
-                else session.registry.get_all()
-            )
-            selected_skills = (
-                [s for s in session.registry.get_all_skills() if s.id in (skill_ids or [])]
-                if skill_ids is not None
-                else session.registry.get_all_skills()
-            )
+            # Reject unknown ids rather than silently dropping them — otherwise a
+            # typo'd tool_id builds an empty connector that reports "built" with
+            # tool_count 0, and the agent ships nothing without knowing.
+            all_tools = session.registry.get_all()
+            if tool_ids is not None:
+                known_tool_ids = {t.id for t in all_tools}
+                missing_tools = [tid for tid in tool_ids if tid not in known_tool_ids]
+                if missing_tools:
+                    available = ", ".join(sorted(known_tool_ids)) or "(none — create tools first)"
+                    raise ElliotError(
+                        "VALIDATION_UNKNOWN_TOOL",
+                        f"Unknown tool_id(s): {', '.join(missing_tools)}. Available: {available}.",
+                        detail={"missing": missing_tools, "available": sorted(known_tool_ids)},
+                    )
+                selected_tools = [t for t in all_tools if t.id in tool_ids]
+            else:
+                selected_tools = all_tools
+
+            all_skills = session.registry.get_all_skills()
+            if skill_ids is not None:
+                known_skill_ids = {s.id for s in all_skills}
+                missing_skills = [sid for sid in skill_ids if sid not in known_skill_ids]
+                if missing_skills:
+                    available = ", ".join(sorted(known_skill_ids)) or "(none)"
+                    raise ElliotError(
+                        "VALIDATION_UNKNOWN_SKILL",
+                        f"Unknown skill_id(s): {', '.join(missing_skills)}. Available: {available}.",
+                        detail={"missing": missing_skills, "available": sorted(known_skill_ids)},
+                    )
+                selected_skills = [s for s in all_skills if s.id in skill_ids]
+            else:
+                selected_skills = all_skills
             referenced_source_ids = {sid for t in selected_tools for sid in t.source_ids}
             sources = [s for sid, s in session.sources.items() if sid in referenced_source_ids]
 

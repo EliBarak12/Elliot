@@ -237,6 +237,41 @@ def test_build_connector_returns_built_status(mcp: FastMCP, session: ElliotSessi
     assert session.connector is not None
 
 
+def test_build_connector_unknown_tool_id_errors(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    # A typo'd / nonexistent tool_id must fail loudly, not silently build an
+    # empty connector that reports "built" with tool_count 0.
+    _load_and_create_tool(mcp, session, tmp_path)
+    result = _tool(mcp, "elliot_build_connector")(
+        name="TestConnector",
+        slug="test",
+        version="1.0.0",
+        tool_ids=["count_items", "does_not_exist"],
+    )
+    assert result.get("status") != "built"
+    blob = result.get("text", "") + str(result)
+    assert "VALIDATION_UNKNOWN_TOOL" in blob
+    assert "does_not_exist" in blob
+    # The valid tool alone still builds fine.
+    ok = _tool(mcp, "elliot_build_connector")(
+        name="TestConnector", slug="test", version="1.0.0", tool_ids=["count_items"]
+    )
+    assert ok["status"] == "built"
+    assert ok["tool_count"] == 1
+
+
+def test_build_connector_unknown_skill_id_errors(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    _load_and_create_tool(mcp, session, tmp_path)
+    result = _tool(mcp, "elliot_build_connector")(
+        name="TestConnector", slug="test", version="1.0.0", skill_ids=["no_such_skill"]
+    )
+    assert result.get("status") != "built"
+    assert "VALIDATION_UNKNOWN_SKILL" in (result.get("text", "") + str(result))
+
+
 def test_export_connector_writes_file(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
     _load_and_create_tool(mcp, session, tmp_path)
     _tool(mcp, "elliot_build_connector")(name="MyConnector", slug="my", version="1.0.0")

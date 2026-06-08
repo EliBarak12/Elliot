@@ -420,3 +420,20 @@ actual mutation. Verified against upstream API state: total 0 -> 1, with the exa
 ("Payments webhook retries failing", HIGH, open). The deployed runtime executed the write
 (_execute_write), the server's confirm gate was satisfied, and the agent confirmed via list_issues.
 WRITE/ACTION is now functional and demonstrated end to end with real agents — not just unit-tested.
+
+---
+
+## ITERATION 5 (post-restart regression + more pagination/import fixes)
+After a container restart, full launch-gateway regression GREEN (17/17 scenarios, 10/10 negative,
+17/17 agent tasks) — all prior fixes intact. Then found/fixed more:
+- [FIXED] offset strategy hard-coded the "offset" query param; APIs using "skip"/"start" (dummyjson)
+  got ?offset ignored → re-fetched page 1 → DUPLICATE rows looping to max_pages (live: 300 rows / 30
+  unique). Added PaginationConfig.offset_param (shared engine). With offset_param="skip" → 194 unique.
+- [VERIFIED] OpenAPI import (elliot_import_api_collection) is sound: advisory proposal (not
+  auto-registered), 19 tools from live Petstore, correct categories, strong write-safety warning.
+- [FIXED] OpenAPI proposals omitted each param's location; added ProposedParameter.location
+  (query/path/body) so an agent can map a write endpoint onto api_mapping cleanly (verified live).
+- [FIXED] Runtime applied auth HEADERS only — a source with api_key in a QUERY param (?api_key=)
+  worked at discovery but 401'd on the deployed runtime (and the key was misplaced into a header).
+  Runtime now mirrors the design-time fetcher: no header when query_param set, + query-param auth on
+  every fetch/write. Verified live + test. (Another discovery↔runtime divergence, now closed.)

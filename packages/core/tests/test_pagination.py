@@ -40,9 +40,18 @@ def test_offset_params_and_advance():
 def test_page_params_and_advance():
     pg = _pg(strategy="page", page_size=2)
     st = PageCursor()
-    assert page_query_params(pg, st) == {"page": 1}
+    # page strategy now also sends the page size (default param name "limit")
+    assert page_query_params(pg, st) == {"page": 1, "limit": 2}
     assert advance(pg, st, rows=[{"id": 1}, {"id": 2}], data=[]) is True
     assert st.page == 2
+
+
+def test_page_size_param_is_configurable():
+    # APIs that use a non-"limit" page-size param (per_page, pageSize, ...).
+    pg = _pg(strategy="page", page_size=50, page_size_param="per_page")
+    assert page_query_params(pg, PageCursor()) == {"page": 1, "per_page": 50}
+    pg2 = _pg(strategy="offset", page_size=50, page_size_param="per_page")
+    assert page_query_params(pg2, PageCursor()) == {"offset": 0, "per_page": 50}
 
 
 def test_cursor_stripe_style():

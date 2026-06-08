@@ -124,6 +124,23 @@ async def test_fetch_endpoint_warns_when_more_pages_but_no_pagination():
 
 
 @respx.mock
+async def test_fetch_endpoint_warns_on_page_metadata():
+    # Page-numbered envelope (pagination.total_pages > 1) with no pagination
+    # configured — must warn so the connector doesn't ship only page 1.
+    respx.get("https://api.example.com/items").mock(
+        return_value=Response(
+            200,
+            json={
+                "items": [{"id": 1}, {"id": 2}],
+                "pagination": {"page": 1, "per_page": 2, "total": 40, "total_pages": 20},
+            },
+        )
+    )
+    result = await fetch_endpoint(_source(data_path="items"), {})
+    assert any("more data is available" in w and "total_pages=20" in w for w in result.warnings)
+
+
+@respx.mock
 async def test_fetch_endpoint_no_pagination_warning_when_complete():
     # has_more=false → no warning (the page is the whole dataset).
     respx.get("https://api.example.com/items").mock(

@@ -77,6 +77,12 @@ class PaginationConfig(BaseModel):
     cursor_param: str = "cursor"  # query-param name the cursor is sent under
     cursor_record_field: str | None = None  # take next cursor from last row's field
     has_more_field: str | None = None  # response bool field; stop paginating when false
+    # Query-param name the page size is sent under for offset/page/cursor
+    # strategies (e.g. "limit", "per_page", "pageSize"). Without this the page
+    # strategy sends only ?page=N and the API uses its own default page size —
+    # which then mismatches page_size and short-page detection mis-fires, so a
+    # tool silently sees only the first page.
+    page_size_param: str = "limit"
 
 
 class SourceConfig(BaseModel):

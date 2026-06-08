@@ -176,6 +176,13 @@ def _more_pages_signal(data: Any, resp: httpx.Response) -> str | None:
             val = data.get(key)
             if isinstance(val, str) and val:
                 return f"{key} present"
+        # Page/offset metadata — often nested under "pagination" / "meta".
+        for container in (data, data.get("pagination"), data.get("meta")):
+            if isinstance(container, dict):
+                for tp_key in ("total_pages", "totalPages", "page_count", "pageCount"):
+                    tp = container.get(tp_key)
+                    if isinstance(tp, int) and tp > 1:
+                        return f"{tp_key}={tp}"
         # {"object":"list", ...} without has_more set is inconclusive; skip.
     if parse_link_next(resp.headers.get("link", "")):
         return 'Link header rel="next"'
@@ -299,10 +306,12 @@ async def fetch_endpoint(
                         f"Fetched only the first page ({len(rows)} rows) but the response "
                         f"indicates more data is available ({signal}) and no pagination is "
                         "configured — tools will see ONLY this page. Set the source's "
-                        "'pagination'. For a Stripe-style API (has_more + starting_after), use: "
+                        "'pagination'. Stripe-style (has_more + starting_after): "
                         '{"strategy":"cursor","cursor_param":"starting_after",'
                         '"cursor_record_field":"id","has_more_field":"has_more","page_size":100}. '
-                        "For offset/page APIs use strategy 'offset' or 'page'."
+                        'Page-numbered API: {"strategy":"page","page_size":100,'
+                        '"page_size_param":"per_page","max_pages":100} (set page_size_param to the '
+                        "API's actual page-size query param). Offset API: strategy 'offset'."
                     )
             all_rows.extend(rows)
             page_count += 1

@@ -53,11 +53,14 @@ def page_query_params(pg: PaginationConfig, state: PageCursor) -> dict[str, Any]
     params: dict[str, Any] = {}
     if pg.strategy == "offset":
         params["offset"] = state.offset
-        params["limit"] = pg.page_size
+        params[pg.page_size_param] = pg.page_size
     elif pg.strategy == "page":
         params["page"] = state.page
+        # Send the page size too (under its configured param name) so the API's
+        # page size matches `page_size` and short-page detection is reliable.
+        params[pg.page_size_param] = pg.page_size
     elif pg.strategy == "cursor":
-        params["limit"] = pg.page_size
+        params[pg.page_size_param] = pg.page_size
         if state.cursor:
             params[pg.cursor_param] = state.cursor
     return params

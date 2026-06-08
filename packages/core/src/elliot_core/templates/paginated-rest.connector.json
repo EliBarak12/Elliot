@@ -2,11 +2,11 @@
   "name": "Paginated REST API",
   "slug": "paginated-rest",
   "version": "1.0.0",
-  "description": "REST API with cursor-based pagination",
+  "description": "REST API with cursor-based pagination. Two cursor idioms are shown. (A) 'main' — the API returns the next cursor in a top-level response field (set 'cursor_field'). (B) 'stripe_style' — Stripe-style: send the cursor under a custom query param ('cursor_param', e.g. starting_after), take the next cursor from the LAST record's field ('cursor_record_field', e.g. id), and stop when a top-level boolean ('has_more_field', e.g. has_more) is false. For offset/page APIs use strategy 'offset' or 'page' instead.",
   "sources": [
     {
       "id": "main",
-      "name": "Main API",
+      "name": "Main API (top-level cursor)",
       "type": "rest",
       "url": "https://api.example.com/v1/records",
       "auth": {
@@ -20,6 +20,25 @@
         "cursor_field": "next_cursor"
       },
       "data_path": "results"
+    },
+    {
+      "id": "stripe_style",
+      "name": "Stripe-style API (cursor = last record id)",
+      "type": "rest",
+      "url": "https://api.example.com/v1/customers",
+      "auth": {
+        "type": "bearer",
+        "secret_key": "{{ env:API_TOKEN }}"
+      },
+      "pagination": {
+        "strategy": "cursor",
+        "page_size": 100,
+        "max_pages": 50,
+        "cursor_param": "starting_after",
+        "cursor_record_field": "id",
+        "has_more_field": "has_more"
+      },
+      "data_path": "data"
     }
   ],
   "tools": [

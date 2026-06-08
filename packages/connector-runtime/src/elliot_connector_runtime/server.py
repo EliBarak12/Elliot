@@ -386,6 +386,7 @@ def create_runtime_server(
     _register_task_tool(mcp, task_store)
     if store is not None:
         _register_feedback_tool(mcp, store, connector_slug)
+        _register_pmf_tool(mcp, store, connector_slug)
 
     return mcp
 
@@ -817,6 +818,94 @@ def _register_feedback_tool(
             "tool_id": tool_id,
             "outcome": normalized,
             "message": "Feedback recorded for the connector author.",
+        }
+
+
+_PMF_CHOICES = ("very_disappointed", "somewhat_disappointed", "not_disappointed")
+
+
+def _register_pmf_tool(
+    mcp: FastMCP,
+    store: ObservationStore,
+    connector_slug: str | None,
+) -> None:
+    """Register ``elliot_pmf_signal`` — the Sean Ellis test as an MCP tool.
+
+    The Sean Ellis test asks one question of the *human*, not the agent:
+    "How would you feel if you could no longer use this product?" The PMF
+    bar is published as 40% answering "very disappointed".
+
+    Exposing it as an MCP tool means an agent can run it on demand —
+    triggered by a Studio banner, by the user asking the agent "ask me the
+    PMF question", or by a scheduled prompt — and persist the answer to the
+    same observation store as everything else. The reserved ``__pmf_survey``
+    tool id keeps these rows cleanly separable from per-tool feedback.
+    """
+    from elliot_core.errors import ElliotError, to_mcp_error_content
+
+    annotations = ToolAnnotations(
+        title="Record a PMF (Sean Ellis) response",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    )
+
+    @mcp.tool(
+        name="elliot_pmf_signal",
+        title="Record a PMF response",
+        description=(
+            "Ask the user 'How would you feel if you could no longer use "
+            "Elliot?' and record their answer for the maintainer's KPI "
+            "review. Args: choice (one of 'very_disappointed', "
+            "'somewhat_disappointed', 'not_disappointed'); reason (the "
+            "user's verbatim short answer, optional); use_case (one "
+            "sentence on what they use Elliot for, optional). Only call "
+            "when the user has agreed to answer — never run this "
+            "unsolicited."
+        ),
+        annotations=annotations,
+    )
+    async def elliot_pmf_signal(
+        choice: str,
+        reason: str = "",
+        use_case: str = "",
+    ) -> dict[str, Any]:
+        normalized = (choice or "").strip().lower()
+        if normalized not in _PMF_CHOICES:
+            exc = ElliotError(
+                "VALIDATION_INVALID_PMF_CHOICE",
+                f"choice must be one of {list(_PMF_CHOICES)}; got {choice!r}.",
+                {"field": "choice", "allowed": list(_PMF_CHOICES)},
+            )
+            raise ValueError(to_mcp_error_content(exc)["text"])
+
+        session_id, identity = _current_session_and_identity(mcp)
+
+        def _persist() -> None:
+            store.write_feedback(
+                tool_id="__pmf_survey",
+                outcome=normalized,
+                session_id=session_id,
+                connector_slug=connector_slug,
+                why_chosen=use_case,
+                input_summary="",
+                output_summary="",
+                detail=reason,
+                agent_identity=identity,
+            )
+
+        try:
+            await run_in_threadpool(_persist)
+        except Exception as exc:
+            elliot_exc = ElliotError("PMF_WRITE_FAILED", str(exc))
+            raise ValueError(to_mcp_error_content(elliot_exc)["text"]) from exc
+
+        log.info("agent.pmf.recorded", choice=normalized)
+        return {
+            "status": "recorded",
+            "choice": normalized,
+            "message": "Thanks — your answer was recorded for the maintainer.",
         }
 
 

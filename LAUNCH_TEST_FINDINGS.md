@@ -245,3 +245,50 @@ heuristic Python. This section uses **real Claude agents** (the authenticated `c
 Conclusion: real agents BUILD connectors and real (separate) agents USE them — proven end-to-end on
 both local Elliot and the multi-tenant Elliot Cloud, including publish, per-connector API-key auth,
 tenant isolation, and observability.
+
+---
+
+## REAL-USER SIMULATION: Stripe-like product API, real agents, trace-driven fixes
+
+Scenario: a SaaS founder with a substantial billing/product API wants to make it agentic via
+Elliot + Claude Code, publish, and watch how agents fare. Used a purpose-built, realistic
+Stripe-like API (140 customers, 154 subscriptions, 670 invoices, 592 charges; cents, unix ts,
+status enums, nested objects, foreign keys, cursor pagination) — not a toy mock.
+
+Method: REAL Claude agents (authenticated `claude` CLI + `--mcp-config`), full stream-json traces
+captured and analyzed. Iterated build → analyze trace → fix Elliot → rebuild → verify.
+
+### Builder-agent trace findings + fixes
+1. [FIXED] `elliot_create_tool` `category` ambiguity — the agent passed business domains
+   ("Subscriptions", "Revenue") and hit "Unknown category" 6× in one build. Documented the access-type
+   enum (read/aggregate/write/action) in the tool description. v4: 0 category errors.
+2. [FIXED] Silent partial data — discovery fetched only the first page (10 of 140) with no signal.
+   Added a warning when a response advertises more pages (has_more / next_cursor / Link rel=next) but
+   no pagination is configured. v2+: the agent saw it and configured pagination.
+3. [FIXED — architectural] Pagination was DUPLICATED in api_fetcher (design-time) and the
+   connector-runtime executor (call-time) and had diverged; a discovery-only fix would NOT reach the
+   deployed runtime. Extracted ONE shared engine (elliot_core.sources.pagination) used by both, and
+   generalized cursor config (cursor_param, cursor_record_field, has_more_field) so Stripe-style
+   (?limit=&starting_after=<last id> + has_more) is declarative, not special-cased. (Per reviewer
+   guidance: a proper fix aligned across all architectures, not a one-use-case patch.)
+   Verified: deployed runtime fetches all 140 customers; total_paid_revenue = 553 paid invoices /
+   $118,704 (was computing from ≤10 before).
+
+### Iteration result (v1 → v4, same prompt)
+- v1: 67 turns, 10 errors, 6 category failures, silent 10-row data.
+- v4 (after fixes): 55 turns, 0 category errors, 0 pagination-config rejections, agent configured
+  cursor pagination, connector serves COMPLETE data.
+
+### 3 consumer agents (real) on missions against the deployed connector — all succeeded, 0 real errors
+- Finance: "$118,704 paid revenue across 553 invoices; 66 uncollectible/void; 65 delinquent."
+- Support: drilled into a delinquent customer (Noah Tanaka), listed invoice history, found $897 bad debt.
+- Ops: "123 active subscribers; $8,406 actionable failed-payment exposure; top reason card_declined."
+Studio UI screenshots captured showing Dashboard (Connector Live, 66/65-row results — complete data),
+Metrics (12 calls, 0% errors, per-tool latency), Tools, Connector, Console.
+
+### [OBS-6] Onboarding resources not addressable (low)
+Across builds the agent repeatedly tried `resources/read elliot://prompt/getting_started` and
+`elliot://principles` (natural guesses) → "Unknown resource". The getting_started guidance exists as
+an MCP *prompt*, not a resource. Agents recovered instantly with zero outcome impact. Candidate
+polish: also expose getting_started/principles as readable resources. Logged, not changed (no
+functional impact; avoid over-fixing).

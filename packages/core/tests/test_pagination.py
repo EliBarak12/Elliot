@@ -54,6 +54,15 @@ def test_page_size_param_is_configurable():
     assert page_query_params(pg2, PageCursor()) == {"offset": 0, "per_page": 50}
 
 
+def test_offset_param_is_configurable():
+    # APIs that use 'skip' (dummyjson) or 'start' instead of 'offset'.
+    pg = _pg(strategy="offset", page_size=30, offset_param="skip", page_size_param="limit")
+    st = PageCursor()
+    assert page_query_params(pg, st) == {"skip": 0, "limit": 30}
+    advance(pg, st, rows=[{"id": i} for i in range(30)], data=[])
+    assert page_query_params(pg, st) == {"skip": 30, "limit": 30}
+
+
 def test_cursor_stripe_style():
     # ?limit=&starting_after=<last id>, terminate on has_more=false.
     pg = _pg(

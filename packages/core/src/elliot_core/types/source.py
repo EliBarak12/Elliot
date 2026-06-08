@@ -77,6 +77,11 @@ class PaginationConfig(BaseModel):
     cursor_param: str = "cursor"  # query-param name the cursor is sent under
     cursor_record_field: str | None = None  # take next cursor from last row's field
     has_more_field: str | None = None  # response bool field; stop paginating when false
+    # Query-param name the row offset is sent under for the 'offset' strategy
+    # (e.g. "offset", "skip", "start"). Without this the offset strategy sends
+    # ?offset=N regardless of the API's real param, so the API ignores it and
+    # returns the same page — duplicate rows looping until max_pages.
+    offset_param: str = "offset"
     # Query-param name the page size is sent under for offset/page/cursor
     # strategies (e.g. "limit", "per_page", "pageSize"). Without this the page
     # strategy sends only ?page=N and the API uses its own default page size —

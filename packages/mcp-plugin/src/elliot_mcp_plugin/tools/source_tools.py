@@ -435,8 +435,10 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 * page-numbered (?page=N&per_page=M, {pagination:{total_pages}}):
                   {"strategy":"page","page_size":100,"page_size_param":"per_page",
                    "max_pages":50}
-                * offset (?offset=&limit=):
-                  {"strategy":"offset","page_size":100,"page_size_param":"limit"}
+                * offset (?offset=&limit=, or ?skip=&limit=):
+                  {"strategy":"offset","page_size":100,"offset_param":"skip",
+                   "page_size_param":"limit"}  (set offset_param to the API's real
+                  offset param — "offset"/"skip"/"start" — or it re-fetches page 1)
                 * cursor, Stripe-style (?limit=&starting_after=<last id>, has_more):
                   {"strategy":"cursor","page_size":100,"cursor_param":"starting_after",
                    "cursor_record_field":"id","has_more_field":"has_more"}

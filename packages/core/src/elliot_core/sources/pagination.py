@@ -52,7 +52,7 @@ def page_query_params(pg: PaginationConfig, state: PageCursor) -> dict[str, Any]
     """
     params: dict[str, Any] = {}
     if pg.strategy == "offset":
-        params["offset"] = state.offset
+        params[pg.offset_param] = state.offset
         params[pg.page_size_param] = pg.page_size
     elif pg.strategy == "page":
         params["page"] = state.page

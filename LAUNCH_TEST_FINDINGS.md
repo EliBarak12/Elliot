@@ -132,3 +132,33 @@ connected an MCP *agent* to :3001/mcp/, called the deployed tool 3× plus a junk
   `studio_get_audit_log` all reflect the built connector and the agent's calls.
 Conclusion: what an agent builds and does IS surfaced in the data layer Studio reads. (UI render
 layer is exercised separately by dev/e2e/test_layer3_studio_ui.py.)
+
+### [BUG-3 — FIXED] Optional params with defaults bind NULL at runtime → agents can't use "top N" tools (HIGH)
+Found by sending an agent to USE 10 deployed connectors. The agent calls a tool with only its
+required args (the normal pattern), omitting optional params. For the extremely common
+"list top N (default N)" shape (`... ORDER BY x DESC LIMIT :limit`, limit optional default 5),
+the call failed with `[INVALID_SQL] datatype mismatch`. 6 of the 10 connectors hit this.
+- Root cause: the connector-runtime `ToolExecutor` bound SQL params with
+  `{p.name: arguments.get(p.name) for p in tool.parameters}` — the param default was never
+  applied. Subtlety that made it hard to see: the MCP layer passes an *omitted* optional param as
+  an explicit `None` (the property is declared in the input schema), so even
+  `arguments.get(name, default)` returns `None`. Binding `None` to `LIMIT :limit` → SQLite
+  "datatype mismatch". The same latent bug existed in elliot_core's `_coerce_and_validate`
+  (used by eval_runner, eval_tools, skill_tools, and the plugin MCP server).
+- Fix: both binders now coalesce missing-key AND explicit-None to the declared default
+  (`_bind_sql_params` in connector-runtime; `_coerce_and_validate` in elliot_core). Added
+  unit + execute-level regression tests in both packages. (`preview_tool` already coalesced
+  correctly, which is why the build-time previews passed and masked this.)
+- Verified: AGENT run — 10/10 connectors deployed, 17/17 agent tasks pass (was 8/17).
+
+### [AGENTS] 10 connectors built + used by an agent — 17/17 tasks PASS (after BUG-3 fix)
+Built 10 real connectors (jsonplaceholder blog/todos/photos, dummyjson products/carts,
+restcountries, pokeapi, coingecko, catfact, open-meteo) and turned a schema-driven agent loose:
+for each NL task it selects a tool from its description, fills params from the input schema, calls
+it, and the result is verified. Exercises tool-selection, parameter inference, nested-array JOINs,
+aggregates, filters, and single-object endpoints. All pass.
+
+### [OBS-5] coingecko runtime materialization can 429 (environmental, not a bug)
+During one run, coingecko's free API rate-limited at runtime materialization → TABLE_NOT_FOUND.
+The runtime surfaced a clear, actionable error and stayed healthy. Re-running (or a paid key)
+resolves it. Noted so it isn't mistaken for a product defect.

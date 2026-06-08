@@ -176,6 +176,53 @@ async def test_executor_rest_source() -> None:
 
 
 @respx.mock
+async def test_executor_applies_query_param_api_key_auth() -> None:
+    """Regression: a source whose api_key goes in a QUERY param must be
+    authenticated by the runtime via ?<param>= (not a header) — otherwise
+    query-key APIs 401 in production though they worked at discovery."""
+    from elliot_core.types import AuthConfig
+
+    captured = {}
+
+    def responder(request):
+        captured["api_key"] = request.url.params.get("api_key")
+        captured["header_key"] = request.headers.get("X-Api-Key")
+        return httpx.Response(200, json={"data": [{"id": 1}]})
+
+    respx.get("https://api.example.com/items").mock(side_effect=responder)
+    connector = ConnectorConfig(
+        name="Q",
+        slug="q",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="s",
+                name="s",
+                type="rest",
+                url="https://api.example.com/items",
+                data_path="data",
+                auth=AuthConfig(type="api_key", query_param="api_key", secret_key="K"),
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="list_items",
+                name="list",
+                description="list",
+                category="READ",
+                source_ids=["s"],
+                sql='SELECT * FROM "s"',
+            )
+        ],
+        skills=[],
+    )
+    executor = ToolExecutor(connector, secrets={"K": "secret123"})
+    await executor.execute(connector.tools[0], {})
+    assert captured["api_key"] == "secret123"  # key sent in query
+    assert captured["header_key"] is None  # NOT leaked into a header
+
+
+@respx.mock
 async def test_executor_runs_write_tool_via_api_mapping() -> None:
     """A WRITE tool issues the HTTP request described by api_mapping (method +
     path_template + body params). Regression: the runtime used to fail these

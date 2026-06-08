@@ -341,6 +341,7 @@ class ToolExecutor:
 
         url = _interpolate(source.url or "", arguments)
         headers = _build_auth_headers(source.auth, self._secrets) if source.auth else {}
+        auth_query = _build_auth_query_params(source.auth, self._secrets) if source.auth else {}
         pagination = source.pagination
         all_rows: list[dict[str, Any]] = []
         state = PageCursor()
@@ -377,6 +378,7 @@ class ToolExecutor:
                 # the runtime walks pages identically to design-time discovery.
                 params: dict[str, Any] = dict(extra_params or {})
                 params.update(page_query_params(pagination, state))
+                params.update(auth_query)  # api-key-in-query auth, every page
 
                 resp = await client.get(request_url, headers=headers, params=params or None)
                 resp.raise_for_status()
@@ -530,6 +532,8 @@ class ToolExecutor:
         pinned_hosts = {host: ips[0]} if (host and ips) else None
 
         query = {k: effective[k] for k in mapping.query_params if k in effective}
+        if source.auth:
+            query.update(_build_auth_query_params(source.auth, self._secrets))
         body = {k: effective[k] for k in mapping.body_params if k in effective}
         headers = _build_auth_headers(source.auth, self._secrets) if source.auth else {}
 
@@ -734,9 +738,22 @@ def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
     return secrets.get(key) or secrets.get(key.lower()) or key
 
 
+def _build_auth_query_params(auth: AuthConfig, secrets: dict[str, str]) -> dict[str, str]:
+    """API key sent as a query param (e.g. ``?api_key=``). Mirrors the
+    design-time fetcher so the deployed runtime authenticates the same way it
+    did at discovery — otherwise query-param-key APIs 401 in production."""
+    if auth.type == "api_key" and auth.query_param:
+        return {auth.query_param: _resolve_secret(auth.secret_key, secrets)}
+    return {}
+
+
 def _build_auth_headers(auth: AuthConfig, secrets: dict[str, str]) -> dict[str, str]:
     secret_val = _resolve_secret(auth.secret_key, secrets)
     if auth.type == "api_key":
+        # When the key is configured for a query param, it's sent there
+        # (see _build_auth_query_params) — don't ALSO put it in a header.
+        if auth.query_param:
+            return {}
         header = auth.header_name or "X-Api-Key"
         return {header: secret_val}
     if auth.type in ("bearer", "oauth2"):

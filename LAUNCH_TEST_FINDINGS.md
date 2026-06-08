@@ -120,3 +120,15 @@ Running a `-k` subset of `packages/mcp-plugin/tests` fails ~19 tests across unre
 (oauth, session, studio), because they share the module-global `ElliotSession` (see ARCH-1) and
 depend on full-suite ordering. The canonical full-suite run passes (300/300). Recommend per-test
 session isolation so subsets are runnable. Not changed (out of scope; mandatory command is green).
+
+### [OBSV] Observability loop — 19/19 PASS (build → deploy → agent → Studio data)
+Proved the full path Studio renders from. Built a dummyjson connector, deployed the runtime,
+connected an MCP *agent* to :3001/mcp/, called the deployed tool 3× plus a junk-arg call, then:
+- runtime `/v1/health` → healthy, serving the connector
+- `/v1/sessions` → 1 agent session recorded
+- `/v1/audit` → 4 tool-call entries
+- `/v1/metrics/token-efficiency` → per-tool call_count=4, avg_tokens=165, duration + error tracking
+- plugin `elliot_session_summary` / `studio_get_connector_info` / `studio_get_metrics` /
+  `studio_get_audit_log` all reflect the built connector and the agent's calls.
+Conclusion: what an agent builds and does IS surfaced in the data layer Studio reads. (UI render
+layer is exercised separately by dev/e2e/test_layer3_studio_ui.py.)

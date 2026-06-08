@@ -324,3 +324,13 @@ post-fetch warning revealed cursor_record_field. Proper, general fix (not a use-
 AND Stripe-style `cursor_param`/`cursor_record_field`/`has_more_field` — so the fields are
 discoverable from the reference material agents read (resources/read
 elliot://templates/paginated-rest), before any failed fetch.
+
+### [CLOUD-FIX VERIFIED] Template fix re-tested on Cloud — build flailing cut ~65%
+Restarted Cloud API (loads the updated paginated-rest template) and re-ran the SAME Cloud builder
+agent on the same Stripe-like API:
+- Before the template fix (v1): 151 assistant turns / 83 tool calls / 18 errors to find cursor_record_field.
+- After the template fix (v2): 52 turns / 30 calls / 7 errors — published with complete data
+  (total_paid_revenue = $118,704 across 553 invoices).
+A consumer agent against the v2 published Cloud connector produced a correct full-data revenue
+report. Loop owned end-to-end on Cloud: build → found issue → fixed (general, template) → rebuilt →
+measurably better → consumed. ✓

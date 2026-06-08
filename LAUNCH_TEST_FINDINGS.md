@@ -286,9 +286,11 @@ captured and analyzed. Iterated build → analyze trace → fix Elliot → rebui
 Studio UI screenshots captured showing Dashboard (Connector Live, 66/65-row results — complete data),
 Metrics (12 calls, 0% errors, per-tool latency), Tools, Connector, Console.
 
-### [OBS-6] Onboarding resources not addressable (low)
-Across builds the agent repeatedly tried `resources/read elliot://prompt/getting_started` and
-`elliot://principles` (natural guesses) → "Unknown resource". The getting_started guidance exists as
-an MCP *prompt*, not a resource. Agents recovered instantly with zero outcome impact. Candidate
-polish: also expose getting_started/principles as readable resources. Logged, not changed (no
-functional impact; avoid over-fixing).
+### [OBS-6 — INVESTIGATED, NO FIX WARRANTED] Agent guessed resource URIs
+Across builds the agent tried `resources/read elliot://prompt/getting_started` / `elliot://principles`
+(guesses) → "Unknown resource", then recovered instantly (zero outcome impact). On inspection this is
+NOT an Elliot defect: the server's onboarding instructions ALREADY tell the agent to call
+`resources/list` and name the available resources (principles, error-codes, install), and getting_started
+is correctly served as a prompt (`prompts/get name=getting_started`). The agent guessed a URI instead of
+listing. Adding alias resources to match guesses would be a one-use-case patch for a non-bug, so —
+consistent with the "proper fix, not patch" standard — no code change was made.

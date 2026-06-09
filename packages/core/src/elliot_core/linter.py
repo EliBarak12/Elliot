@@ -75,39 +75,26 @@ _FILTER_SEMANTICS_RE = re.compile(
     re.IGNORECASE,
 )
 
-_VERBS = {
-    "return",
-    "get",
-    "list",
-    "fetch",
-    "find",
-    "search",
-    "count",
-    "create",
-    "update",
-    "delete",
-    "send",
-    "run",
-    "execute",
-    "check",
-    "calculate",
-    "summarise",
-    "summarize",
-    "filter",
-    "retrieve",
-    "show",
-    "aggregate",
-    "export",
-    "generate",
-    "compute",
-    "load",
-    "submit",
-    "remove",
-    "insert",
-    "stream",
-    "resolve",
-    "validate",
-}
+# Canonical "description starts with an action verb" matcher. Accepts BOTH the
+# imperative ("Return the X") and the third-person-singular present form
+# ("Returns the X") — real authors and the agentic builder write both, and the
+# trailing-`s` form is the more common professional style (it is exactly what
+# this module's own WRITE_TOOL_DESCRIPTION suggestion recommends:
+# "Creates...", "Deletes...", "Sends..."). Flagging it was a false positive
+# that made the linter contradict both its own advice and the quality scan.
+#
+# This is the single source of truth for the verb check: elliot_core.eval.quality
+# imports _VERB_RE from here so the linter and the quality scan can never drift
+# apart on the same description.
+_VERB_RE = re.compile(
+    r"^\s*(return|list|get|find|create|update|delete|calculate|"
+    r"search|fetch|check|count|filter|retrieve|"
+    r"aggregate|export|generate|compute|load|send|submit|"
+    r"remove|show|run|execute|insert|stream|resolve|validate|"
+    r"summari[sz]e|surface|pull|lookup|identify|detect|match|group|rank|sort|"
+    r"join|map|report|yield|produce|build|compose|assemble)(?:es|s)?\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -249,8 +236,7 @@ def _lint_tool_source_coverage(config: ConnectorConfig) -> list[LintIssue]:
 
 
 def _starts_with_verb(description: str) -> bool:
-    first_word = description.strip().split()[0].lower().rstrip(".,:")
-    return first_word in _VERBS
+    return bool(_VERB_RE.match(description))
 
 
 def _is_list_tool(tool_id: str) -> bool:

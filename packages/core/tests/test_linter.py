@@ -163,6 +163,27 @@ def test_description_missing_verb_is_warn() -> None:
     assert any(i.severity == "WARN" for i in issues if i.code == "DESCRIPTION_MISSING_VERB")
 
 
+def test_third_person_descriptions_are_not_flagged() -> None:
+    # Third-person-singular present is the standard professional style and is
+    # exactly what the linter's own WRITE_TOOL_DESCRIPTION suggestion recommends
+    # ("Creates...", "Deletes...", "Sends..."). Flagging it contradicted our own
+    # advice and the quality scan; lock the accepted forms in. Includes the
+    # sibilant "-es" verbs (Fetches/Searches) that a bare "s?" would miss.
+    for description in (
+        "Returns the top N products by revenue",
+        "Lists all active customers",
+        "Creates a new order for a customer",
+        "Deletes a customer by id",
+        "Sends a notification email",
+        "Fetches the latest invoice for an account",
+        "Searches orders by status and date",
+        "Updates a record in place",
+    ):
+        config = _make_connector(description=description)
+        issues = lint_connector(config)
+        assert not any(i.code == "DESCRIPTION_MISSING_VERB" for i in issues), description
+
+
 def test_unbounded_select_is_error() -> None:
     config = _make_connector(sql="SELECT * FROM items")
     issues = lint_connector(config)

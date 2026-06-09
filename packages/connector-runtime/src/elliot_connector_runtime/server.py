@@ -707,7 +707,16 @@ def _register_tool(
             inspect.Parameter(
                 "confirm",
                 inspect.Parameter.KEYWORD_ONLY,
-                annotation=bool,
+                annotation=Annotated[
+                    bool,
+                    Field(
+                        description=(
+                            "Safety gate for this destructive operation. Leave false to have "
+                            "the call rejected with CONFIRMATION_REQUIRED; set true only after "
+                            "the user has authorised the change, then re-call to execute it."
+                        )
+                    ),
+                ],
                 default=False,
             )
         )

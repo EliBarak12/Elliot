@@ -316,6 +316,17 @@ def _truncation_note(result: Any) -> str:
     from .executor import max_result_rows
 
     cap = max_result_rows()
+    reason = getattr(result, "truncation_reason", None)
+    if reason == "source_cap":
+        # The upstream snapshot was capped before this query ran, so the rows
+        # returned may be missing matches that no client-side filter recovers.
+        return (
+            f"The data source backing this tool was capped at {cap} rows when it "
+            "was fetched, so this result may be missing matching rows. Treat it as "
+            "incomplete: prefer a tool that filters upstream (passes the filter to "
+            "the source), or ask the connector author to add server-side filtering "
+            "or pagination to this source."
+        )
     total = getattr(result, "total_rows", None)
     if isinstance(total, int) and total > cap:
         scope = f"Returned the first {cap} of {total} matching rows"

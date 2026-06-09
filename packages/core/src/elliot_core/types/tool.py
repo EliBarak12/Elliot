@@ -85,6 +85,13 @@ class QueryResult(BaseModel):
     # True row count before truncation (None when not truncated). Lets callers
     # tell the agent "returned X of Y" so the truncation marker is actionable.
     total_rows: int | None = None
+    # Why the set is incomplete, so callers can give the right recovery advice:
+    #   "result_cap" — this query matched more rows than the cap; narrowing the
+    #                  request will return a complete, context-sized set.
+    #   "source_cap" — the upstream snapshot itself was capped before the query
+    #                  ran, so rows may be missing that no client-side filter can
+    #                  recover; the source needs upstream filtering/pagination.
+    truncation_reason: Literal["result_cap", "source_cap"] | None = None
 
 
 class ToolDefinition(BaseModel):

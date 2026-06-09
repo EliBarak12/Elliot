@@ -86,6 +86,9 @@ class ToolExecutor:
         # fetch/flatten/load for the same source without blocking unrelated
         # sources.
         self._locks: dict[str, asyncio.Lock] = {}
+        # Source ids whose most recent fetch hit the row cap, so the snapshot
+        # the tool now queries is itself incomplete. Cleared on re-materialize.
+        self._truncated_sources: set[str] = set()
 
     async def execute(
         self,
@@ -182,10 +185,26 @@ class ToolExecutor:
                         return self._capped_result(tool.id, [])
             raise
 
-        return self._capped_result(tool.id, rows)
+        return self._capped_result(tool.id, rows, source_capped=self._tool_source_capped(tool))
 
-    def _capped_result(self, tool_id: str, rows: list[dict[str, Any]]) -> QueryResult:
-        """Apply the hard row cap, flagging truncation when it bites."""
+    def _capped_result(
+        self,
+        tool_id: str,
+        rows: list[dict[str, Any]],
+        source_capped: bool = False,
+    ) -> QueryResult:
+        """Apply the hard row cap, flagging truncation when it bites.
+
+        Two independent kinds of incompleteness are surfaced:
+
+        * ``result_cap`` — THIS query matched more rows than the cap. Returning
+          the first ``cap`` and telling the agent to narrow the request yields a
+          complete, context-sized answer.
+        * ``source_cap`` — the upstream snapshot the query ran against was itself
+          capped at fetch time (a REST source with more than ``cap`` rows), so
+          rows may be missing that no client-side filter can recover. This is
+          reported even when the query's own result is small.
+        """
         cap = max_result_rows()
         if len(rows) > cap:
             log.warning(
@@ -195,9 +214,28 @@ class ToolExecutor:
                 total=len(rows),
             )
             return QueryResult(
-                rows=rows[:cap], tool_id=tool_id, truncated=True, total_rows=len(rows)
+                rows=rows[:cap],
+                tool_id=tool_id,
+                truncated=True,
+                total_rows=len(rows),
+                truncation_reason="result_cap",
+            )
+        if source_capped:
+            log.warning("tool.result.source_truncated", tool_id=tool_id, cap=cap)
+            return QueryResult(
+                rows=rows,
+                tool_id=tool_id,
+                truncated=True,
+                truncation_reason="source_cap",
             )
         return QueryResult(rows=rows, tool_id=tool_id)
+
+    def _tool_source_capped(self, tool: ToolDefinition) -> bool:
+        """Whether any source this tool reads from had its snapshot capped."""
+        if not self._truncated_sources:
+            return False
+        needed = {s.id for s in self._sources_needed_for(tool)}
+        return bool(self._truncated_sources & needed)
 
     # ── materialization ────────────────────────────────────────────────────
 
@@ -257,6 +295,9 @@ class ToolExecutor:
 
             assert self._engine is not None  # set by _ensure_materialized
             table_name = source.table_name or source.id
+            # This snapshot is about to be replaced — drop any stale "capped"
+            # mark so a now-smaller source isn't reported as truncated.
+            self._truncated_sources.discard(source.id)
             try:
                 rows = await self._fetch_source(source, arguments)
             except Exception as exc:
@@ -375,8 +416,11 @@ class ToolExecutor:
                 all_rows.extend(rows)
 
                 # FIX 3: stop paginating and truncate once the accumulated
-                # row count reaches the cap.
+                # row count reaches the cap. Record that this source's snapshot
+                # is now incomplete so the executor can tell the agent (a result
+                # built on a capped snapshot may be silently missing matches).
                 if len(all_rows) >= row_cap:
+                    self._truncated_sources.add(source.id)
                     if len(all_rows) > row_cap:
                         log.warning(
                             "source.fetch.rows_truncated",
@@ -506,6 +550,10 @@ class ToolExecutor:
             )
 
         api_params = {k: arguments[k] for k in tool.rest_query_params if k in arguments}
+        # Passthrough fetches live every call, so clear any cap mark from a
+        # prior call before re-fetching; _fetch_rest re-adds it if this fetch
+        # hits the cap.
+        self._truncated_sources.discard(source.id)
         rows = await self._fetch_rest(source, arguments, extra_params=api_params)
 
         if tool.sql or tool.filter_groups or tool.return_fields:
@@ -535,7 +583,9 @@ class ToolExecutor:
             api_params=sorted(api_params),
             row_count=len(rows),
         )
-        return self._capped_result(tool.id, rows)
+        return self._capped_result(
+            tool.id, rows, source_capped=source.id in self._truncated_sources
+        )
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────

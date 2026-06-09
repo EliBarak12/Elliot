@@ -187,6 +187,34 @@ async def test_executor_rest_source_row_cap(monkeypatch: pytest.MonkeyPatch) -> 
     # Materialized rows are capped at 3, so the WHERE species='cat' query
     # cannot return more than 3.
     assert len(result.rows) <= 3
+    # The snapshot was capped at fetch time, so the result must NOT pretend to
+    # be complete — it is flagged as a source-level truncation so the agent is
+    # told the underlying data may be missing rows (principle 3).
+    assert result.truncated is True
+    assert result.truncation_reason == "source_cap"
+
+
+@respx.mock
+async def test_executor_rest_source_under_cap_not_truncated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A REST source whose snapshot fits under the cap is not flagged: the
+    source-truncation marker must not fire on complete data."""
+    from elliot_connector_runtime.server import _result_truncated
+
+    monkeypatch.setenv("ELLIOT_MAX_RESULT_ROWS", "50")
+    respx.get("https://api.example.com/animals").mock(
+        return_value=httpx.Response(
+            200,
+            json={"items": [{"id": i, "species": "cat"} for i in range(5)]},
+        )
+    )
+    tool = CONNECTOR.tools[0]
+    executor = ToolExecutor(CONNECTOR, secrets={})
+    result = await executor.execute(tool, {"species": "cat"})
+    assert result.truncated is False
+    assert result.truncation_reason is None
+    assert _result_truncated(result) is False
 
 
 @respx.mock
@@ -891,3 +919,20 @@ def test_truncation_note_without_total_is_still_actionable() -> None:
 
     note = _truncation_note(QueryResult(rows=[], tool_id="t", truncated=True))
     assert "narrow" in note.lower()
+
+
+def test_source_cap_note_advises_upstream_filtering() -> None:
+    """A source-capped result gets distinct advice: the upstream snapshot is
+    incomplete, so 'narrow the request' is the WRONG fix — recommend upstream
+    filtering/pagination instead."""
+    from elliot_connector_runtime.server import _truncation_note
+    from elliot_core.types import QueryResult
+
+    note = _truncation_note(
+        QueryResult(rows=[{"id": 1}], tool_id="t", truncated=True, truncation_reason="source_cap")
+    )
+    assert "incomplete" in note.lower()
+    assert "upstream" in note.lower()
+    # It must NOT tell the agent to merely narrow its own request, which cannot
+    # recover rows the source dropped at fetch time.
+    assert "narrow the request" not in note.lower()

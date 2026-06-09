@@ -130,6 +130,21 @@ def _infer_source_ids_from_sql(sql: str, session: ElliotSession) -> list[str]:
     return matched or list(session.sources.keys())
 
 
+def _normalize_query_param(p: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a raw query/parameter dict to a ToolDefinition parameter shape,
+    applying defaults. Raises ElliotError when the required ``name`` is missing."""
+    pname = p.get("name")
+    if not pname:
+        raise ElliotError("VALIDATION_ERROR", "each query_param needs a 'name'.")
+    return {
+        "name": pname,
+        "type": p.get("type", "string"),
+        "required": p.get("required", True),
+        "description": p.get("description", ""),
+        "enum": p.get("enum"),
+    }
+
+
 def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
     @mcp.tool()
     def elliot_create_tool(
@@ -264,20 +279,8 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                     f"Could not derive a valid tool id from name {name!r}.",
                 )
 
-            def _norm(p: dict[str, Any]) -> dict[str, Any]:
-                pname = p.get("name")
-                if not pname:
-                    raise ElliotError("VALIDATION_ERROR", "each query_param needs a 'name'.")
-                return {
-                    "name": pname,
-                    "type": p.get("type", "string"),
-                    "required": p.get("required", True),
-                    "description": p.get("description", ""),
-                    "enum": p.get("enum"),
-                }
-
-            qp = [_norm(p) for p in query_params]
-            all_params = qp + [_norm(p) for p in (parameters or [])]
+            qp = [_normalize_query_param(p) for p in query_params]
+            all_params = qp + [_normalize_query_param(p) for p in (parameters or [])]
             tool = ToolDefinition.model_validate(
                 {
                     "id": tool_id,

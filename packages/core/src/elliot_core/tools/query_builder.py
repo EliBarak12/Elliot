@@ -86,47 +86,21 @@ def build_select_sql(
     quote = _QUOTERS.get(dialect, safe_ident)
     bound: dict[str, Any] = {}
 
-    # ── SELECT clause ──────────────────────────────────────────────────────
-    has_agg = any(rf.aggregation and rf.aggregation != "none" for rf in tool.return_fields)
-    group_by_cols: list[str] = []
+    select_clause, group_by_cols = _build_select_clause(tool, quote)
 
-    if not tool.return_fields:
-        select_clause = "*"
-    else:
-        parts: list[str] = []
-        for rf in tool.return_fields:
-            # COUNT(*) special case: field "*" means count all rows. The bare
-            # "*" is not a valid identifier, so handle before the quoter.
-            is_star = rf.field == "*"
-            col = rf.field.replace(".", "_")
-            quoted_col = "*" if is_star else quote(col)
-            if rf.aggregation and rf.aggregation != "none":
-                alias = rf.alias or f"{rf.aggregation}_{'all' if is_star else col}"
-                quoted_alias = quote(alias)
-                parts.append(f"{rf.aggregation.upper()}({quoted_col}) AS {quoted_alias}")
-            else:
-                alias_clause = f" AS {quote(rf.alias)}" if rf.alias and rf.alias != col else ""
-                parts.append(f"{quoted_col}{alias_clause}")
-                if has_agg and not is_star:
-                    group_by_cols.append(quoted_col)  # non-agg fields go into GROUP BY
-        select_clause = ", ".join(parts)
-
-    # ── FROM ───────────────────────────────────────────────────────────────
     from_expr = from_clause if from_clause is not None else quote(tool.source_ids[0])
     sql = f"SELECT {select_clause} FROM {from_expr}"
 
-    # ── WHERE ──────────────────────────────────────────────────────────────
     where_parts = _build_group_parts(
         tool.filter_groups, params, bound, prefix="w", quote=quote, dialect=dialect
     )
     if where_parts:
         sql += " WHERE " + " AND ".join(where_parts)
 
-    # ── GROUP BY (auto-derived from non-aggregated return fields) ──────────
+    # GROUP BY is auto-derived from the non-aggregated return fields.
     if group_by_cols:
         sql += " GROUP BY " + ", ".join(group_by_cols)
 
-    # ── HAVING ─────────────────────────────────────────────────────────────
     if tool.having:
         having_parts = _build_group_parts(
             tool.having, params, bound, prefix="h", quote=quote, dialect=dialect
@@ -134,22 +108,61 @@ def build_select_sql(
         if having_parts:
             sql += " HAVING " + " AND ".join(having_parts)
 
-    # ── ORDER BY ───────────────────────────────────────────────────────────
-    if tool.order_by:
-        order_parts: list[str] = []
-        for of in tool.order_by:
-            field_col = of.field.replace(".", "_")
-            # Direction must be ASC or DESC; reject anything else as injection.
-            if of.direction not in ("ASC", "DESC"):
-                raise ValueError(f"Invalid ORDER BY direction: {of.direction!r}")
-            order_parts.append(f"{quote(field_col)} {of.direction}")
-        sql += " ORDER BY " + ", ".join(order_parts)
+    order_clause = _build_order_by(tool, quote)
+    if order_clause:
+        sql += " ORDER BY " + order_clause
 
-    # ── LIMIT ──────────────────────────────────────────────────────────────
     # tool.limit is a typed int via Pydantic; safe to f-string.
     sql += f" LIMIT {int(tool.limit)}"
 
     return sql, bound
+
+
+def _build_select_clause(
+    tool: ToolDefinition, quote: Callable[[str], str]
+) -> tuple[str, list[str]]:
+    """Build the SELECT column list, returning (select_clause, group_by_cols).
+
+    When any return field is aggregated, the non-aggregated fields are
+    collected into group_by_cols so the caller can emit a matching GROUP BY.
+    """
+    if not tool.return_fields:
+        return "*", []
+
+    has_agg = any(rf.aggregation and rf.aggregation != "none" for rf in tool.return_fields)
+    group_by_cols: list[str] = []
+    parts: list[str] = []
+    for rf in tool.return_fields:
+        # COUNT(*) special case: field "*" means count all rows. The bare
+        # "*" is not a valid identifier, so handle before the quoter.
+        is_star = rf.field == "*"
+        col = rf.field.replace(".", "_")
+        quoted_col = "*" if is_star else quote(col)
+        if rf.aggregation and rf.aggregation != "none":
+            alias = rf.alias or f"{rf.aggregation}_{'all' if is_star else col}"
+            quoted_alias = quote(alias)
+            parts.append(f"{rf.aggregation.upper()}({quoted_col}) AS {quoted_alias}")
+        else:
+            alias_clause = f" AS {quote(rf.alias)}" if rf.alias and rf.alias != col else ""
+            parts.append(f"{quoted_col}{alias_clause}")
+            if has_agg and not is_star:
+                group_by_cols.append(quoted_col)  # non-agg fields go into GROUP BY
+    return ", ".join(parts), group_by_cols
+
+
+def _build_order_by(tool: ToolDefinition, quote: Callable[[str], str]) -> str:
+    """Build the ORDER BY column list (without the leading keyword), or '' when
+    the tool declares no ordering. Rejects any non-ASC/DESC direction as
+    injection."""
+    if not tool.order_by:
+        return ""
+    order_parts: list[str] = []
+    for of in tool.order_by:
+        field_col = of.field.replace(".", "_")
+        if of.direction not in ("ASC", "DESC"):
+            raise ValueError(f"Invalid ORDER BY direction: {of.direction!r}")
+        order_parts.append(f"{quote(field_col)} {of.direction}")
+    return ", ".join(order_parts)
 
 
 def _build_group_parts(

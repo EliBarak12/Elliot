@@ -15,6 +15,11 @@ from elliot_core.errors import SourceFetchError
 from elliot_core.http import SSRFError, safe_client, validate_url
 from elliot_core.redaction import redact_url
 from elliot_core.sources.envelope import extract_rows, looks_like_unextracted_envelope
+from elliot_core.sources.pagination import (
+    next_cursor,
+    pagination_request_params,
+    parse_link_next,
+)
 from elliot_core.types.source import FetchResult, SourceConfig
 
 log = structlog.get_logger(__name__)
@@ -160,9 +165,64 @@ def _build_auth_query_params(config: SourceConfig, secrets: dict[str, str]) -> d
 _extract_rows = extract_rows
 
 
-def _parse_link_next(link_header: str) -> str | None:
-    m = re.search(r'<([^>]+)>;\s*rel="next"', link_header)
-    return m.group(1) if m else None
+async def _request_with_retries(
+    client: httpx.AsyncClient,
+    *,
+    config: SourceConfig,
+    url: str,
+    params: dict[str, Any] | None,
+    headers: dict[str, str],
+    retry_budget: int,
+) -> tuple[httpx.Response, int]:
+    """Issue one request, retrying transport errors and retryable statuses.
+
+    Honors both the per-request attempt limit (``_MAX_RETRIES``) and the
+    shared cross-page retry budget (FIX 4) so a flaky upstream can't amplify
+    into a request storm. Returns the response with the remaining budget, or
+    raises SourceFetchError when attempts/budget are exhausted or the final
+    response is an error.
+    """
+    resp: httpx.Response | None = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            resp = await client.request(
+                method=config.method,
+                url=url,
+                params=params,
+                headers=headers,
+            )
+        except httpx.TransportError as exc:
+            if attempt == _MAX_RETRIES - 1:
+                raise SourceFetchError(
+                    f"Network error fetching {redact_url(config.url)}: {type(exc).__name__}"
+                ) from exc
+            if retry_budget <= 0:
+                raise SourceFetchError(
+                    f"Exhausted total retry budget ({_MAX_TOTAL_RETRIES}) "
+                    f"fetching {redact_url(config.url)}"
+                ) from exc
+            retry_budget -= 1
+            await asyncio.sleep(2**attempt)
+            continue
+
+        if resp.status_code in _RETRY_STATUSES and attempt < _MAX_RETRIES - 1:
+            if retry_budget <= 0:
+                raise SourceFetchError(
+                    f"Exhausted total retry budget ({_MAX_TOTAL_RETRIES}) "
+                    f"fetching {redact_url(config.url)}"
+                )
+            retry_budget -= 1
+            delay = min(_retry_after_seconds(resp.headers.get("Retry-After"), 2**attempt), 30)
+            await asyncio.sleep(delay)
+            continue
+        break
+
+    if resp is None or resp.is_error:
+        status = resp.status_code if resp else 0
+        raise SourceFetchError(
+            f"HTTP {status} from {redact_url(config.url)} after {_MAX_RETRIES} attempts"
+        )
+    return resp, retry_budget
 
 
 async def fetch_endpoint(
@@ -212,61 +272,18 @@ async def fetch_endpoint(
             except SSRFError as exc:
                 raise SourceFetchError(f"Refusing to fetch: {exc.message}") from exc
             request_params: dict[str, Any] = dict(base_params)
+            request_params.update(
+                pagination_request_params(pagination, offset=offset, page=page, cursor=cursor)
+            )
 
-            if pagination.strategy == "offset":
-                request_params["offset"] = offset
-                request_params["limit"] = pagination.page_size
-            elif pagination.strategy == "page":
-                request_params["page"] = page
-            elif pagination.strategy == "cursor" and cursor:
-                request_params["cursor"] = cursor
-
-            resp: httpx.Response | None = None
-            for attempt in range(_MAX_RETRIES):
-                try:
-                    resp = await client.request(
-                        method=config.method,
-                        url=request_url,
-                        params=request_params or None,
-                        headers=headers,
-                    )
-                except httpx.TransportError as exc:
-                    # Retry only if both the per-page attempt limit AND the
-                    # global retry budget allow it. The budget (FIX 4) caps
-                    # total upstream retries across the whole paginated fetch
-                    # so a flaky upstream can't amplify into a request storm.
-                    if attempt == _MAX_RETRIES - 1:
-                        raise SourceFetchError(
-                            f"Network error fetching {redact_url(config.url)}: {type(exc).__name__}"
-                        ) from exc
-                    if retry_budget <= 0:
-                        raise SourceFetchError(
-                            f"Exhausted total retry budget ({_MAX_TOTAL_RETRIES}) "
-                            f"fetching {redact_url(config.url)}"
-                        ) from exc
-                    retry_budget -= 1
-                    await asyncio.sleep(2**attempt)
-                    continue
-
-                if resp.status_code in _RETRY_STATUSES and attempt < _MAX_RETRIES - 1:
-                    if retry_budget <= 0:
-                        raise SourceFetchError(
-                            f"Exhausted total retry budget ({_MAX_TOTAL_RETRIES}) "
-                            f"fetching {redact_url(config.url)}"
-                        )
-                    retry_budget -= 1
-                    delay = min(
-                        _retry_after_seconds(resp.headers.get("Retry-After"), 2**attempt), 30
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                break
-
-            if resp is None or resp.is_error:
-                status = resp.status_code if resp else 0
-                raise SourceFetchError(
-                    f"HTTP {status} from {redact_url(config.url)} after {_MAX_RETRIES} attempts"
-                )
+            resp, retry_budget = await _request_with_retries(
+                client,
+                config=config,
+                url=request_url,
+                params=request_params or None,
+                headers=headers,
+                retry_budget=retry_budget,
+            )
 
             _enforce_response_size(resp, config.url)
             data = resp.json()
@@ -309,15 +326,11 @@ async def fetch_endpoint(
                     break
                 page += 1
             elif pagination.strategy == "cursor":
-                cursor = (
-                    data.get("next_cursor") or data.get(pagination.cursor_field or "cursor")
-                    if isinstance(data, dict)
-                    else None
-                )
+                cursor = next_cursor(data, pagination)
                 if not cursor:
                     break
             elif pagination.strategy == "link_header":
-                next_url = _parse_link_next(resp.headers.get("link", ""))
+                next_url = parse_link_next(resp.headers.get("link", ""))
                 if not next_url:
                     break
             else:

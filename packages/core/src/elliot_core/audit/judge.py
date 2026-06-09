@@ -59,6 +59,9 @@ _ACTIONABLE_HINTS = (
 # Gate thresholds.
 _MIN_SUCCESS_RATE = 0.6
 
+# One tool call located within its transcript: (seed_id, call_index, call).
+_Call = tuple[str, int, AuditToolCall]
+
 
 def _score(ratio: float) -> float:
     """Map a 0-1 quality ratio onto a 1-10 score."""
@@ -96,38 +99,20 @@ def _suggestion_for(call: AuditToolCall) -> str:
     return "Investigate why this call failed and make recovery obvious to the agent."
 
 
-def judge_audit(
+def _collect_findings(
     transcripts: list[AuditTranscript],
-    config: ConnectorConfig,
-) -> AuditReport:
-    """Score ``transcripts`` against ``config`` and return an :class:`AuditReport`."""
-    tool_ids = {t.id for t in config.tools}
+    *,
+    error_calls: list[_Call],
+    unknown_tool_calls: list[_Call],
+    oversized_calls: list[_Call],
+) -> list[AuditFinding]:
+    """Turn the pre-bucketed problem calls into citable AuditFindings.
+
+    One finding per incomplete task, unknown-tool call, failed call (bucketed
+    into a dimension by error code / actionability), and oversized result.
+    """
     findings: list[AuditFinding] = []
 
-    all_calls: list[tuple[str, int, AuditToolCall]] = [
-        (tr.seed_id, idx, call) for tr in transcripts for idx, call in enumerate(tr.calls)
-    ]
-    total_calls = len(all_calls)
-    error_calls = [(s, i, c) for s, i, c in all_calls if not c.ok]
-    completed = sum(1 for tr in transcripts if tr.task_completed)
-    success_rate = completed / len(transcripts) if transcripts else 0.0
-    total_tokens = sum(c.result_token_estimate or 0 for _, _, c in all_calls)
-
-    schema_errors = [
-        t for t in error_calls if (t[2].error_code or "").upper() in _SCHEMA_ERROR_CODES
-    ]
-    selection_errors = [
-        t for t in error_calls if (t[2].error_code or "").upper() in _SELECTION_ERROR_CODES
-    ]
-    unknown_tool_calls = [t for t in all_calls if t[2].tool_id not in tool_ids]
-    oversized_calls = [
-        (s, i, c)
-        for s, i, c in all_calls
-        if (c.result_token_estimate or 0) > OVERSIZED_TOKEN_ESTIMATE
-    ]
-    nonactionable_errors = [t for t in error_calls if not _is_actionable(t[2].error_message)]
-
-    # ── findings ────────────────────────────────────────────────────────────
     for tr in transcripts:
         if not tr.task_completed:
             findings.append(
@@ -200,7 +185,27 @@ def judge_audit(
             )
         )
 
-    # ── dimension scores ────────────────────────────────────────────────────
+    return findings
+
+
+def _build_dimension_scores(
+    *,
+    transcripts: list[AuditTranscript],
+    completed: int,
+    success_rate: float,
+    all_calls: list[_Call],
+    error_calls: list[_Call],
+    schema_errors: list[_Call],
+    selection_errors: list[_Call],
+    unknown_tool_calls: list[_Call],
+    oversized_calls: list[_Call],
+    nonactionable_errors: list[_Call],
+    total_tokens: int,
+    tool_ids: set[str],
+) -> list[DimensionScore]:
+    """Build the seven graded (1-10) dimension scores from the aggregates."""
+    total_calls = len(all_calls)
+
     def ratio(bad: int) -> float:
         return 1.0 - (bad / total_calls) if total_calls else 1.0
 
@@ -208,7 +213,7 @@ def judge_audit(
     distinct_tools_used = {c.tool_id for _, _, c in all_calls} & tool_ids
     coverage = len(distinct_tools_used) / len(tool_ids) if tool_ids else 1.0
 
-    dimension_scores = [
+    return [
         DimensionScore(
             dimension="task_completion",
             score=_score(success_rate),
@@ -258,6 +263,59 @@ def judge_audit(
             ),
         ),
     ]
+
+
+def judge_audit(
+    transcripts: list[AuditTranscript],
+    config: ConnectorConfig,
+) -> AuditReport:
+    """Score ``transcripts`` against ``config`` and return an :class:`AuditReport`."""
+    tool_ids = {t.id for t in config.tools}
+
+    all_calls: list[_Call] = [
+        (tr.seed_id, idx, call) for tr in transcripts for idx, call in enumerate(tr.calls)
+    ]
+    total_calls = len(all_calls)
+    error_calls = [(s, i, c) for s, i, c in all_calls if not c.ok]
+    completed = sum(1 for tr in transcripts if tr.task_completed)
+    success_rate = completed / len(transcripts) if transcripts else 0.0
+    total_tokens = sum(c.result_token_estimate or 0 for _, _, c in all_calls)
+
+    schema_errors = [
+        t for t in error_calls if (t[2].error_code or "").upper() in _SCHEMA_ERROR_CODES
+    ]
+    selection_errors = [
+        t for t in error_calls if (t[2].error_code or "").upper() in _SELECTION_ERROR_CODES
+    ]
+    unknown_tool_calls = [t for t in all_calls if t[2].tool_id not in tool_ids]
+    oversized_calls = [
+        (s, i, c)
+        for s, i, c in all_calls
+        if (c.result_token_estimate or 0) > OVERSIZED_TOKEN_ESTIMATE
+    ]
+    nonactionable_errors = [t for t in error_calls if not _is_actionable(t[2].error_message)]
+
+    findings = _collect_findings(
+        transcripts,
+        error_calls=error_calls,
+        unknown_tool_calls=unknown_tool_calls,
+        oversized_calls=oversized_calls,
+    )
+
+    dimension_scores = _build_dimension_scores(
+        transcripts=transcripts,
+        completed=completed,
+        success_rate=success_rate,
+        all_calls=all_calls,
+        error_calls=error_calls,
+        schema_errors=schema_errors,
+        selection_errors=selection_errors,
+        unknown_tool_calls=unknown_tool_calls,
+        oversized_calls=oversized_calls,
+        nonactionable_errors=nonactionable_errors,
+        total_tokens=total_tokens,
+        tool_ids=tool_ids,
+    )
 
     error_count = sum(1 for f in findings if f.severity == "error")
     passed = error_count == 0 and success_rate >= _MIN_SUCCESS_RATE

@@ -55,8 +55,15 @@ def test_save_and_load_secrets_roundtrip(store: WorkspaceStore):
 def test_secrets_file_is_binary(store: WorkspaceStore, tmp_path: Path):
     store.save_secrets({"TOKEN": "xyz"})
     raw = (tmp_path / ".elliot" / "secrets.enc").read_bytes()
-    # The first 12 bytes are a random nonce — file is not valid JSON
-    assert not raw.startswith(b"{")
+    # The real property is that the secret is encrypted at rest: neither the
+    # value nor the key name appears in cleartext, and the file is not the JSON
+    # plaintext. (Asserting `not raw.startswith(b"{")` was flaky — the file
+    # opens with a random 12-byte nonce, so ~1/256 of the time its first byte
+    # is "{" 0x7B and the check failed for a perfectly valid encrypted file.)
+    assert b"xyz" not in raw  # secret value never stored in cleartext
+    assert b"TOKEN" not in raw  # nor the key name
+    with pytest.raises(ValueError):
+        json.loads(raw)  # not the human-readable JSON plaintext
     assert len(raw) > 12  # nonce (12 bytes) + ciphertext
 
 

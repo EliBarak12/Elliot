@@ -19,6 +19,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
 import { AgentOnboarding } from "@/components/dashboard/AgentOnboarding";
 import { useSessionState } from "@/hooks/useSessionState";
+import { formatMs } from "@/lib/format";
 import { httpJson } from "@/lib/http";
 import { cn } from "@/lib/utils";
 
@@ -241,7 +242,7 @@ export default function Dashboard() {
                     {entry.result_row_count} rows
                   </span>
                   <span className="text-xs text-muted-foreground tabular-nums w-14 text-right">
-                    {entry.duration_ms.toFixed(0)}ms
+                    {formatMs(entry.duration_ms)}
                   </span>
                   {entry.error && (
                     <Badge variant="destructive" className="shrink-0">

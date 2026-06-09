@@ -10,7 +10,13 @@ from typing import Any
 
 import structlog
 
+from elliot_core.env import env_flag
 from elliot_core.sources.envelope import extract_rows
+from elliot_core.sources.pagination import (
+    next_cursor,
+    pagination_request_params,
+    parse_link_next,
+)
 from elliot_core.sqlite.engine import SQLiteEngine
 from elliot_core.sqlite.flattener import flatten
 from elliot_core.tools.query_builder import build_select_sql
@@ -92,8 +98,6 @@ class ToolExecutor:
         tool: ToolDefinition,
         arguments: dict[str, Any],
     ) -> QueryResult:
-        from elliot_core.sqlite.query_runner import validate_tool_sql
-
         # DB filter push-down: when a tool's filters compile to a SELECT and
         # it needs exactly one Postgres/MySQL source, run that SELECT straight
         # against the database so filtering, projection and LIMIT all happen
@@ -110,20 +114,7 @@ class ToolExecutor:
         if tool.category == "READ" and tool.rest_query_params:
             return await self._execute_passthrough(tool, arguments)
 
-        # Determine SQL: prefer explicit sql, fall back to build_select_sql for filter_groups tools
-        if tool.sql:
-            # Even connector-supplied SQL must be a single SELECT/CTE — a
-            # malicious or buggy connector author cannot ship a DDL/DML tool
-            # (CLAUDE.md: "READ tools must not mutate").
-            ok, reason = validate_tool_sql(tool.sql)
-            if not ok:
-                raise ExecutorError(f"Tool {tool.id!r} has invalid SQL: {reason}")
-            sql: str = tool.sql
-            params: dict[str, Any] = {p.name: arguments.get(p.name) for p in tool.parameters}
-        elif tool.filter_groups or tool.return_fields:
-            sql, params = build_select_sql(tool, arguments)
-        else:
-            raise ExecutorError(f"Tool '{tool.id}' has no sql or filter_groups defined")
+        sql, params = self._resolve_tool_sql(tool, arguments)
 
         # Tests/internals can inject a pre-loaded engine — skip materialization
         # entirely so unit tests don't need network/file fixtures.
@@ -136,50 +127,9 @@ class ToolExecutor:
         try:
             rows = engine.query(sql, params)
         except Exception as exc:
-            from elliot_core.errors import ElliotError
-
-            if isinstance(exc, ElliotError) and exc.code == "INVALID_SQL":
-                table_names = engine.get_table_names()
-                if not table_names:
-                    raise ElliotError(
-                        "SOURCE_NOT_MATERIALIZED",
-                        (
-                            "No data is loaded for this connector. None of the "
-                            "configured sources produced rows, so the tool's "
-                            "SQL has no tables to query."
-                        ),
-                        detail={"tool_id": tool.id, "sources": list(self._sources.keys())},
-                    ) from exc
-                missing = _missing_tables(sql, table_names)
-                if missing:
-                    raise ElliotError(
-                        "TABLE_NOT_FOUND",
-                        (
-                            f"Tool {tool.id!r} references table(s) "
-                            f"{sorted(missing)!r} that the connector did not "
-                            f"materialize. Available tables: {sorted(table_names)!r}."
-                        ),
-                        detail={
-                            "tool_id": tool.id,
-                            "missing_tables": sorted(missing),
-                            "available_tables": sorted(table_names),
-                        },
-                    ) from exc
-                # A "no such column" error against tables that all exist but
-                # are empty is not a real error: an empty table cannot match
-                # any WHERE clause / projection, so the correct, non-error
-                # result is simply []. (An empty REST envelope like
-                # `{"items": []}` materializes a zero-row, zero-column table.)
-                if "no such column" in str(exc).lower():
-                    referenced = _extract_table_names(sql)
-                    existing = [t for t in referenced if t in table_names]
-                    if existing and all(_table_is_empty(engine, t) for t in existing):
-                        log.info(
-                            "tool.empty_source.no_match",
-                            tool_id=tool.id,
-                            tables=sorted(existing),
-                        )
-                        return self._capped_result(tool.id, [])
+            translated = self._translate_query_error(exc, engine, tool, sql)
+            if translated is not None:
+                return translated
             raise
 
         return self._capped_result(tool.id, rows)
@@ -196,6 +146,98 @@ class ToolExecutor:
             )
             return QueryResult(rows=rows[:cap], tool_id=tool_id, truncated=True)
         return QueryResult(rows=rows, tool_id=tool_id)
+
+    def _resolve_tool_sql(
+        self, tool: ToolDefinition, arguments: dict[str, Any]
+    ) -> tuple[str, dict[str, Any]]:
+        """Resolve the SELECT a tool runs against the SQLite engine.
+
+        Prefers validated connector-supplied SQL, falling back to one compiled
+        from the tool's filter_groups / return_fields. Shared by the snapshot
+        path (``execute``) and the passthrough post-fetch filter so the two
+        cannot drift. Raises ExecutorError if the tool defines neither.
+        """
+        from elliot_core.sqlite.query_runner import validate_tool_sql
+
+        if tool.sql:
+            # Even connector-supplied SQL must be a single SELECT/CTE — a
+            # malicious or buggy connector author cannot ship a DDL/DML tool
+            # (CLAUDE.md: "READ tools must not mutate").
+            ok, reason = validate_tool_sql(tool.sql)
+            if not ok:
+                raise ExecutorError(f"Tool {tool.id!r} has invalid SQL: {reason}")
+            params: dict[str, Any] = {p.name: arguments.get(p.name) for p in tool.parameters}
+            return tool.sql, params
+        if tool.filter_groups or tool.return_fields:
+            return build_select_sql(tool, arguments)
+        raise ExecutorError(f"Tool '{tool.id}' has no sql or filter_groups defined")
+
+    def _translate_query_error(
+        self,
+        exc: Exception,
+        engine: SQLiteEngine,
+        tool: ToolDefinition,
+        sql: str,
+    ) -> QueryResult | None:
+        """Map a raw engine query failure into an actionable result.
+
+        A bare INVALID_SQL from the SQLite engine is usually a materialization
+        problem, not bad SQL: no tables loaded (SOURCE_NOT_MATERIALIZED), a
+        referenced table that was never materialized (TABLE_NOT_FOUND), or a
+        column miss against tables that are all empty — which simply means "no
+        rows match", so the correct non-error result is [].
+
+        Returns the empty QueryResult for the empty-source case, or None when
+        the error is not one we translate (the caller then re-raises the
+        original). Raises the more specific ElliotError for the
+        materialization cases.
+        """
+        from elliot_core.errors import ElliotError
+
+        if not (isinstance(exc, ElliotError) and exc.code == "INVALID_SQL"):
+            return None
+
+        table_names = engine.get_table_names()
+        if not table_names:
+            raise ElliotError(
+                "SOURCE_NOT_MATERIALIZED",
+                (
+                    "No data is loaded for this connector. None of the "
+                    "configured sources produced rows, so the tool's "
+                    "SQL has no tables to query."
+                ),
+                detail={"tool_id": tool.id, "sources": list(self._sources.keys())},
+            ) from exc
+        missing = _missing_tables(sql, table_names)
+        if missing:
+            raise ElliotError(
+                "TABLE_NOT_FOUND",
+                (
+                    f"Tool {tool.id!r} references table(s) "
+                    f"{sorted(missing)!r} that the connector did not "
+                    f"materialize. Available tables: {sorted(table_names)!r}."
+                ),
+                detail={
+                    "tool_id": tool.id,
+                    "missing_tables": sorted(missing),
+                    "available_tables": sorted(table_names),
+                },
+            ) from exc
+        # A "no such column" error against tables that all exist but are empty
+        # is not a real error: an empty table cannot match any WHERE clause /
+        # projection, so the correct, non-error result is simply []. (An empty
+        # REST envelope like `{"items": []}` materializes a zero-row table.)
+        if "no such column" in str(exc).lower():
+            referenced = _extract_table_names(sql)
+            existing = [t for t in referenced if t in table_names]
+            if existing and all(_table_is_empty(engine, t) for t in existing):
+                log.info(
+                    "tool.empty_source.no_match",
+                    tool_id=tool.id,
+                    tables=sorted(existing),
+                )
+                return self._capped_result(tool.id, [])
+        return None
 
     # ── materialization ────────────────────────────────────────────────────
 
@@ -347,13 +389,9 @@ class ToolExecutor:
                 # Passthrough query params (forwarded from the tool call) are the
                 # base; pagination params are layered on top.
                 params: dict[str, Any] = dict(extra_params or {})
-                if pagination.strategy == "offset":
-                    params["offset"] = offset
-                    params["limit"] = pagination.page_size
-                elif pagination.strategy == "page":
-                    params["page"] = page
-                elif pagination.strategy == "cursor" and cursor:
-                    params["cursor"] = cursor
+                params.update(
+                    pagination_request_params(pagination, offset=offset, page=page, cursor=cursor)
+                )
 
                 resp = await client.get(request_url, headers=headers, params=params or None)
                 resp.raise_for_status()
@@ -396,17 +434,11 @@ class ToolExecutor:
                         break
                     page += 1
                 elif pagination.strategy == "cursor":
-                    cursor = (
-                        envelope.get("next_cursor") if isinstance(envelope, dict) else None
-                    ) or (
-                        envelope.get(pagination.cursor_field or "cursor")
-                        if isinstance(envelope, dict)
-                        else None
-                    )
+                    cursor = next_cursor(envelope, pagination)
                     if not cursor:
                         break
                 elif pagination.strategy == "link_header":
-                    next_url = _parse_link_next(resp.headers.get("link", ""))
+                    next_url = parse_link_next(resp.headers.get("link", ""))
                     if not next_url:
                         break
                 else:
@@ -507,21 +539,10 @@ class ToolExecutor:
         rows = await self._fetch_rest(source, arguments, extra_params=api_params)
 
         if tool.sql or tool.filter_groups or tool.return_fields:
-            from elliot_core.sqlite.query_runner import validate_tool_sql
-
             engine = SQLiteEngine()
             try:
                 engine.load_result(flatten(rows, table_name=source.table_name or source.id))
-                if tool.sql:
-                    ok, reason = validate_tool_sql(tool.sql)
-                    if not ok:
-                        raise ExecutorError(f"Tool {tool.id!r} has invalid SQL: {reason}")
-                    sql = tool.sql
-                    params: dict[str, Any] = {
-                        p.name: arguments.get(p.name) for p in tool.parameters
-                    }
-                else:
-                    sql, params = build_select_sql(tool, arguments)
+                sql, params = self._resolve_tool_sql(tool, arguments)
                 rows = engine.query(sql, params)
             finally:
                 engine.close()
@@ -537,14 +558,6 @@ class ToolExecutor:
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
-
-
-def _parse_link_next(link_header: str) -> str | None:
-    """Return the next URL from an RFC 5988 ``Link: <url>; rel="next"`` header."""
-    import re
-
-    m = re.search(r'<([^>]+)>;\s*rel="next"', link_header or "")
-    return m.group(1) if m else None
 
 
 def _extract_table_names(sql: str) -> list[str]:
@@ -621,12 +634,7 @@ def _host_env_secrets_allowed() -> bool:
     ``DATABASE_URL``, or the platform's own ``ELLIOT_CLOUD_SECRETS_ENCRYPTION_KEY``)
     and have the server inject its own environment into an outbound request.
     """
-    return os.environ.get("ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS", "").strip().lower() not in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return not env_flag("ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS")
 
 
 def _resolve_secret(key: str, secrets: dict[str, str]) -> str:

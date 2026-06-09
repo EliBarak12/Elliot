@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from elliot_core.sqlite.column_namer import deduplicate_names, safe_name
@@ -12,6 +13,21 @@ MAX_ARRAY_ROWS = 1000
 _MAX_INLINE_KEYS = (
     10  # dicts with more keys are serialized as JSON TEXT to prevent column explosion
 )
+
+
+@dataclass
+class _FlattenState:
+    """Accumulators threaded through the whole flatten of one dataset.
+
+    Bundled so the recursive helpers take one ``state`` instead of passing
+    these three around individually. All three are mutated in place:
+    ``child_tables`` collects synthetic child-table rows, ``warnings`` collects
+    FlattenWarnings, and ``counters`` holds the per-table monotonic ``_id``.
+    """
+
+    child_tables: dict[str, list[dict[str, Any]]]
+    warnings: list[FlattenWarning]
+    counters: dict[str, int]
 
 
 def flatten(data: list[Any], table_name: str) -> FlattenResult:
@@ -32,6 +48,7 @@ def flatten(data: list[Any], table_name: str) -> FlattenResult:
     # without depending on SQLite's ``rowid`` (which the runtime cannot
     # rely on across re-materialisations).
     counters: dict[str, int] = {table_name: 0}
+    state = _FlattenState(child_tables=child_tables, warnings=warnings, counters=counters)
 
     primary_rows: list[dict[str, Any]] = []
     for item in data:
@@ -43,11 +60,9 @@ def flatten(data: list[Any], table_name: str) -> FlattenResult:
             table_name,
             0,
             frozenset(),
-            child_tables,
-            warnings,
+            state,
             parent_id=None,
             my_id=my_id,
-            counters=counters,
         )
         # ``_id`` is the canonical column name agents write JOINs against.
         row["_id"] = my_id
@@ -83,12 +98,10 @@ def _flatten_obj(
     warning_path: str,
     depth: int,
     visited: frozenset[int],
-    child_tables: dict[str, list[dict[str, Any]]],
-    warnings: list[FlattenWarning],
+    state: _FlattenState,
     *,
     parent_id: int | None,
     my_id: int,
-    counters: dict[str, int],
 ) -> dict[str, Any]:
     """Flatten a single object. ``my_id`` is this row's ``_id`` value
     (assigned by the caller before recursing); list-of-objects fields
@@ -99,7 +112,7 @@ def _flatten_obj(
         return {"value": _scalar(obj)}
 
     if id(obj) in visited:
-        warnings.append(
+        state.warnings.append(
             FlattenWarning(
                 type="circular_reference",
                 path=warning_path,
@@ -123,10 +136,8 @@ def _flatten_obj(
             depth,
             visited,
             row,
-            child_tables,
-            warnings,
+            state,
             my_id=my_id,
-            counters=counters,
         )
 
     return row
@@ -140,11 +151,9 @@ def _process_field(
     depth: int,
     visited: frozenset[int],
     row: dict[str, Any],
-    child_tables: dict[str, list[dict[str, Any]]],
-    warnings: list[FlattenWarning],
+    state: _FlattenState,
     *,
     my_id: int,
-    counters: dict[str, int],
 ) -> None:
     field_path = f"{warning_path}.{col}"
 
@@ -153,7 +162,7 @@ def _process_field(
 
     elif isinstance(value, dict):
         if depth >= MAX_DEPTH:
-            warnings.append(
+            state.warnings.append(
                 FlattenWarning(
                     type="depth_exceeded",
                     path=field_path,
@@ -162,7 +171,7 @@ def _process_field(
             )
             row[col] = json.dumps(value)
         elif len(value) > _MAX_INLINE_KEYS:
-            warnings.append(
+            state.warnings.append(
                 FlattenWarning(
                     type="wide_object_serialized",
                     path=field_path,
@@ -174,7 +183,7 @@ def _process_field(
             )
             row[col] = json.dumps(value)
         elif id(value) in visited:
-            warnings.append(
+            state.warnings.append(
                 FlattenWarning(
                     type="circular_reference",
                     path=field_path,
@@ -194,11 +203,9 @@ def _process_field(
                 field_path,
                 depth + 1,
                 visited,
-                child_tables,
-                warnings,
+                state,
                 parent_id=None,
                 my_id=my_id,
-                counters=counters,
             )
             for sub_key, sub_val in sub.items():
                 row[f"{col}_{sub_key}"] = sub_val
@@ -207,8 +214,8 @@ def _process_field(
         child_name = f"{table_name}_{col}"
         if not value:
             # Rule 12: empty array → empty child table
-            if child_name not in child_tables:
-                child_tables[child_name] = []
+            if child_name not in state.child_tables:
+                state.child_tables[child_name] = []
         elif all(isinstance(item, (str, int, float, bool, type(None))) for item in value):
             # Rule 3: array of primitives → JSON TEXT
             row[col] = json.dumps(value)
@@ -216,7 +223,7 @@ def _process_field(
             # Rule 4: array of objects → child table
             items: list[Any] = value
             if len(items) > MAX_ARRAY_ROWS:
-                warnings.append(
+                state.warnings.append(
                     FlattenWarning(
                         type="array_truncated",
                         path=field_path,
@@ -228,28 +235,26 @@ def _process_field(
                 )
                 items = items[:MAX_ARRAY_ROWS]
 
-            if child_name not in child_tables:
-                child_tables[child_name] = []
-            counters.setdefault(child_name, 0)
+            if child_name not in state.child_tables:
+                state.child_tables[child_name] = []
+            state.counters.setdefault(child_name, 0)
 
             for idx, item in enumerate(items):
-                counters[child_name] += 1
-                child_id = counters[child_name]
+                state.counters[child_name] += 1
+                child_id = state.counters[child_name]
                 child_row = _flatten_obj(
                     item,
                     child_name,
                     f"{field_path}[{idx}]",
                     depth + 1,
                     visited,
-                    child_tables,
-                    warnings,
+                    state,
                     parent_id=my_id,
                     my_id=child_id,
-                    counters=counters,
                 )
                 child_row["_id"] = child_id
                 child_row.setdefault("_index", idx)
-                child_tables[child_name].append(child_row)
+                state.child_tables[child_name].append(child_row)
     else:
         try:
             row[col] = json.dumps(value)

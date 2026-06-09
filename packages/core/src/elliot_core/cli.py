@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -516,6 +517,78 @@ def _cmd_connect(args: argparse.Namespace) -> None:
     print()
 
 
+def _cmd_kpi(args: argparse.Namespace) -> None:
+    """Print the weekly PMF brief defined in SCOPE.md.
+
+    Pulls retention, Sean Ellis distribution, and per-tool success rate from
+    the observation store and reports against the three evidence gates we
+    track before declaring product-market fit.
+    """
+    db_url = os.environ.get("ELLIOT_DB_URL", "sqlite:///.elliot/observations.db")
+
+    try:
+        from elliot_connector_runtime.observation_store import ObservationStore
+        from elliot_connector_runtime.pmf import kpi_brief
+    except ImportError as exc:
+        print(f"elliot-connector-runtime is not installed: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    store = ObservationStore(db_url)
+    brief = kpi_brief(store, window_days=args.window)
+
+    if args.json:
+        print(json.dumps(brief, indent=2, default=str))
+        return
+
+    r = brief["retention"]
+    s = brief["sean_ellis"]
+    gates = brief["gates"]
+
+    print()
+    print(f"Elliot KPI brief — last {brief['window_days']} days")
+    print("─" * 56)
+    print()
+    print("Retention")
+    print(f"  active installations:     {r['active_installations']}")
+    print(f"  active on 2+ days:        {r['repeat_installations']}")
+    print(f"  active agents (client+model): {r['active_agents']}")
+    print(f"  median active days:       {r['active_days_median']:.1f}")
+    print(f"  total sessions:           {r['total_sessions']}")
+    print(f"  total tool calls:         {r['total_tool_calls']}")
+    print(f"  error rate:               {r['error_rate']:.1%}")
+    print()
+    print(f"Sean Ellis (last {s['window_days']} days)")
+    print(f"  responses:                {s['responses']}")
+    print(f"  very disappointed:        {s['very_disappointed']}")
+    print(f"  somewhat disappointed:    {s['somewhat_disappointed']}")
+    print(f"  not disappointed:         {s['not_disappointed']}")
+    print(f"  share very disappointed:  {s['very_disappointed_share']:.0%}")
+    print()
+    print("Tool success rate")
+    tools = brief["tools"]
+    if not tools:
+        print("  (no tools with 20+ calls in the window)")
+    else:
+        for t in tools[:10]:
+            print(f"  {t['tool_id']:<32} {t['calls']:>5} calls   {t['success_rate']:.0%} success")
+    print(f"  median success rate:      {brief['median_tool_success_rate']:.0%}")
+    print()
+    print("Evidence gates (SCOPE.md §4)")
+    for label, key in [
+        ("≥10 repeat installations", "active_installations_ge_10"),
+        ("Sean Ellis ≥40%", "sean_ellis_ge_40pct"),
+        ("median success ≥90%", "median_success_ge_90pct"),
+    ]:
+        icon = "✓" if gates[key] else "✗"
+        print(f"  {icon} {label}")
+    print()
+    if brief["pmf_reached"]:
+        print("  All gates met. PMF threshold reached — see SCOPE.md §4.")
+    else:
+        print("  PMF not yet reached. Keep going; do not expand scope.")
+    print()
+
+
 def _cmd_trace(args: argparse.Namespace) -> None:
     """Install/remove the harness hook that streams local agent runs to Elliot."""
     from elliot_core.trace import SUPPORTED_HARNESSES
@@ -538,19 +611,24 @@ def _cmd_trace(args: argparse.Namespace) -> None:
         print(f"✓ Elliot trace hook removed for {harness} ({target})")
 
 
-def main() -> None:
-    # Windows consoles default to cp1252, which cannot encode the box-drawing
-    # rules and check-mark glyphs (U+2500, U+2713, U+2717, U+2514) used in
-    # `connect`/`status`/`scan` output — printing them raises UnicodeEncodeError
-    # and crashes the command. Force UTF-8 on the standard streams so the CLI
-    # behaves the same everywhere; errors="replace" keeps output flowing if a
-    # stream still can't encode a glyph.
-    for _stream in (sys.stdout, sys.stderr):
-        _reconfigure = getattr(_stream, "reconfigure", None)
-        if _reconfigure is not None:
-            with contextlib.suppress(ValueError, OSError):
-                _reconfigure(encoding="utf-8", errors="replace")
+def _force_utf8_streams() -> None:
+    """Force UTF-8 on stdout/stderr.
 
+    Windows consoles default to cp1252, which cannot encode the box-drawing
+    rules and check-mark glyphs (U+2500, U+2713, U+2717, U+2514) used in
+    ``connect``/``status``/``scan`` output — printing them raises
+    UnicodeEncodeError and crashes the command. ``errors="replace"`` keeps
+    output flowing if a stream still can't encode a glyph.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            with contextlib.suppress(ValueError, OSError):
+                reconfigure(encoding="utf-8", errors="replace")
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Construct the ``elliot`` argument parser with every subcommand."""
     parser = argparse.ArgumentParser(prog="elliot", description="Elliot developer tools")
     sub = parser.add_subparsers(dest="command")
 
@@ -614,6 +692,15 @@ def main() -> None:
         help="Preview which agent config files would change, without writing anything.",
     )
 
+    kpi_cmd = sub.add_parser(
+        "kpi",
+        help="Weekly PMF brief — retention, Sean Ellis, success rate (SCOPE.md §4)",
+    )
+    kpi_cmd.add_argument("--window", type=int, default=14, help="Window size in days (default: 14)")
+    kpi_cmd.add_argument(
+        "--json", action="store_true", help="Output the brief as JSON instead of text"
+    )
+
     trace_cmd = sub.add_parser(
         "trace",
         help="Install hooks so a local agent's runs show in the Agent Console",
@@ -628,24 +715,31 @@ def main() -> None:
         help="Which coding agent to wire up",
     )
 
+    return parser
+
+
+# Subcommand name -> handler. A dispatch table instead of an if/elif chain so
+# a new command is a single entry alongside its parser definition.
+_COMMANDS: dict[str, Callable[[argparse.Namespace], None]] = {
+    "lint": _cmd_lint,
+    "scan": _cmd_scan,
+    "eval": _cmd_eval,
+    "init": _cmd_init,
+    "export-plugin": _cmd_export_plugin,
+    "status": _cmd_status,
+    "connect": _cmd_connect,
+    "kpi": _cmd_kpi,
+    "trace": _cmd_trace,
+}
+
+
+def main() -> None:
+    _force_utf8_streams()
+    parser = _build_parser()
     args = parser.parse_args()
 
-    if args.command == "lint":
-        _cmd_lint(args)
-    elif args.command == "scan":
-        _cmd_scan(args)
-    elif args.command == "eval":
-        _cmd_eval(args)
-    elif args.command == "init":
-        _cmd_init(args)
-    elif args.command == "export-plugin":
-        _cmd_export_plugin(args)
-    elif args.command == "status":
-        _cmd_status(args)
-    elif args.command == "connect":
-        _cmd_connect(args)
-    elif args.command == "trace":
-        _cmd_trace(args)
-    else:
+    handler = _COMMANDS.get(args.command)
+    if handler is None:
         parser.print_help()
         sys.exit(1)
+    handler(args)

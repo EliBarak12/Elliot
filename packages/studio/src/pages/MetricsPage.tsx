@@ -17,7 +17,10 @@ import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatCard } from "@/components/ui/stat-card";
 import { useMetrics } from "@/hooks/useMetrics";
+import { formatMs, formatPercent } from "@/lib/format";
 import { httpJson } from "@/lib/http";
+import { severityBadgeVariant } from "@/lib/severity";
+import { tokenToneClass } from "@/lib/tokenRisk";
 import { cn } from "@/lib/utils";
 
 interface ToolMetric {
@@ -60,16 +63,10 @@ interface HarnessResponse {
   harnesses: HarnessRow[];
 }
 
-function tokenRiskVariant(risk: TokenEfficiencyRow["risk"]) {
-  if (risk === "high") return "destructive";
-  if (risk === "medium") return "warning";
-  return "success";
-}
-
 function TokenBar({ avg, max }: { avg: number; max: number }) {
   const barMax = Math.max(max, 1);
   const avgPct = Math.min((avg / barMax) * 100, 100);
-  const tone = avg > 1000 ? "bg-destructive" : avg > 300 ? "bg-warning" : "bg-success";
+  const tone = tokenToneClass(avg, "bg");
   return (
     <div className="flex items-center gap-2">
       <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
@@ -235,14 +232,14 @@ export default function MetricsPage() {
             />
             <StatCard
               label="Error rate"
-              value={`${(avgErrorRate * 100).toFixed(1)}%`}
+              value={formatPercent(avgErrorRate)}
               icon={AlertCircle}
               tone={avgErrorRate > 0.05 ? "destructive" : "success"}
               hint="Average across tools"
             />
             <StatCard
               label="Avg latency"
-              value={`${avgLatency.toFixed(0)}ms`}
+              value={formatMs(avgLatency)}
               icon={Timer}
               tone={avgLatency > 500 ? "warning" : "default"}
               hint="Across all tools"
@@ -298,11 +295,11 @@ export default function MetricsPage() {
                             variant={m.error_rate > 0.1 ? "destructive" : "success"}
                             className="tabular-nums"
                           >
-                            {((1 - m.error_rate) * 100).toFixed(1)}%
+                            {formatPercent(1 - m.error_rate)}
                           </Badge>
                         </td>
                         <td className="text-right py-2.5 px-5 text-xs tabular-nums">
-                          {m.avg_duration_ms.toFixed(0)}ms
+                          {formatMs(m.avg_duration_ms)}
                         </td>
                       </tr>
                     ))}
@@ -377,11 +374,7 @@ export default function MetricsPage() {
                       <td
                         className={cn(
                           "text-right py-2.5 px-5 text-xs tabular-nums font-medium",
-                          h.tokens > 1000
-                            ? "text-destructive"
-                            : h.tokens > 300
-                              ? "text-warning"
-                              : "text-success"
+                          tokenToneClass(h.tokens)
                         )}
                       >
                         {h.tokens.toLocaleString()}
@@ -440,7 +433,9 @@ export default function MetricsPage() {
                         <TokenBar avg={row.avg_tokens} max={row.max_tokens} />
                       </td>
                       <td className="text-center py-3 px-5">
-                        <Badge variant={tokenRiskVariant(row.risk)}>{row.risk}</Badge>
+                        <Badge variant={severityBadgeVariant(row.risk, "success")}>
+                          {row.risk}
+                        </Badge>
                       </td>
                       <td className="py-3 px-5 text-xs text-muted-foreground">
                         {row.suggestion ?? "—"}

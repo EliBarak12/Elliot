@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { PageHeader } from '@/components/ui/page-header';
 import { EmptyState } from '@/components/ui/empty-state';
+import { formatMs } from '@/lib/format';
 import {
   Select,
   SelectContent,
@@ -232,7 +233,7 @@ export default function PlaygroundPage() {
                         {inv.toolId}
                       </span>
                       <span className="text-2xs text-muted-foreground tabular-nums">
-                        {inv.latencyMs.toFixed(0)}ms
+                        {formatMs(inv.latencyMs)}
                       </span>
                     </button>
                   ))}
@@ -251,7 +252,7 @@ export default function PlaygroundPage() {
                     <CardTitle>Result</CardTitle>
                     <CardDescription className="flex items-center gap-2">
                       <Badge variant="muted" className="tabular-nums">
-                        {currentResult.latencyMs.toFixed(0)}ms
+                        {formatMs(currentResult.latencyMs)}
                       </Badge>
                       <span>{selectedTool?.name}</span>
                     </CardDescription>

@@ -20,6 +20,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Separator } from "@/components/ui/separator";
+import { isExpectedNoConnector, redactConnectionConfig } from "@/lib/connection";
 import { callTool } from "@/lib/mcp-client";
 import { useTools } from "@/hooks/useTools";
 import { useSkills } from "@/hooks/useSkills";
@@ -51,48 +52,6 @@ const SEVERITY_VARIANT: Record<LintIssue["severity"], "destructive" | "warning" 
   WARN: "warning",
   INFO: "muted",
 };
-
-// Connection configs can carry credentials. Never render or copy them raw —
-// deep-copy and mask any known secret-bearing field before serialising.
-const SECRET_FIELDS = new Set([
-  "api_key",
-  "bearer_token",
-  "token",
-  "password",
-  "secret",
-  "authorization",
-  "auth",
-]);
-
-// On a fresh session the plugin may not be reachable yet, or no connector has
-// been built — both are expected and should not raise a user-facing error.
-function isExpectedNoConnector(message: string): boolean {
-  const m = message.toLowerCase();
-  return (
-    m.includes("no connector") ||
-    m.includes("not connected") ||
-    m.includes("not_found") ||
-    m.includes("connection") ||
-    m.includes("fetch") ||
-    m.includes("network")
-  );
-}
-
-function redactConnectionConfig(config: unknown): unknown {
-  if (Array.isArray(config)) {
-    return config.map((item) => redactConnectionConfig(item));
-  }
-  if (config !== null && typeof config === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(config as Record<string, unknown>)) {
-      out[key] = SECRET_FIELDS.has(key.toLowerCase())
-        ? "[REDACTED]"
-        : redactConnectionConfig(value);
-    }
-    return out;
-  }
-  return config;
-}
 
 function LintPanel({ issues }: { issues: LintIssue[] }) {
   if (issues.length === 0) {

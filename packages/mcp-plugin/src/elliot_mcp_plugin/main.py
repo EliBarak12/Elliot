@@ -15,6 +15,7 @@ from elliot_core.http_middleware import AgentIdentityMiddleware
 from elliot_mcp_plugin import __version__
 from elliot_mcp_plugin.server import create_elliot_server
 from elliot_mcp_plugin.session import ElliotSession
+from elliot_mcp_plugin.tools.connector_tools import _kill_process_tree
 
 log = structlog.get_logger(__name__)
 
@@ -34,9 +35,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # Load session state at startup, not import time, so merely importing
     # this module (tests, tooling) performs no disk I/O.
     session.load()
-    async with mcp.session_manager.run():
-        yield
-    session.save()
+    try:
+        async with mcp.session_manager.run():
+            yield
+    finally:
+        # Reap the connector runtime spawned via elliot_start_runtime. It runs
+        # in its own session (start_new_session=True), so it is NOT in the
+        # plugin's process group — without this it outlives the plugin as an
+        # orphan holding the runtime port (leaks the observation store across
+        # restarts, and pollutes successive e2e modules).
+        runtime = session.runtime_process
+        if runtime is not None and runtime.poll() is None:
+            log.info("plugin.shutdown.reaping_runtime", pid=runtime.pid)
+            _kill_process_tree(runtime)
+            session.runtime_process = None
+        session.save()
 
 
 app = FastAPI(lifespan=lifespan)

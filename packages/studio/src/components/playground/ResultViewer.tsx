@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { formatMs } from "@/lib/format";
 
 interface Props {
   result: unknown;
@@ -69,7 +70,7 @@ export function ResultViewer({ result, latencyMs }: Props) {
     <div>
       <div className="flex items-center gap-2 mb-2">
         <Badge variant="outline" className="text-xs">
-          {latencyMs.toFixed(0)}ms
+          {formatMs(latencyMs)}
         </Badge>
         {rowCount !== null && (
           <Badge variant="secondary" className="text-xs">

@@ -11,10 +11,10 @@ from elliot_core.sources.api_fetcher import (
     _build_auth_headers,
     _build_auth_query_params,
     _extract_rows,
-    _parse_link_next,
     _resolve_secret,
     fetch_endpoint,
 )
+from elliot_core.sources.pagination import parse_link_next
 from elliot_core.types.source import AuthConfig, PaginationConfig, SourceConfig
 
 
@@ -187,11 +187,11 @@ def test_extract_rows_data_path_not_found_returns_empty():
 
 def test_parse_link_next_found():
     header = '<https://api.example.com/page2>; rel="next"'
-    assert _parse_link_next(header) == "https://api.example.com/page2"
+    assert parse_link_next(header) == "https://api.example.com/page2"
 
 
 def test_parse_link_next_not_found():
-    assert _parse_link_next('<https://api.example.com/page1>; rel="prev"') is None
+    assert parse_link_next('<https://api.example.com/page1>; rel="prev"') is None
 
 
 # ── fetch_endpoint ────────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+from elliot_core.env import env_flag
 from elliot_core.errors import ElliotError
 
 log = structlog.get_logger(__name__)
@@ -56,12 +57,7 @@ def _is_dev_environment() -> bool:
 
 
 def _allow_dev_key_override() -> bool:
-    return os.environ.get("ELLIOT_ALLOW_DEV_SECRET_KEY", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return env_flag("ELLIOT_ALLOW_DEV_SECRET_KEY")
 
 
 class WorkspaceStore:

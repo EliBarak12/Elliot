@@ -936,3 +936,47 @@ def test_source_cap_note_advises_upstream_filtering() -> None:
     # It must NOT tell the agent to merely narrow its own request, which cannot
     # recover rows the source dropped at fetch time.
     assert "narrow the request" not in note.lower()
+
+
+def test_omitted_param_uses_author_default_in_runtime() -> None:
+    """Production must apply an author-declared parameter default just like the
+    design-time preview executor does. FastMCP passes an omitted optional param
+    through as None; without default-filling, `LIMIT :limit` would bind NULL
+    (no limit) instead of the author's default — a preview/production divergence
+    and an unbounded over-fetch."""
+    import asyncio
+
+    captured: dict = {}
+
+    class _CapturingEngine:
+        def query(self, sql: str, params: dict) -> list[dict]:  # type: ignore[type-arg]
+            captured.update(params)
+            return [{"id": 1}]
+
+    tool = ToolDefinition(
+        id="list_things",
+        name="List Things",
+        description="Return things up to a limit",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT id FROM things LIMIT :limit",
+        parameters=[
+            ParameterDefinition(
+                name="limit",
+                type="integer",
+                required=False,
+                description="Max rows to return.",
+                default=50,
+            )
+        ],
+    )
+    executor = ToolExecutor(CONNECTOR, secrets={}, engine=_CapturingEngine())  # type: ignore[arg-type]
+
+    # Agent omits `limit` — FastMCP delivers it as None.
+    asyncio.run(executor.execute(tool, {"limit": None}))
+    assert captured["limit"] == 50, "author default not applied when param omitted"
+
+    # An explicit value still wins over the default.
+    captured.clear()
+    asyncio.run(executor.execute(tool, {"limit": 5}))
+    assert captured["limit"] == 5

@@ -97,6 +97,16 @@ class ToolExecutor:
     ) -> QueryResult:
         from elliot_core.sqlite.query_runner import validate_tool_sql
 
+        # Apply each parameter's author-declared default before any execution
+        # path runs. The design-time preview executor (elliot_core.tools.executor)
+        # already does this, but the published runtime did not: FastMCP passes an
+        # omitted optional param through as None, so a tool with `LIMIT :limit`
+        # and a default of 50 ran as `LIMIT NULL` (= no limit) in production while
+        # returning 50 rows in preview — a silent preview/production divergence
+        # and an unbounded over-fetch. Filling defaults here keeps every path
+        # (pushdown, snapshot SQL, filter_groups, passthrough) consistent.
+        arguments = self._apply_param_defaults(tool, arguments)
+
         # DB filter push-down: when a tool's filters compile to a SELECT and
         # it needs exactly one Postgres/MySQL source, run that SELECT straight
         # against the database so filtering, projection and LIMIT all happen
@@ -229,6 +239,23 @@ class ToolExecutor:
                 truncation_reason="source_cap",
             )
         return QueryResult(rows=rows, tool_id=tool_id)
+
+    @staticmethod
+    def _apply_param_defaults(tool: ToolDefinition, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Fill omitted parameters with their author-declared default.
+
+        Only params that declare a non-None default and are currently absent or
+        None are filled — so optional filter params (default None) stay None and
+        keep their SQL bind, while value-like params (limit, page_size) get the
+        default the author intended instead of NULL.
+        """
+        if not any(p.default is not None for p in tool.parameters):
+            return arguments
+        out = dict(arguments)
+        for p in tool.parameters:
+            if p.default is not None and out.get(p.name) is None:
+                out[p.name] = p.default
+        return out
 
     def _tool_source_capped(self, tool: ToolDefinition) -> bool:
         """Whether any source this tool reads from had its snapshot capped."""

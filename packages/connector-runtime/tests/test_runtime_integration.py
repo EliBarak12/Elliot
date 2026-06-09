@@ -314,6 +314,66 @@ async def test_connector_schema_resource_redacts_secrets() -> None:
     assert "api.example.com" in body
 
 
+async def test_runtime_advertises_logging_and_streams_structured_telemetry() -> None:
+    """The runtime must declare the MCP ``logging`` capability and stream each
+    tool call's observability as a structured ``notifications/message`` (so a
+    client like Claude can surface tokens/rows/latency inline, principle 4), and
+    accept ``logging/setLevel`` instead of failing with 'Method not found'."""
+    import asyncio
+
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import ConnectorConfig, SourceConfig, ToolDefinition
+
+    class _Eng:
+        def query(self, sql, params):  # type: ignore[no-untyped-def]
+            return [{"id": 1, "name": "Ada"}]
+
+    tool = ToolDefinition(
+        id="list_x",
+        name="List X",
+        description="List things",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT id, name FROM x",
+        parameters=[],
+    )
+    cfg = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        sources=[SourceConfig(id="s", name="s", type="file", url="x")],
+        tools=[tool],
+        skills=[],
+    )
+    mcp = create_runtime_server(cfg, ToolExecutor(cfg, secrets={}, engine=_Eng()))  # type: ignore[arg-type]
+
+    captured: list = []
+
+    async def on_log(params):  # type: ignore[no-untyped-def]
+        captured.append(params)
+
+    async with create_connected_server_and_client_session(
+        mcp._mcp_server, logging_callback=on_log
+    ) as client:
+        init = await client.initialize()
+        assert init.capabilities.logging is not None, "logging capability not advertised"
+        # Must not raise McpError 'Method not found'.
+        await client.set_logging_level("debug")
+        await client.call_tool("list_x", {})
+        await asyncio.sleep(0.15)
+
+    complete = [p for p in captured if p.data.get("event") == "tool.call.complete"]
+    assert complete, "no structured tool.call.complete log notification was streamed"
+    data = complete[0].data
+    assert data["tool"] == "list_x"
+    assert data["rows"] == 1
+    assert "duration_ms" in data and "truncated" in data
+    assert complete[0].logger == "elliot.runtime"
+
+
 async def test_tool_input_schema_carries_param_description_and_enum() -> None:
     """The agent-facing inputSchema must include each parameter's author-written
     description and its enum (allowed values). Without these the contract the

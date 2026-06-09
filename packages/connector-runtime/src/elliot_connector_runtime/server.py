@@ -340,6 +340,31 @@ def _truncation_note(result: Any) -> str:
     )
 
 
+async def _emit_runtime_log(ctx: Any, level: str, data: dict[str, Any]) -> None:
+    """Emit a structured MCP log notification (``notifications/message``).
+
+    Surfaces Elliot's per-call observability — tool, rows, latency, truncation,
+    error code — to the agent's MCP client in real time via the spec's
+    ``logging`` capability, so principle 4 ("every call observable") is visible
+    inline in the agent's session, not only in the dashboard. A client that sets
+    a higher minimum level simply won't be sent the lower-severity events.
+
+    Metadata only: per the MCP logging security guidance it never carries row
+    data, arguments, or secrets — just counts, durations, and codes. Best-effort:
+    a logging failure must never break the tool call, so everything is
+    suppressed and a missing context is a no-op.
+    """
+    if ctx is None:
+        return
+    with contextlib.suppress(Exception):
+        await ctx.session.send_log_message(
+            level=level,
+            data=data,
+            logger="elliot.runtime",
+            related_request_id=ctx.request_id,
+        )
+
+
 def _suggest(tool_id: str, avg_tokens: float, max_tokens: float) -> str | None:
     if avg_tokens > 1000:
         return f"Average {avg_tokens:.0f} tokens is very high. Add LIMIT clause or SELECT only needed columns."
@@ -406,7 +431,31 @@ def create_runtime_server(
     if store is not None:
         _register_feedback_tool(mcp, store, connector_slug)
 
+    _register_logging(mcp)
+
     return mcp
+
+
+def _register_logging(mcp: FastMCP) -> None:
+    """Advertise the MCP ``logging`` capability and accept ``logging/setLevel``.
+
+    The runtime streams per-call observability as ``notifications/message`` (see
+    ``_emit_runtime_log``), but the spec requires a server that emits logs to
+    declare the ``logging`` capability — which the lowlevel server only does when
+    a ``set_logging_level`` handler is registered. Without this, a compliant
+    client (e.g. Claude) is not told it can receive Elliot's logs and a
+    ``logging/setLevel`` call fails with "Method not found". Registering the
+    handler both advertises the capability and lets the client choose its
+    minimum severity; the lowlevel session then filters notifications to that
+    level automatically.
+    """
+    from mcp import types
+
+    @mcp._mcp_server.set_logging_level()  # type: ignore[no-untyped-call, untyped-decorator]
+    async def _set_level(level: types.LoggingLevel) -> None:  # pragma: no cover - thin shim
+        # The ServerSession records the level and filters send_log_message on it;
+        # we only need to accept the request so the capability is advertised.
+        return None
 
 
 def _register_tool(
@@ -544,7 +593,7 @@ def _register_tool(
         client_version: str | None = None
         with contextlib.suppress(Exception):
             ctx = mcp.get_context()
-            await ctx.info(f"tool.call.start: {td.id}", logger="elliot.runtime")
+        await _emit_runtime_log(ctx, "debug", {"event": "tool.call.start", "tool": td.id})
         if ctx is not None:
             # request_id is per-call — only a last-resort correlation id.
             with contextlib.suppress(Exception):
@@ -630,12 +679,17 @@ def _register_tool(
             result = await active_executor.execute(td, kwargs)
             duration_ms = round((time.monotonic() - t0) * 1000, 1)
             await _observe(td.id, kwargs, result.rows, duration_ms, None, session_id)
-            if ctx is not None:
-                with contextlib.suppress(Exception):
-                    await ctx.info(
-                        f"tool.call.complete: {td.id} rows={len(result.rows)} duration_ms={duration_ms}",
-                        logger="elliot.runtime",
-                    )
+            await _emit_runtime_log(
+                ctx,
+                "info",
+                {
+                    "event": "tool.call.complete",
+                    "tool": td.id,
+                    "rows": len(result.rows),
+                    "duration_ms": duration_ms,
+                    "truncated": _result_truncated(result),
+                },
+            )
             payload = {"rows": result.rows, "count": len(result.rows)}
             if _result_truncated(result):
                 # Marker so the agent knows the result set was capped at
@@ -658,12 +712,11 @@ def _register_tool(
             )
             await _observe(td.id, kwargs, [], duration_ms, str(elliot_exc), session_id)
             error_content = to_mcp_error_content(elliot_exc)
-            if ctx is not None:
-                with contextlib.suppress(Exception):
-                    await ctx.warning(
-                        f"tool.call.error: {td.id} code={elliot_exc.code}",
-                        logger="elliot.runtime",
-                    )
+            await _emit_runtime_log(
+                ctx,
+                "warning",
+                {"event": "tool.call.error", "tool": td.id, "code": elliot_exc.code},
+            )
             raise ValueError(error_content["text"]) from exc
 
     _handler.__name__ = td.id

@@ -10,13 +10,14 @@ import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Annotated, Any
 
 import structlog
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+from pydantic import Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -671,13 +672,27 @@ def _register_tool(
     params = []
     for p in td.parameters:
         if p.type == "integer":
-            annotation: Any = int
+            base: Any = int
         elif p.type == "number":
-            annotation = float
+            base = float
         elif p.type == "boolean":
-            annotation = bool
+            base = bool
         else:
-            annotation = str
+            base = str
+        # Carry the author's parameter description and allowed values into the
+        # MCP inputSchema the agent reads. Without this, the contract the linter
+        # enforces — every parameter described, closed value sets declared as
+        # enums — never reaches the consuming agent, so it cannot tell what a
+        # parameter means or which values are valid and guesses wrong (e.g.
+        # passing "active" to a status that only accepts "open"). This is the
+        # core of principle 1: tool descriptions, parameters included, are the
+        # contract.
+        field_kwargs: dict[str, Any] = {}
+        if p.description.strip():
+            field_kwargs["description"] = p.description.strip()
+        if p.enum:
+            field_kwargs["json_schema_extra"] = {"enum": list(p.enum)}
+        annotation: Any = Annotated[base, Field(**field_kwargs)] if field_kwargs else base
         default = inspect.Parameter.empty if p.required else None
         params.append(
             inspect.Parameter(

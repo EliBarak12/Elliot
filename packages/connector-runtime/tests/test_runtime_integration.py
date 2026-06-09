@@ -314,6 +314,60 @@ async def test_connector_schema_resource_redacts_secrets() -> None:
     assert "api.example.com" in body
 
 
+async def test_tool_input_schema_carries_param_description_and_enum() -> None:
+    """The agent-facing inputSchema must include each parameter's author-written
+    description and its enum (allowed values). Without these the contract the
+    linter enforces never reaches the consuming agent, which then can't tell
+    what a parameter means or which values are valid (principle 1)."""
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import ConnectorConfig
+
+    cfg = ConnectorConfig.model_validate(
+        {
+            "name": "Shop",
+            "slug": "shop",
+            "version": "1.0.0",
+            "sources": [{"id": "s", "name": "s", "type": "file", "url": "x"}],
+            "tools": [
+                {
+                    "id": "find_orders",
+                    "name": "Find Orders",
+                    "description": "List orders filtered by status",
+                    "category": "READ",
+                    "source_ids": ["s"],
+                    "sql": "SELECT id FROM s WHERE status = :status LIMIT 50",
+                    "parameters": [
+                        {
+                            "name": "status",
+                            "type": "string",
+                            "required": True,
+                            "description": "The order status to filter by.",
+                            "enum": ["open", "closed", "refunded"],
+                        },
+                        {
+                            "name": "limit",
+                            "type": "integer",
+                            "required": False,
+                            "description": "Max rows to return (default 50).",
+                        },
+                    ],
+                }
+            ],
+            "skills": [],
+        }
+    )
+    mcp = create_runtime_server(cfg, ToolExecutor(cfg, secrets={}))
+    tool = next(t for t in await mcp.list_tools() if t.name == "find_orders")
+    props = tool.inputSchema["properties"]
+
+    assert props["status"]["description"] == "The order status to filter by."
+    assert props["status"]["enum"] == ["open", "closed", "refunded"]
+    assert props["limit"]["description"] == "Max rows to return (default 50)."
+    # Required/optional split must be preserved through the Annotated wrapping.
+    assert tool.inputSchema["required"] == ["status"]
+
+
 def test_redact_secret_blocks_masks_nested_auth_and_headers() -> None:
     """_redact_secret_blocks masks whole auth/headers/credentials sub-mappings
     regardless of the inner key names."""

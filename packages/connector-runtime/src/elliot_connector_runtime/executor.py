@@ -107,6 +107,15 @@ class ToolExecutor:
         # (pushdown, snapshot SQL, filter_groups, passthrough) consistent.
         arguments = self._apply_param_defaults(tool, arguments)
 
+        # WRITE / ACTION tools mutate an upstream REST API through their
+        # api_mapping (method + path/query/body) rather than querying a snapshot.
+        # The design-time preview executor already runs these; without this the
+        # published runtime advertised every mutation tool but failed the call
+        # with "no sql or filter_groups defined" — so no published WRITE tool
+        # could ever execute.
+        if tool.category in ("WRITE", "ACTION"):
+            return await self._execute_write(tool, arguments)
+
         # DB filter push-down: when a tool's filters compile to a SELECT and
         # it needs exactly one Postgres/MySQL source, run that SELECT straight
         # against the database so filtering, projection and LIMIT all happen
@@ -613,6 +622,107 @@ class ToolExecutor:
         return self._capped_result(
             tool.id, rows, source_capped=source.id in self._truncated_sources
         )
+
+    async def _execute_write(
+        self,
+        tool: ToolDefinition,
+        arguments: dict[str, Any],
+    ) -> QueryResult:
+        """Execute a WRITE/ACTION tool: a real HTTP mutation to a REST source.
+
+        The tool's ``api_mapping`` says how its parameters map into the request:
+        ``method``, a ``path_template`` (``/orders/{order_id}``), ``query_params``
+        and ``body_params``. Path placeholders are URL-encoded so an agent value
+        like ``../admin`` cannot escape its segment, and the request runs through
+        the SAME SSRF defense as reads — the URL is validated and the connection
+        pinned to the vetted IP — so a tenant connector cannot be used to POST to
+        an internal address.
+        """
+        from urllib.parse import urlsplit
+
+        import httpx
+
+        from elliot_core.http import SSRFError, safe_client, validate_url
+
+        mapping = tool.api_mapping
+        if mapping is None:
+            raise ExecutorError(f"{tool.category} tool {tool.id!r} has no api_mapping to execute")
+        if not tool.source_ids:
+            raise ExecutorError(f"{tool.category} tool {tool.id!r} has no source_ids")
+        source = self._sources.get(tool.source_ids[0])
+        if source is None:
+            raise ExecutorError(
+                f"Source {tool.source_ids[0]!r} for tool {tool.id!r} is not configured"
+            )
+        if source.type != "rest":
+            raise ExecutorError(
+                f"{tool.category} tool {tool.id!r} needs a 'rest' source, but {source.id!r} "
+                f"is type {source.type!r}"
+            )
+
+        base_url = (source.url or "").rstrip("/")
+        # _interpolate only substitutes {name} placeholders present in arguments
+        # (the declared, schema-validated params) and percent-encodes each value.
+        path = _interpolate(mapping.path_template or "", arguments)
+        url = base_url + path
+        query = {k: arguments[k] for k in mapping.query_params if arguments.get(k) is not None}
+        body = {k: arguments[k] for k in mapping.body_params if arguments.get(k) is not None}
+        headers = _build_auth_headers(source.auth, self._secrets) if source.auth else {}
+
+        try:
+            initial_ips = validate_url(url)
+        except SSRFError as exc:
+            raise ExecutorError(f"Refusing to call write endpoint: {exc.message}") from exc
+        host = urlsplit(url).hostname or ""
+        pinned_hosts = {host: initial_ips[0]} if (host and initial_ips) else None
+
+        async with safe_client(
+            timeout=source.timeout_ms / 1000, pinned_hosts=pinned_hosts
+        ) as client:
+            try:
+                resp = await client.request(
+                    mapping.method,
+                    url,
+                    params=query or None,
+                    json=body if mapping.body_format == "json" else None,
+                    data=body if mapping.body_format == "form" else None,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                # Surface the status so the agent can recover (principle 3): a 401
+                # means auth, 404 a bad id, 422 bad input. The upstream body is
+                # not echoed — it may carry data the agent shouldn't see.
+                status = exc.response.status_code
+                from elliot_core.errors import ElliotError
+
+                log.error("tool.write.http_error", tool_id=tool.id, status=status)
+                raise ElliotError(
+                    "API_REQUEST_FAILED",
+                    f"The {tool.category} tool's upstream API returned HTTP {status}. "
+                    "Check the parameters you sent and the source's credentials.",
+                    detail={"tool_id": tool.id, "status_code": status},
+                ) from exc
+
+            # Many mutations reply 204 No Content or a non-JSON body; report a
+            # compact success row in that case rather than failing on json().
+            if resp.status_code == 204 or not resp.content:
+                rows: list[dict[str, Any]] = [{"ok": True, "status_code": resp.status_code}]
+            else:
+                try:
+                    data = resp.json()
+                    rows = data if isinstance(data, list) else [data]
+                except ValueError:
+                    rows = [{"ok": True, "status_code": resp.status_code}]
+
+        log.info(
+            "tool.write",
+            tool_id=tool.id,
+            source_id=source.id,
+            method=mapping.method,
+            row_count=len(rows),
+        )
+        return self._capped_result(tool.id, rows)
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────

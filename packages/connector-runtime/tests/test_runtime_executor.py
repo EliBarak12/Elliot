@@ -980,3 +980,123 @@ def test_omitted_param_uses_author_default_in_runtime() -> None:
     captured.clear()
     asyncio.run(executor.execute(tool, {"limit": 5}))
     assert captured["limit"] == 5
+
+
+@respx.mock
+async def test_executor_write_tool_posts_via_api_mapping() -> None:
+    """A published WRITE/ACTION tool must actually execute its mutation: map the
+    agent's params into method + path + query + body and POST upstream. Before
+    this the runtime advertised the tool but failed the call with 'no sql or
+    filter_groups defined' — no published mutation tool could run."""
+    from elliot_core.types import ApiRequestMapping
+
+    tool = ToolDefinition(
+        id="create_order",
+        name="Create Order",
+        description="Create a new order for an org",
+        category="ACTION",
+        source_ids=["api"],
+        api_mapping=ApiRequestMapping(
+            method="POST",
+            path_template="/orgs/{org}/orders",
+            query_params=["notify"],
+            body_params=["item"],
+            body_format="json",
+        ),
+        parameters=[
+            ParameterDefinition(name="org", type="string", required=True, description="org slug"),
+            ParameterDefinition(name="item", type="string", required=True, description="item"),
+            ParameterDefinition(
+                name="notify", type="boolean", required=False, description="notify"
+            ),
+        ],
+    )
+    connector = ConnectorConfig(
+        name="Shop",
+        slug="shop",
+        version="1.0.0",
+        sources=[SourceConfig(id="api", name="API", type="rest", url="https://api.example.com")],
+        tools=[tool],
+        skills=[],
+    )
+    route = respx.post("https://api.example.com/orgs/acme/orders").mock(
+        return_value=httpx.Response(201, json={"id": 7, "item": "widget"})
+    )
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(tool, {"org": "acme", "item": "widget", "notify": True})
+
+    assert result.rows == [{"id": 7, "item": "widget"}]
+    req = route.calls.last.request
+    assert req.method == "POST"
+    # Path placeholder substituted; query + JSON body carried through.
+    assert "notify=true" in str(req.url)
+    import json as _json
+
+    assert _json.loads(req.content) == {"item": "widget"}
+
+
+@respx.mock
+async def test_executor_write_tool_surfaces_http_status() -> None:
+    """An upstream error becomes an actionable API_REQUEST_FAILED carrying the
+    status code — not a raw stack trace, and not a silent success."""
+    from elliot_core.errors import ElliotError
+    from elliot_core.types import ApiRequestMapping
+
+    tool = ToolDefinition(
+        id="delete_order",
+        name="Delete Order",
+        description="Delete an order by id",
+        category="ACTION",
+        source_ids=["api"],
+        api_mapping=ApiRequestMapping(method="DELETE", path_template="/orders/{order_id}"),
+        parameters=[
+            ParameterDefinition(name="order_id", type="string", required=True, description="id")
+        ],
+    )
+    connector = ConnectorConfig(
+        name="Shop",
+        slug="shop",
+        version="1.0.0",
+        sources=[SourceConfig(id="api", name="API", type="rest", url="https://api.example.com")],
+        tools=[tool],
+        skills=[],
+    )
+    respx.delete("https://api.example.com/orders/abc").mock(
+        return_value=httpx.Response(404, json={"error": "not found"})
+    )
+    executor = ToolExecutor(connector, secrets={})
+    with pytest.raises(ElliotError) as exc_info:
+        await executor.execute(tool, {"order_id": "abc"})
+    assert exc_info.value.code == "API_REQUEST_FAILED"
+    assert exc_info.value.detail["status_code"] == 404
+
+
+@respx.mock
+async def test_executor_write_tool_handles_no_content() -> None:
+    """A 204 No Content mutation reports a compact success row instead of
+    failing on an empty JSON body."""
+    from elliot_core.types import ApiRequestMapping
+
+    tool = ToolDefinition(
+        id="archive_order",
+        name="Archive Order",
+        description="Archive an order by id",
+        category="ACTION",
+        source_ids=["api"],
+        api_mapping=ApiRequestMapping(method="POST", path_template="/orders/{order_id}/archive"),
+        parameters=[
+            ParameterDefinition(name="order_id", type="string", required=True, description="id")
+        ],
+    )
+    connector = ConnectorConfig(
+        name="Shop",
+        slug="shop",
+        version="1.0.0",
+        sources=[SourceConfig(id="api", name="API", type="rest", url="https://api.example.com")],
+        tools=[tool],
+        skills=[],
+    )
+    respx.post("https://api.example.com/orders/abc/archive").mock(return_value=httpx.Response(204))
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(tool, {"order_id": "abc"})
+    assert result.rows == [{"ok": True, "status_code": 204}]

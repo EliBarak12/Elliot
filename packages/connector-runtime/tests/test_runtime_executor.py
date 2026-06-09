@@ -842,3 +842,52 @@ async def test_executor_db_pushdown_skipped_for_raw_sql(monkeypatch: pytest.Monk
 
     assert calls == ["query_database"]
     assert result.rows[0]["status"] == "open"
+
+
+def test_capped_result_reports_total_and_actionable_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Truncation must be actionable (principle 3): the QueryResult carries the
+    true total, and the runtime's note tells the agent the partial-result count
+    and the concrete next step."""
+    from elliot_connector_runtime.server import _result_truncated, _truncation_note
+
+    monkeypatch.setenv("ELLIOT_MAX_RESULT_ROWS", "3")
+
+    class _StubEngine:
+        def query(self, sql: str, params: dict) -> list[dict]:  # type: ignore[type-arg]
+            return [{"id": i} for i in range(10)]
+
+    tool = ToolDefinition(
+        id="list_things",
+        name="List Things",
+        description="Return every thing",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT id FROM things",
+        parameters=[],
+    )
+    executor = ToolExecutor(CONNECTOR, secrets={}, engine=_StubEngine())  # type: ignore[arg-type]
+
+    import asyncio
+
+    result = asyncio.run(executor.execute(tool, {}))
+
+    assert result.truncated is True
+    assert len(result.rows) == 3
+    assert result.total_rows == 10
+
+    assert _result_truncated(result) is True
+    note = _truncation_note(result)
+    assert "3 of 10" in note
+    assert "narrow" in note.lower()
+
+
+def test_truncation_note_without_total_is_still_actionable() -> None:
+    """A legacy result that flags truncation but carries no total still yields a
+    note that names the cap and the next step."""
+    from elliot_connector_runtime.server import _truncation_note
+    from elliot_core.types import QueryResult
+
+    note = _truncation_note(QueryResult(rows=[], tool_id="t", truncated=True))
+    assert "narrow" in note.lower()

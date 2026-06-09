@@ -82,6 +82,9 @@ class QueryResult(BaseModel):
     # True when the executor truncated the result at ELLIOT_MAX_RESULT_ROWS;
     # callers surface this to the agent so it knows the set is incomplete.
     truncated: bool = False
+    # True row count before truncation (None when not truncated). Lets callers
+    # tell the agent "returned X of Y" so the truncation marker is actionable.
+    total_rows: int | None = None
 
 
 class ToolDefinition(BaseModel):

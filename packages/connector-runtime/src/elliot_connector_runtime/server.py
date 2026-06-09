@@ -304,6 +304,30 @@ def _result_truncated(result: Any) -> bool:
     return False
 
 
+def _truncation_note(result: Any) -> str:
+    """Actionable guidance for an agent whose result was capped (principle 3).
+
+    A bare ``truncated: true`` tells the agent the set is incomplete but not
+    what to do about it. Spell out that this is a partial result and the
+    concrete next step — narrow the request — so the agent recovers instead
+    of either trying to process a context-blowing dump or silently treating a
+    capped set as the whole answer.
+    """
+    from .executor import max_result_rows
+
+    cap = max_result_rows()
+    total = getattr(result, "total_rows", None)
+    if isinstance(total, int) and total > cap:
+        scope = f"Returned the first {cap} of {total} matching rows"
+    else:
+        scope = f"Returned the first {cap} rows; more rows matched but were not included"
+    return (
+        f"{scope}. This is a partial result, not the complete answer — narrow the "
+        "request (add or tighten a filter, or pass a smaller limit) so the full "
+        "result fits, then call again."
+    )
+
+
 def _suggest(tool_id: str, avg_tokens: float, max_tokens: float) -> str | None:
     if avg_tokens > 1000:
         return f"Average {avg_tokens:.0f} tokens is very high. Add LIMIT clause or SELECT only needed columns."
@@ -576,6 +600,7 @@ def _register_tool(
                 }
                 if _result_truncated(result):
                     payload["truncated"] = True
+                    payload["truncation_note"] = _truncation_note(result)
                 return payload
 
             task_id = task_store.submit(td.id, _work())
@@ -602,8 +627,10 @@ def _register_tool(
             payload = {"rows": result.rows, "count": len(result.rows)}
             if _result_truncated(result):
                 # Marker so the agent knows the result set was capped at
-                # ELLIOT_MAX_RESULT_ROWS and is not the complete answer.
+                # ELLIOT_MAX_RESULT_ROWS and is not the complete answer, plus
+                # an actionable note telling it how to get a complete result.
                 payload["truncated"] = True
+                payload["truncation_note"] = _truncation_note(result)
             return payload
         except Exception as exc:
             # Every failure must be observed — not just ElliotError. A tool

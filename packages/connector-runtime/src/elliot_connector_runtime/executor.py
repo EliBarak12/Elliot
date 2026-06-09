@@ -194,7 +194,9 @@ class ToolExecutor:
                 returned=cap,
                 total=len(rows),
             )
-            return QueryResult(rows=rows[:cap], tool_id=tool_id, truncated=True)
+            return QueryResult(
+                rows=rows[:cap], tool_id=tool_id, truncated=True, total_rows=len(rows)
+            )
         return QueryResult(rows=rows, tool_id=tool_id)
 
     # ── materialization ────────────────────────────────────────────────────

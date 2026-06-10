@@ -249,6 +249,23 @@ def _identity_payload(identity: AgentIdentity | None) -> dict[str, Any] | None:
     return payload if any(payload.values()) else None
 
 
+def _capability_names(capabilities: Any) -> tuple[str, ...] | None:
+    """Reduce an MCP ``ClientCapabilities`` object to the names the client
+    advertised (``roots``, ``sampling``, ``elicitation``, ``experimental``).
+
+    The handshake sends a present-but-empty object for each supported
+    capability and ``None`` for the rest, so a non-None attribute means
+    "supported". Returns ``None`` when nothing was advertised."""
+    if capabilities is None:
+        return None
+    names = [
+        name
+        for name in ("roots", "sampling", "elicitation", "experimental")
+        if getattr(capabilities, name, None) is not None
+    ]
+    return tuple(names) if names else None
+
+
 def _agent_hint_from_identity(identity: AgentIdentity | None) -> str:
     """Best-effort string for the legacy ``agent_hint`` column."""
     if identity is None:
@@ -683,6 +700,8 @@ def _register_tool(
         mcp_session_id: str | None = None
         client_name: str | None = None
         client_version: str | None = None
+        protocol_version: str | None = None
+        capabilities: tuple[str, ...] | None = None
         with contextlib.suppress(Exception):
             ctx = mcp.get_context()
         await _emit_runtime_log(ctx, "debug", {"event": "tool.call.start", "tool": td.id})
@@ -694,23 +713,31 @@ def _register_tool(
             # connection) so a multi-step run groups into one trace.
             header_client: str | None = None
             header_client_version: str | None = None
+            header_model: str | None = None
             with contextlib.suppress(Exception):
                 request = ctx.request_context.request
                 if request is not None:
                     mcp_session_id = request.headers.get("mcp-session-id")
-                    # Explicit override header — set by gateways/clients that want
-                    # to label themselves (and the only signal available when the
-                    # per-tenant runtime can't reach the handshake's clientInfo,
-                    # e.g. behind the cloud's session-reconstructing transport).
+                    # Explicit override headers — set by gateways/clients that
+                    # want to label themselves (and the only signal available
+                    # when the per-tenant runtime can't reach the handshake's
+                    # clientInfo, e.g. behind the cloud's stateless transport).
                     header_client = request.headers.get("x-client-name")
                     header_client_version = request.headers.get("x-client-version")
-            # clientInfo from the MCP `initialize` handshake is the most
-            # reliable signal of which harness is connected.
+                    # MCP carries no model field, so a client volunteers it here.
+                    header_model = request.headers.get("x-model") or request.headers.get(
+                        "x-model-name"
+                    )
+            # clientInfo / protocolVersion / capabilities from the MCP
+            # `initialize` handshake — the spec-backed signals.
             with contextlib.suppress(Exception):
                 client_params = ctx.session.client_params
-                if client_params is not None and client_params.clientInfo is not None:
-                    client_name = client_params.clientInfo.name
-                    client_version = client_params.clientInfo.version
+                if client_params is not None:
+                    if client_params.clientInfo is not None:
+                        client_name = client_params.clientInfo.name
+                        client_version = client_params.clientInfo.version
+                    protocol_version = getattr(client_params, "protocolVersion", None)
+                    capabilities = _capability_names(getattr(client_params, "capabilities", None))
             # Fall back to the explicit header when the handshake didn't surface
             # a client — otherwise every real call records as "unknown".
             if not client_name and header_client:
@@ -718,10 +745,17 @@ def _register_tool(
                 client_version = client_version or header_client_version
         if mcp_session_id:
             session_id = mcp_session_id
-        if client_name:
+        if client_name or protocol_version or capabilities or header_model:
             with contextlib.suppress(Exception):
                 set_current_agent_identity(
-                    merge_client_info(get_current_agent_identity(), client_name, client_version)
+                    merge_client_info(
+                        get_current_agent_identity(),
+                        client_name,
+                        client_version,
+                        protocol_version=protocol_version,
+                        capabilities=capabilities,
+                        model=header_model,
+                    )
                 )
 
         if require_confirmation:

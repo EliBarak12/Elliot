@@ -33,6 +33,11 @@ class _AgentSession(_Base):
     agent_model = Column(String(128), index=True)
     agent_modality = Column(String(64))
     user_agent = Column(String(512))
+    # Spec-backed MCP handshake fields: the protocol version the client speaks
+    # and a comma-separated list of advertised capabilities (roots, sampling,
+    # elicitation, experimental).
+    agent_protocol_version = Column(String(32))
+    agent_capabilities = Column(String(255))
     connector_slug = Column(String(128))
     total_tool_calls = Column(Integer, default=0)
     total_tokens_estimated = Column(Integer, default=0)
@@ -118,6 +123,8 @@ class ObservationStore:
             ("agent_model", "VARCHAR(128)"),
             ("agent_modality", "VARCHAR(64)"),
             ("user_agent", "VARCHAR(512)"),
+            ("agent_protocol_version", "VARCHAR(32)"),
+            ("agent_capabilities", "VARCHAR(255)"),
         ]
         with self._engine.begin() as conn:
             for col_name, col_type in additions:
@@ -224,6 +231,7 @@ class ObservationStore:
         identity = agent_identity or {}
         with Session(self._engine) as db:
             if db.query(_AgentSession).filter_by(session_id=session_id).first() is None:
+                caps = identity.get("capabilities")
                 db.add(
                     _AgentSession(
                         session_id=session_id,
@@ -235,6 +243,8 @@ class ObservationStore:
                         agent_model=identity.get("model"),
                         agent_modality=identity.get("modality"),
                         user_agent=identity.get("user_agent"),
+                        agent_protocol_version=identity.get("protocol_version"),
+                        agent_capabilities=",".join(caps) if caps else None,
                     )
                 )
                 db.commit()

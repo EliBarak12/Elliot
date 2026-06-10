@@ -50,6 +50,24 @@ def test_session_rollups_stay_current_without_close(store: ObservationStore) -> 
     assert sess["error_count"] == 1
 
 
+def test_session_persists_model_protocol_and_capabilities(store: ObservationStore) -> None:
+    """The spec-backed handshake fields (protocol/capabilities) and the
+    client-volunteered model must round-trip onto the session row."""
+    store.open_session(
+        "s1",
+        agent_identity={
+            "client": "claude-code",
+            "model": "claude-opus-4-8",
+            "protocol_version": "2025-06-18",
+            "capabilities": ["roots", "sampling"],
+        },
+    )
+    sess = next(s for s in store.recent_sessions(10) if s["session_id"] == "s1")
+    assert sess["agent_model"] == "claude-opus-4-8"
+    assert sess["agent_protocol_version"] == "2025-06-18"
+    assert sess["agent_capabilities"] == "roots,sampling"
+
+
 def test_write_tool_call_redacts_secret_arguments(store: ObservationStore) -> None:
     """Secret-bearing argument fields must be masked before they hit the DB.
 

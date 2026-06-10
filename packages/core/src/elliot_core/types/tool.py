@@ -91,7 +91,11 @@ class QueryResult(BaseModel):
     #   "source_cap" — the upstream snapshot itself was capped before the query
     #                  ran, so rows may be missing that no client-side filter can
     #                  recover; the source needs upstream filtering/pagination.
-    truncation_reason: Literal["result_cap", "source_cap"] | None = None
+    #   "token_budget" — the rows fit the row cap but their serialized size
+    #                  exceeded the per-call token budget (a few fat rows can
+    #                  blow a context window), so fewer rows were returned;
+    #                  select fewer fields or narrow the request.
+    truncation_reason: Literal["result_cap", "source_cap", "token_budget"] | None = None
 
 
 class ToolDefinition(BaseModel):

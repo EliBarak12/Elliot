@@ -194,6 +194,65 @@ async def test_executor_rest_source_row_cap(monkeypatch: pytest.MonkeyPatch) -> 
     assert result.truncation_reason == "source_cap"
 
 
+def test_fit_rows_to_token_budget() -> None:
+    from elliot_connector_runtime.executor import _fit_rows_to_token_budget
+
+    rows = [{"blob": "x" * 4000} for _ in range(10)]  # each ~1k tokens
+    # A 2500-token budget fits ~2 rows; never returns zero.
+    kept = _fit_rows_to_token_budget(rows, 2500)
+    assert 1 <= kept < 10
+    # A single oversized row is still returned (can't go below one).
+    assert _fit_rows_to_token_budget([{"blob": "x" * 80_000}], 100) == 1
+    # A generous budget keeps everything.
+    assert _fit_rows_to_token_budget(rows, 1_000_000) == 10
+
+
+def test_payload_includes_token_estimate_and_token_budget_note() -> None:
+    from elliot_connector_runtime.server import _payload_for
+    from elliot_core.types import QueryResult
+
+    # Every result carries an estimated_tokens count for the agent.
+    plain = _payload_for(QueryResult(rows=[{"a": 1}], tool_id="t"))
+    assert plain["count"] == 1
+    assert isinstance(plain["estimated_tokens"], int) and plain["estimated_tokens"] > 0
+    assert "truncated" not in plain
+
+    # A token-budget truncation surfaces an actionable note pointing at fields.
+    capped = _payload_for(
+        QueryResult(
+            rows=[{"a": 1}],
+            tool_id="t",
+            truncated=True,
+            total_rows=50,
+            truncation_reason="token_budget",
+        )
+    )
+    assert capped["truncated"] is True
+    assert "field" in capped["truncation_note"].lower()
+    assert "1 of 50" in capped["truncation_note"]
+
+
+@respx.mock
+async def test_executor_token_budget_truncates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rows that fit the row cap but are individually large are trimmed to the
+    per-call token budget — 'sized for context windows', not just 'N rows'."""
+    monkeypatch.setenv("ELLIOT_MAX_RESULT_ROWS", "1000")
+    monkeypatch.setenv("ELLIOT_MAX_RESULT_TOKENS", "1500")
+    respx.get("https://api.example.com/animals").mock(
+        return_value=httpx.Response(
+            200,
+            json={"items": [{"id": i, "species": "cat", "bio": "x" * 4000} for i in range(20)]},
+        )
+    )
+    tool = CONNECTOR.tools[0]
+    executor = ToolExecutor(CONNECTOR, secrets={})
+    result = await executor.execute(tool, {"species": "cat"})
+    assert result.truncated is True
+    assert result.truncation_reason == "token_budget"
+    assert result.total_rows == 20
+    assert 0 < len(result.rows) < 20
+
+
 @respx.mock
 async def test_executor_rest_source_under_cap_not_truncated(
     monkeypatch: pytest.MonkeyPatch,

@@ -53,6 +53,44 @@ def max_result_rows() -> int:
         return _DEFAULT_MAX_RESULT_ROWS
 
 
+# A row cap alone doesn't keep a result inside a context window: a handful of
+# rows carrying large text/JSON blobs can still be tens of thousands of tokens.
+# This budget sizes the result by its *serialized token cost* — the actual
+# promise of "results sized for context windows". 25k tokens leaves ample room
+# in a modern context window for the system prompt, history, and the model's
+# reply. Configurable via ELLIOT_MAX_RESULT_TOKENS; set 0 to disable.
+_DEFAULT_MAX_RESULT_TOKENS = 25_000
+
+
+def max_result_tokens() -> int:
+    """Per-call token budget for a tool result (env ELLIOT_MAX_RESULT_TOKENS).
+
+    Returns 0 when disabled, so the caller skips token-based trimming."""
+    raw = os.environ.get("ELLIOT_MAX_RESULT_TOKENS", "")
+    try:
+        return max(0, int(raw)) if raw else _DEFAULT_MAX_RESULT_TOKENS
+    except ValueError:
+        return _DEFAULT_MAX_RESULT_TOKENS
+
+
+def _fit_rows_to_token_budget(rows: list[dict[str, Any]], budget: int) -> int:
+    """Return how many leading rows fit within ``budget`` serialized tokens.
+
+    Accumulates the per-row estimate (the same tokenizer the observability
+    layer uses) and stops at the first row that would exceed the budget. Always
+    keeps at least one row — a single oversized row is returned (and flagged)
+    rather than an empty result, since the agent still needs something to act
+    on."""
+    from .session_tracker import _estimate_tokens
+
+    total = 0
+    for i, row in enumerate(rows):
+        total += _estimate_tokens(row)
+        if total > budget:
+            return max(1, i)
+    return len(rows)
+
+
 class ToolExecutor:
     """
     Executes a ToolDefinition against the connector's live data sources.
@@ -239,6 +277,28 @@ class ToolExecutor:
                 total_rows=len(rows),
                 truncation_reason="result_cap",
             )
+        # Row cap passed, but a few fat rows (large text/JSON blobs) can still
+        # blow a context window — so size the result by its serialized TOKEN
+        # cost too. This is what makes "results sized for context windows" true
+        # rather than just "capped at N rows".
+        budget = max_result_tokens()
+        if budget and rows:
+            kept = _fit_rows_to_token_budget(rows, budget)
+            if kept < len(rows):
+                log.warning(
+                    "tool.result.token_truncated",
+                    tool_id=tool_id,
+                    returned=kept,
+                    total=len(rows),
+                    budget=budget,
+                )
+                return QueryResult(
+                    rows=rows[:kept],
+                    tool_id=tool_id,
+                    truncated=True,
+                    total_rows=len(rows),
+                    truncation_reason="token_budget",
+                )
         if source_capped:
             log.warning("tool.result.source_truncated", tool_id=tool_id, cap=cap)
             return QueryResult(

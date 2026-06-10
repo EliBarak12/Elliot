@@ -68,6 +68,17 @@ def test_session_persists_model_protocol_and_capabilities(store: ObservationStor
     assert sess["agent_capabilities"] == "roots,sampling"
 
 
+def test_handshake_upsert_unions_capabilities(store: ObservationStore) -> None:
+    """The initialize-handshake facts upsert per client and capabilities union
+    so a later call advertising fewer never drops one."""
+    store.record_handshake("Claude-Code", "2025-06-18", ("roots", "sampling"))
+    store.record_handshake("claude-code", "2025-06-18", ("elicitation",))
+    hs = store.client_handshakes()
+    assert "claude-code" in hs  # keyed lowercase, both calls merged
+    assert hs["claude-code"]["protocol_version"] == "2025-06-18"
+    assert set(hs["claude-code"]["capabilities"]) == {"roots", "sampling", "elicitation"}
+
+
 def test_write_tool_call_redacts_secret_arguments(store: ObservationStore) -> None:
     """Secret-bearing argument fields must be masked before they hit the DB.
 

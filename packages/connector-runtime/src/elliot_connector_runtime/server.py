@@ -692,10 +692,18 @@ def _register_tool(
                 session_id = ctx.request_id
             # Prefer the MCP protocol session id (stable for the whole agent
             # connection) so a multi-step run groups into one trace.
+            header_client: str | None = None
+            header_client_version: str | None = None
             with contextlib.suppress(Exception):
                 request = ctx.request_context.request
                 if request is not None:
                     mcp_session_id = request.headers.get("mcp-session-id")
+                    # Explicit override header — set by gateways/clients that want
+                    # to label themselves (and the only signal available when the
+                    # per-tenant runtime can't reach the handshake's clientInfo,
+                    # e.g. behind the cloud's session-reconstructing transport).
+                    header_client = request.headers.get("x-client-name")
+                    header_client_version = request.headers.get("x-client-version")
             # clientInfo from the MCP `initialize` handshake is the most
             # reliable signal of which harness is connected.
             with contextlib.suppress(Exception):
@@ -703,6 +711,11 @@ def _register_tool(
                 if client_params is not None and client_params.clientInfo is not None:
                     client_name = client_params.clientInfo.name
                     client_version = client_params.clientInfo.version
+            # Fall back to the explicit header when the handshake didn't surface
+            # a client — otherwise every real call records as "unknown".
+            if not client_name and header_client:
+                client_name = header_client
+                client_version = client_version or header_client_version
         if mcp_session_id:
             session_id = mcp_session_id
         if client_name:

@@ -28,6 +28,28 @@ def test_write_and_read_tool_call(store: ObservationStore) -> None:
     assert calls[0]["result_token_estimate"] == 87
 
 
+def test_session_rollups_stay_current_without_close(store: ObservationStore) -> None:
+    """Regression: MCP-over-HTTP clients rarely close cleanly, so the per-agent
+    breakdown must be correct from the denormalized session counters as calls
+    land — not only after close_session. Each call must bump the live totals."""
+    store.open_session("s1", agent_identity={"client": "cursor"})
+    store.write_tool_call("s1", "list", {}, 3, 50, 10.0)
+    store.write_tool_call("s1", "list", {}, 1, 20, 12.0)
+    store.write_tool_call("s1", "list", {}, 0, 0, 5.0, error="boom")
+
+    sess = next(s for s in store.recent_sessions(10) if s["session_id"] == "s1")
+    assert sess["total_tool_calls"] == 2  # successes only
+    assert sess["error_count"] == 1
+    assert sess["total_tokens_estimated"] == 70
+    assert sess["total_duration_ms"] == 27.0
+
+    # close_session recomputes from the tool_calls table — must match, not double.
+    store.close_session("s1")
+    sess = next(s for s in store.recent_sessions(10) if s["session_id"] == "s1")
+    assert sess["total_tool_calls"] == 2
+    assert sess["error_count"] == 1
+
+
 def test_write_tool_call_redacts_secret_arguments(store: ObservationStore) -> None:
     """Secret-bearing argument fields must be masked before they hit the DB.
 

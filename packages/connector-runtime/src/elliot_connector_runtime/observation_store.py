@@ -158,6 +158,28 @@ class ObservationStore:
                     connector_slug=connector_slug,
                 )
             )
+            # Keep the session's denormalized rollups CURRENT on every call.
+            # MCP-over-HTTP clients usually drop their connection without a clean
+            # shutdown, so ``close_session`` (which recomputes these) often never
+            # fires — leaving ``total_tool_calls`` at 0 and making the dashboard's
+            # calls-per-session / error-rate read as empty under real traffic.
+            # Incrementing here means the per-agent breakdown is correct the
+            # instant a call lands; ``close_session`` later recomputes the same
+            # totals from the tool_calls table, so the two never double-count.
+            if session_id is not None:
+                sess = db.query(_AgentSession).filter_by(session_id=session_id).first()
+                if sess is not None:
+                    if not error:
+                        sess.total_tool_calls = (sess.total_tool_calls or 0) + 1  # type: ignore[assignment]
+                    else:
+                        sess.error_count = (sess.error_count or 0) + 1  # type: ignore[assignment]
+                    sess.total_tokens_estimated = (sess.total_tokens_estimated or 0) + int(  # type: ignore[assignment]
+                        result_token_estimate or 0
+                    )
+                    sess.total_duration_ms = (sess.total_duration_ms or 0.0) + float(  # type: ignore[assignment]
+                        duration_ms or 0.0
+                    )
+                    sess.ended_at = time.time()  # type: ignore[assignment]
             db.commit()
 
     def write_feedback(

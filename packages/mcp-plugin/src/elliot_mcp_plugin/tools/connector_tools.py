@@ -165,13 +165,52 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
-    def elliot_export_connector(path: str = ".elliot/connector.json") -> dict:  # type: ignore[type-arg]
-        """Write the built ConnectorConfig to disk as JSON."""
+    def elliot_export_connector(
+        path: str = ".elliot/connector.json",
+        allow_warnings: bool = False,
+    ) -> dict:  # type: ignore[type-arg]
+        """Lint the built ConnectorConfig, then write it to disk as JSON.
+
+        A connector is a contract, so export is GATED on the linter — it will not
+        ship a connector that fails it. Lint ERRORS always block. Lint WARNINGS
+        also block by default (the workflow expects zero warnings before export);
+        pass ``allow_warnings=true`` to ship with warnings present. Errors can
+        never be overridden. Run ``elliot_lint_connector`` to see the issues.
+        """
         try:
+            import dataclasses
+
+            from elliot_core.linter import lint_connector
             from elliot_core.paths import PathEscape, ensure_under
 
             if session.connector is None:
                 return {"error": "No connector built yet — call elliot_build_connector first"}
+
+            # Lint gate — never ship a broken contract (principle 1). Errors are
+            # absolute; warnings block unless the caller explicitly opts in.
+            issues = lint_connector(session.connector)
+            errors = [i for i in issues if i.severity == "ERROR"]
+            warnings = [i for i in issues if i.severity == "WARN"]
+            if errors or (warnings and not allow_warnings):
+                return to_mcp_error_content(
+                    ElliotError(
+                        "EXPORT_LINT_FAILED",
+                        (
+                            f"Connector did not pass the linter: {len(errors)} error(s), "
+                            f"{len(warnings)} warning(s). Fix them before exporting"
+                            + (
+                                " (or pass allow_warnings=true to ship with warnings; "
+                                "errors always block)."
+                                if warnings and not errors
+                                else "."
+                            )
+                        ),
+                        detail={
+                            "errors": [dataclasses.asdict(i) for i in errors],
+                            "warnings": [dataclasses.asdict(i) for i in warnings],
+                        },
+                    )
+                )
             # Containment: the resolved destination must live under the
             # session cwd (workspace._dir.parent), ELLIOT_CONNECTORS_DIR, or
             # the parent of ELLIOT_CONNECTOR. Opt-out via
@@ -237,7 +276,15 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
                         f"Tool '{t.id}' SQL changed since last build — rebuild recommended"
                     )
 
-            result: dict[str, object] = {"status": "exported", "path": str(dest)}
+            result: dict[str, object] = {
+                "status": "exported",
+                "path": str(dest),
+                "lint": {"errors": 0, "warnings": len(warnings)},
+            }
+            if warnings:
+                # Shipped with warnings (allow_warnings=true) — surface them so
+                # the agent still sees what to improve.
+                result["lint_warnings"] = [dataclasses.asdict(i) for i in warnings]
             if stale_warnings:
                 result["warnings"] = stale_warnings
             return result

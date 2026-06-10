@@ -103,6 +103,61 @@ def test_full_build_flow(mcp: FastMCP, session: ElliotSession, tmp_path: Path, c
     assert config.name == "TestCo Connector"
 
 
+def test_export_is_blocked_on_lint_error(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path, csv_file: Path
+):
+    """Export is a contract gate: a connector with a lint ERROR must not ship."""
+    _tool(mcp, "elliot_discover_source")(
+        source_type="file", config={"path": str(csv_file)}, name="customers"
+    )
+    # Verb-first but < 15 chars -> DESCRIPTION_TOO_SHORT (ERROR).
+    r = _tool(mcp, "elliot_create_tool")(
+        name="count_customers",
+        description="Get count",
+        category="AGGREGATE",
+        sql='SELECT COUNT(*) as total FROM "customers"',
+        parameters=[],
+    )
+    assert r["status"] == "created"
+    _tool(mcp, "elliot_build_connector")(name="C", slug="c", version="1.0.0")
+
+    export_path = str(tmp_path / "connector.json")
+    r = _tool(mcp, "elliot_export_connector")(path=export_path)
+    assert "EXPORT_LINT_FAILED" in r["text"]  # to_mcp_error_content shape: {type, text}
+    # Errors are absolute — allow_warnings must NOT let an error through.
+    r2 = _tool(mcp, "elliot_export_connector")(path=export_path, allow_warnings=True)
+    assert "EXPORT_LINT_FAILED" in r2["text"]
+    assert not Path(export_path).exists()  # nothing written on a failed gate
+
+
+def test_export_warnings_block_by_default_but_can_be_allowed(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path, csv_file: Path
+):
+    """Warnings block export by default; allow_warnings=true ships with them."""
+    _tool(mcp, "elliot_discover_source")(
+        source_type="file", config={"path": str(csv_file)}, name="customers"
+    )
+    # >=15 chars but does NOT start with a verb -> DESCRIPTION_MISSING_VERB (WARN).
+    _tool(mcp, "elliot_create_tool")(
+        name="customer_total",
+        description="Total customers across every region in the store",
+        category="AGGREGATE",
+        sql='SELECT COUNT(*) as total FROM "customers"',
+        parameters=[],
+    )
+    _tool(mcp, "elliot_build_connector")(name="C", slug="c", version="1.0.0")
+    export_path = str(tmp_path / "connector.json")
+
+    blocked = _tool(mcp, "elliot_export_connector")(path=export_path)
+    assert "EXPORT_LINT_FAILED" in blocked["text"]
+    assert not Path(export_path).exists()
+
+    ok = _tool(mcp, "elliot_export_connector")(path=export_path, allow_warnings=True)
+    assert ok["status"] == "exported"
+    assert ok["lint"]["warnings"] >= 1
+    assert Path(export_path).exists()
+
+
 def test_session_state_throughout_flow(
     mcp: FastMCP, session: ElliotSession, tmp_path: Path, csv_file: Path
 ):

@@ -128,6 +128,22 @@ class ToolExecutor:
         # the tool now queries is itself incomplete. Cleared on re-materialize.
         self._truncated_sources: set[str] = set()
 
+    def _scrub(self, text: str) -> str:
+        """Remove resolved secret values from a string before it is logged.
+
+        An upstream error (e.g. httpx's HTTPStatusError) embeds the request
+        URL, and Elliot supports the api key as a URL query param — so a raw
+        error string can carry the resolved key, which "secrets never logged"
+        forbids. DSN passwords resolve the same way. Both live in
+        ``self._secrets``, so scrubbing those values covers every channel. The
+        length guard avoids masking trivial values (e.g. a 1-char default)."""
+        if not text:
+            return text
+        for value in self._secrets.values():
+            if value and len(str(value)) >= 6 and str(value) in text:
+                text = text.replace(str(value), "***")
+        return text
+
     async def execute(
         self,
         tool: ToolDefinition,
@@ -401,7 +417,7 @@ class ToolExecutor:
                     "source.materialize.fetch_failed",
                     source_id=source.id,
                     table=table_name,
-                    error=str(exc),
+                    error=self._scrub(str(exc)),
                 )
                 raise
 

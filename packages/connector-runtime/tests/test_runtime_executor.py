@@ -194,6 +194,19 @@ async def test_executor_rest_source_row_cap(monkeypatch: pytest.MonkeyPatch) -> 
     assert result.truncation_reason == "source_cap"
 
 
+def test_scrub_removes_resolved_secrets_from_error_text() -> None:
+    """An upstream error string (e.g. an httpx URL with ?api_key=...) must have
+    resolved secret values scrubbed before it is logged — secrets never logged."""
+    secret = "sk_live_VERYsecret123"
+    executor = ToolExecutor(CONNECTOR, secrets={"API_KEY": secret, "X": "ab"})
+    msg = f"Client error '401' for url 'https://api.example.com/x?api_key={secret}'"
+    scrubbed = executor._scrub(msg)
+    assert secret not in scrubbed
+    assert "***" in scrubbed
+    # Trivially short values are not masked (avoids redacting noise).
+    assert executor._scrub("value ab here") == "value ab here"
+
+
 def test_fit_rows_to_token_budget() -> None:
     from elliot_connector_runtime.executor import _fit_rows_to_token_budget
 

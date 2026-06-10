@@ -314,6 +314,70 @@ async def test_connector_schema_resource_redacts_secrets() -> None:
     assert "api.example.com" in body
 
 
+async def test_argument_validation_failures_are_recorded() -> None:
+    """FastMCP rejects a bad-argument call (missing required param) before the
+    handler runs, so it would otherwise never reach the observation store — but
+    'agents keep calling my tool with the wrong params' must be visible to the
+    owner, not vanish into a 0% error rate."""
+    import tempfile
+
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.observation_store import ObservationStore
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import (
+        ConnectorConfig,
+        ParameterDefinition,
+        SourceConfig,
+        ToolDefinition,
+    )
+
+    class _Eng:
+        def query(self, sql, params):  # type: ignore[no-untyped-def]
+            return [{"id": 1}]
+
+    tool = ToolDefinition(
+        id="get_thing",
+        name="Get Thing",
+        description="Get a thing by id",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT id FROM s WHERE id = :thing_id",
+        parameters=[
+            ParameterDefinition(name="thing_id", type="integer", required=True, description="id")
+        ],
+    )
+    cfg = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        sources=[SourceConfig(id="s", name="s", type="file", url="x")],
+        tools=[tool],
+        skills=[],
+    )
+    d = tempfile.mkdtemp()
+    store = ObservationStore(f"sqlite:///{d}/obs.db")
+    mcp = create_runtime_server(
+        cfg,
+        ToolExecutor(cfg, secrets={}, engine=_Eng()),  # type: ignore[arg-type]
+        store=store,
+    )
+
+    async with create_connected_server_and_client_session(mcp._mcp_server) as client:
+        await client.initialize()
+        await client.call_tool("get_thing", {"thing_id": 1})  # valid
+        res = await client.call_tool("get_thing", {})  # missing required param
+        assert res.isError
+
+    calls = store.recent_tool_calls(50)
+    assert len(calls) == 2, "both the valid call and the validation failure must be recorded"
+    errored = [c for c in calls if (c.get("error") or "")]
+    assert len(errored) == 1
+    assert "VALIDATION_INVALID_PARAMS" in errored[0]["error"]
+    assert errored[0]["tool_id"] == "get_thing"
+
+
 async def test_runtime_advertises_logging_and_streams_structured_telemetry() -> None:
     """The runtime must declare the MCP ``logging`` capability and stream each
     tool call's observability as a structured ``notifications/message`` (so a

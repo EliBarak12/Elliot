@@ -432,8 +432,100 @@ def create_runtime_server(
         _register_feedback_tool(mcp, store, connector_slug)
 
     _register_logging(mcp)
+    _register_validation_capture(mcp, store, tracker, connector_slug)
 
     return mcp
+
+
+def _register_validation_capture(
+    mcp: FastMCP,
+    store: ObservationStore | None,
+    tracker: SessionTracker | None,
+    connector_slug: str | None,
+) -> None:
+    """Record argument-validation failures, which FastMCP rejects BEFORE the tool
+    handler runs.
+
+    FastMCP validates a tool's arguments against its schema and rejects a bad
+    call (missing or wrong-typed required parameter) before the handler executes,
+    so those failures never reach the handler's observation recording — yet
+    "an agent keeps calling my tool with the wrong parameters" is one of the most
+    common real-world failures and, uncaptured, leaves the connector owner seeing
+    a 0% error rate while agents struggle. Wrap the tool manager's call_tool
+    (which ``FastMCP.call_tool`` resolves at call time, so the wrap takes effect)
+    and, on a ``ToolError`` whose cause is a pydantic ``ValidationError`` — the
+    stable signal that this is a pre-handler validation failure and not a handler
+    error (which is already recorded) — write one error observation. Best-effort:
+    it never changes the call result and never raises into the call path.
+    """
+    if store is None and tracker is None:
+        return
+
+    import pydantic
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    tool_manager = mcp._tool_manager
+    orig_call = tool_manager.call_tool
+
+    async def _wrapped(name: str, arguments: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+        try:
+            return await orig_call(name, arguments, *args, **kwargs)
+        except ToolError as exc:
+            if isinstance(exc.__cause__, pydantic.ValidationError):
+                with contextlib.suppress(Exception):
+                    _record_validation_failure(
+                        mcp, store, tracker, connector_slug, name, arguments, exc
+                    )
+            raise
+
+    tool_manager.call_tool = _wrapped  # type: ignore[method-assign]
+
+
+def _record_validation_failure(
+    mcp: FastMCP,
+    store: ObservationStore | None,
+    tracker: SessionTracker | None,
+    connector_slug: str | None,
+    tool_id: str,
+    arguments: dict[str, Any],
+    exc: Exception,
+) -> None:
+    """Write one error observation for an argument-validation failure."""
+    session_id, identity_payload = _current_session_and_identity(mcp)
+    if not session_id:
+        return
+    # Single compact line — never the full multi-line pydantic dump.
+    first_line = next((ln for ln in str(exc).splitlines() if ln.strip()), "")
+    reason = first_line[:200] if first_line else "argument validation failed"
+    error = f"[VALIDATION_INVALID_PARAMS] {reason}"
+    agent_hint = _agent_hint_from_identity(get_current_agent_identity())
+    if store is not None:
+        store.open_session(
+            session_id,
+            agent_hint=agent_hint,
+            connector_slug=connector_slug,
+            agent_identity=identity_payload,
+        )
+        store.write_tool_call(
+            session_id=session_id,
+            tool_id=tool_id,
+            arguments=arguments,
+            result_row_count=0,
+            result_token_estimate=0,
+            duration_ms=0.0,
+            error=error,
+            connector_slug=connector_slug,
+        )
+    if tracker is not None:
+        tracker.record_tool_call(
+            session_id=session_id,
+            tool_id=tool_id,
+            arguments=arguments,
+            result_rows=0,
+            result_data=[],
+            duration_ms=0.0,
+            error=error,
+        )
 
 
 def _register_logging(mcp: FastMCP) -> None:

@@ -82,6 +82,23 @@ class _AgentFeedback(_Base):
     agent_model = Column(String(128))
 
 
+class _ClientHandshake(_Base):
+    """The latest MCP ``initialize`` facts seen per client harness.
+
+    Captured from the handshake body (clientInfo / protocolVersion /
+    capabilities) — which is the authoritative, spec-backed source and works
+    even when the server is stateless (no per-session correlation needed). One
+    upserted row per ``client_name`` answers "which protocol version and
+    capabilities does this harness advertise", independent of session grouping.
+    """
+
+    __tablename__ = "client_handshakes"
+    client_name = Column(String(64), primary_key=True)
+    protocol_version = Column(String(32))
+    capabilities = Column(String(255))
+    last_seen = Column(Float, nullable=False)
+
+
 class ObservationStore:
     """
     Dual-backend store: SQLite (default) or MySQL via ELLIOT_DB_URL.
@@ -220,6 +237,58 @@ class ObservationStore:
             )
             db.commit()
         log.info("agent_feedback.written", tool_id=tool_id, outcome=outcome)
+
+    def record_handshake(
+        self,
+        client_name: str,
+        protocol_version: str | None,
+        capabilities: tuple[str, ...] | None,
+    ) -> None:
+        """Upsert the latest MCP ``initialize`` facts for a client harness.
+
+        Best-effort: never raises into the caller (the hot path), since losing a
+        handshake observation must never fail a connector request."""
+        if not client_name or not client_name.strip():
+            return
+        key = client_name.strip().lower()
+        caps = ",".join(capabilities) if capabilities else None
+        try:
+            with Session(self._engine) as db:
+                row = db.get(_ClientHandshake, key)
+                if row is None:
+                    db.add(
+                        _ClientHandshake(
+                            client_name=key,
+                            protocol_version=protocol_version,
+                            capabilities=caps,
+                            last_seen=time.time(),
+                        )
+                    )
+                else:
+                    row.protocol_version = protocol_version or row.protocol_version  # type: ignore[assignment]
+                    # Capabilities can only grow within a client version — union
+                    # so a later call that advertised fewer doesn't drop one.
+                    if caps:
+                        existing = set((row.capabilities or "").split(",")) - {""}
+                        row.capabilities = ",".join(  # type: ignore[assignment]
+                            sorted(existing | set(caps.split(",")))
+                        )
+                    row.last_seen = time.time()  # type: ignore[assignment]
+                db.commit()
+        except Exception as exc:
+            log.warning("handshake.record_failed", error=str(exc))
+
+    def client_handshakes(self) -> dict[str, dict[str, Any]]:
+        """Map each client_name → {protocol_version, capabilities[]}."""
+        with Session(self._engine) as db:
+            rows = db.query(_ClientHandshake).all()
+        return {
+            str(r.client_name): {
+                "protocol_version": r.protocol_version,
+                "capabilities": [c for c in (r.capabilities or "").split(",") if c],
+            }
+            for r in rows
+        }
 
     def open_session(
         self,

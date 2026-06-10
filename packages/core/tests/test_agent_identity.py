@@ -33,9 +33,7 @@ def test_model_from_explicit_header() -> None:
     assert ident.client == "cursor"
     assert ident.model == "claude-opus-4-8"
     # X-Model-Name is accepted too, and an explicit header beats the UA guess.
-    ident2 = parse_agent_identity(
-        {"user-agent": "agent-codex gpt-5", "x-model-name": "o3-mini"}
-    )
+    ident2 = parse_agent_identity({"user-agent": "agent-codex gpt-5", "x-model-name": "o3-mini"})
     assert ident2.model == "o3-mini"
 
 

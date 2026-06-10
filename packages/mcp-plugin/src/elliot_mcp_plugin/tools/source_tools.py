@@ -20,6 +20,7 @@ from elliot_core.sources.db_connector import query_database
 from elliot_core.sources.file_reader import read_file
 from elliot_core.sqlite.flattener import flatten
 from elliot_core.types.source import SourceConfig
+from elliot_core.types.sqlite import FlattenResult
 from elliot_mcp_plugin.oauth_login import LOGIN_TTL_S, start_login
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -182,6 +183,53 @@ async def _resolve_build_oauth_token(
         "Do not ask the user to paste a token.",
         detail={"source": name},
     )
+
+
+_JOIN_HINT = (
+    "This source has nested data, so it flattened into MULTIPLE tables. Each "
+    "nested array became a child table named <parent>_<field>. To query across "
+    "levels in elliot_create_tool, JOIN a child to its parent on "
+    "child._parent_id = parent._id (use child._index for array position). "
+    "Aggregate (SUM/COUNT/AVG/...) over these joined tables — e.g. "
+    "SELECT p.name, SUM(inv.total) FROM <root> p "
+    "JOIN <root>_invoices inv ON inv._parent_id = p._id GROUP BY p._id."
+)
+
+
+def _describe_flattened_schema(flat: FlattenResult) -> tuple[list[dict[str, Any]], str | None]:
+    """Describe EVERY table the flattener produced — the primary table plus all
+    nested child tables — so an agent can write JOIN/aggregation SQL against a
+    deeply nested response. Returns ``(tables, join_hint)``; ``join_hint`` is
+    None when the source is flat (no child tables).
+
+    Without this, discovery returned only the primary table's columns, leaving
+    the child tables (where all the nested data lives) invisible — an agent
+    literally could not name them in SQL.
+    """
+    all_tables = [flat.primary_table, *flat.related_tables]
+    names = [t.name for t in all_tables]
+
+    def parent_of(child: str) -> str | None:
+        # Child tables are named ``<parent>_<field>``; the parent is the longest
+        # existing table name that is a strict prefix (handles deep nesting like
+        # ``a_b_c`` whose parent is ``a_b``, not ``a``).
+        candidates = [n for n in names if n != child and child.startswith(n + "_")]
+        return max(candidates, key=len) if candidates else None
+
+    primary_name = flat.primary_table.name
+    tables: list[dict[str, Any]] = []
+    for t in all_tables:
+        is_primary = t.name == primary_name
+        tables.append(
+            {
+                "name": t.name,
+                "role": "primary" if is_primary else "child",
+                "parent": None if is_primary else parent_of(t.name),
+                "row_count": len(t.rows),
+                "columns": [c.name for c in t.columns],
+            }
+        )
+    return tables, (_JOIN_HINT if flat.related_tables else None)
 
 
 def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
@@ -465,10 +513,12 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
             flat = flatten(rows, table_name=name)
             session.engine.load_result(flat)
+            tables, join_hint = _describe_flattened_schema(flat)
 
             cfg.table_name = name
             cfg.row_count = len(rows)
             cfg.config_snapshot = config
+            cfg.related_tables = [t.name for t in flat.related_tables]
             session.sources[source_id] = cfg
             session.save()
 
@@ -487,7 +537,14 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 "source_id": source_id,
                 "table_name": name,
                 "row_count": len(rows),
+                # ``columns`` lists the PRIMARY table only (kept for back-compat).
+                # ``tables`` is the full relational schema — every nested child
+                # table the flattener created, with its columns and parent — so
+                # the agent can JOIN/aggregate across the nesting. See
+                # ``schema_hint`` for the join convention.
                 "columns": [c.name for c in flat.primary_table.columns],
+                "tables": tables,
+                "schema_hint": join_hint,
                 "warnings": warnings,
             }
 
@@ -508,13 +565,20 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             session.refresh_from_disk()
             sources: list[dict[str, Any]] = []
             for sid, src in session.sources.items():
-                columns: list[dict[str, str]] = []
-                if src.table_name:
+
+                def _cols(table: str | None) -> list[dict[str, str]]:
+                    if not table:
+                        return []
                     try:
-                        schema = session.engine.get_table_schema(src.table_name)
-                        columns = [{"name": c["name"], "type": c["type"]} for c in schema]
+                        schema = session.engine.get_table_schema(table)
+                        return [{"name": c["name"], "type": c["type"]} for c in schema]
                     except Exception:
-                        columns = []
+                        return []
+
+                columns = _cols(src.table_name)
+                # Child tables from flattened nested arrays — without these an
+                # agent can't see (let alone JOIN) the nested data on a re-list.
+                related = [{"name": t, "columns": _cols(t)} for t in (src.related_tables or [])]
                 sources.append(
                     {
                         # Both keys for backwards compatibility: 'id' is the
@@ -527,6 +591,8 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                         "table_name": src.table_name,
                         "row_count": src.row_count,
                         "columns": columns,
+                        "related_tables": related,
+                        "schema_hint": _JOIN_HINT if related else None,
                     }
                 )
             return {"sources": sources, "count": len(sources)}

@@ -150,6 +150,73 @@ def test_discover_source_csv_columns_match(mcp: FastMCP, tmp_path: Path):
     assert set(result["columns"]) >= {"id", "name", "price"}
 
 
+def _nested_json_file(tmp_path: Path) -> Path:
+    """A deeply nested record: project → invoices[] → line_items[], plus a
+    nested owner object — the shape a real REST API returns."""
+    p = tmp_path / "projects.json"
+    p.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "p1",
+                    "name": "Checkout",
+                    "owner": {"id": "u1", "name": "Ada"},
+                    "invoices": [
+                        {
+                            "id": "inv1",
+                            "total": 100,
+                            "line_items": [{"amount": 60}, {"amount": 40}],
+                        },
+                        {"id": "inv2", "total": 50, "line_items": [{"amount": 50}]},
+                    ],
+                }
+            ]
+        )
+    )
+    return p
+
+
+def test_discover_surfaces_nested_child_tables(mcp: FastMCP, tmp_path: Path):
+    """Regression: a nested response must expose EVERY flattened table (not just
+    the primary one) so an agent can JOIN/aggregate across the nesting. Before
+    this, the child tables where the nested data lives were invisible."""
+    result = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(_nested_json_file(tmp_path)), "format": "json"},
+        name="projects",
+    )
+    names = {t["name"]: t for t in result["tables"]}
+    # Primary + both levels of child tables are surfaced.
+    assert names["projects"]["role"] == "primary"
+    assert "projects_invoices" in names
+    assert "projects_invoices_line_items" in names
+    # Parent linkage is correct even two levels deep.
+    assert names["projects_invoices"]["parent"] == "projects"
+    assert names["projects_invoices_line_items"]["parent"] == "projects_invoices"
+    # The aggregation column the agent needs is listed, with the join key.
+    inv_cols = names["projects_invoices"]["columns"]
+    assert "total" in inv_cols and "_parent_id" in inv_cols
+    # And the agent is told HOW to join.
+    assert result["schema_hint"] and "_parent_id" in result["schema_hint"]
+
+
+def test_list_sources_includes_child_tables_after_rediscover(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    """The full relational schema must survive a re-list (e.g. the agent builds
+    tools in a later call) — child tables come back from persisted state."""
+    _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(_nested_json_file(tmp_path)), "format": "json"},
+        name="projects",
+    )
+    listed = _tool(mcp, "elliot_list_sources")()
+    src = listed["sources"][0]
+    related = {t["name"] for t in src["related_tables"]}
+    assert {"projects_invoices", "projects_invoices_line_items"} <= related
+    assert src["schema_hint"]
+
+
 def test_discover_source_registers_in_session(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
     csv_path = _csv_file(tmp_path)
     result = _tool(mcp, "elliot_discover_source")(

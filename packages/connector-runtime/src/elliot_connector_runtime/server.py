@@ -10,13 +10,14 @@ import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Annotated, Any
 
 import structlog
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+from pydantic import Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -304,6 +305,66 @@ def _result_truncated(result: Any) -> bool:
     return False
 
 
+def _truncation_note(result: Any) -> str:
+    """Actionable guidance for an agent whose result was capped (principle 3).
+
+    A bare ``truncated: true`` tells the agent the set is incomplete but not
+    what to do about it. Spell out that this is a partial result and the
+    concrete next step — narrow the request — so the agent recovers instead
+    of either trying to process a context-blowing dump or silently treating a
+    capped set as the whole answer.
+    """
+    from .executor import max_result_rows
+
+    cap = max_result_rows()
+    reason = getattr(result, "truncation_reason", None)
+    if reason == "source_cap":
+        # The upstream snapshot was capped before this query ran, so the rows
+        # returned may be missing matches that no client-side filter recovers.
+        return (
+            f"The data source backing this tool was capped at {cap} rows when it "
+            "was fetched, so this result may be missing matching rows. Treat it as "
+            "incomplete: prefer a tool that filters upstream (passes the filter to "
+            "the source), or ask the connector author to add server-side filtering "
+            "or pagination to this source."
+        )
+    total = getattr(result, "total_rows", None)
+    if isinstance(total, int) and total > cap:
+        scope = f"Returned the first {cap} of {total} matching rows"
+    else:
+        scope = f"Returned the first {cap} rows; more rows matched but were not included"
+    return (
+        f"{scope}. This is a partial result, not the complete answer — narrow the "
+        "request (add or tighten a filter, or pass a smaller limit) so the full "
+        "result fits, then call again."
+    )
+
+
+async def _emit_runtime_log(ctx: Any, level: str, data: dict[str, Any]) -> None:
+    """Emit a structured MCP log notification (``notifications/message``).
+
+    Surfaces Elliot's per-call observability — tool, rows, latency, truncation,
+    error code — to the agent's MCP client in real time via the spec's
+    ``logging`` capability, so principle 4 ("every call observable") is visible
+    inline in the agent's session, not only in the dashboard. A client that sets
+    a higher minimum level simply won't be sent the lower-severity events.
+
+    Metadata only: per the MCP logging security guidance it never carries row
+    data, arguments, or secrets — just counts, durations, and codes. Best-effort:
+    a logging failure must never break the tool call, so everything is
+    suppressed and a missing context is a no-op.
+    """
+    if ctx is None:
+        return
+    with contextlib.suppress(Exception):
+        await ctx.session.send_log_message(
+            level=level,
+            data=data,
+            logger="elliot.runtime",
+            related_request_id=ctx.request_id,
+        )
+
+
 def _suggest(tool_id: str, avg_tokens: float, max_tokens: float) -> str | None:
     if avg_tokens > 1000:
         return f"Average {avg_tokens:.0f} tokens is very high. Add LIMIT clause or SELECT only needed columns."
@@ -370,7 +431,123 @@ def create_runtime_server(
     if store is not None:
         _register_feedback_tool(mcp, store, connector_slug)
 
+    _register_logging(mcp)
+    _register_validation_capture(mcp, store, tracker, connector_slug)
+
     return mcp
+
+
+def _register_validation_capture(
+    mcp: FastMCP,
+    store: ObservationStore | None,
+    tracker: SessionTracker | None,
+    connector_slug: str | None,
+) -> None:
+    """Record argument-validation failures, which FastMCP rejects BEFORE the tool
+    handler runs.
+
+    FastMCP validates a tool's arguments against its schema and rejects a bad
+    call (missing or wrong-typed required parameter) before the handler executes,
+    so those failures never reach the handler's observation recording — yet
+    "an agent keeps calling my tool with the wrong parameters" is one of the most
+    common real-world failures and, uncaptured, leaves the connector owner seeing
+    a 0% error rate while agents struggle. Wrap the tool manager's call_tool
+    (which ``FastMCP.call_tool`` resolves at call time, so the wrap takes effect)
+    and, on a ``ToolError`` whose cause is a pydantic ``ValidationError`` — the
+    stable signal that this is a pre-handler validation failure and not a handler
+    error (which is already recorded) — write one error observation. Best-effort:
+    it never changes the call result and never raises into the call path.
+    """
+    if store is None and tracker is None:
+        return
+
+    import pydantic
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    tool_manager = mcp._tool_manager
+    orig_call = tool_manager.call_tool
+
+    async def _wrapped(name: str, arguments: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+        try:
+            return await orig_call(name, arguments, *args, **kwargs)
+        except ToolError as exc:
+            if isinstance(exc.__cause__, pydantic.ValidationError):
+                with contextlib.suppress(Exception):
+                    _record_validation_failure(
+                        mcp, store, tracker, connector_slug, name, arguments, exc
+                    )
+            raise
+
+    tool_manager.call_tool = _wrapped  # type: ignore[method-assign]
+
+
+def _record_validation_failure(
+    mcp: FastMCP,
+    store: ObservationStore | None,
+    tracker: SessionTracker | None,
+    connector_slug: str | None,
+    tool_id: str,
+    arguments: dict[str, Any],
+    exc: Exception,
+) -> None:
+    """Write one error observation for an argument-validation failure."""
+    session_id, identity_payload = _current_session_and_identity(mcp)
+    if not session_id:
+        return
+    # Single compact line — never the full multi-line pydantic dump.
+    first_line = next((ln for ln in str(exc).splitlines() if ln.strip()), "")
+    reason = first_line[:200] if first_line else "argument validation failed"
+    error = f"[VALIDATION_INVALID_PARAMS] {reason}"
+    agent_hint = _agent_hint_from_identity(get_current_agent_identity())
+    if store is not None:
+        store.open_session(
+            session_id,
+            agent_hint=agent_hint,
+            connector_slug=connector_slug,
+            agent_identity=identity_payload,
+        )
+        store.write_tool_call(
+            session_id=session_id,
+            tool_id=tool_id,
+            arguments=arguments,
+            result_row_count=0,
+            result_token_estimate=0,
+            duration_ms=0.0,
+            error=error,
+            connector_slug=connector_slug,
+        )
+    if tracker is not None:
+        tracker.record_tool_call(
+            session_id=session_id,
+            tool_id=tool_id,
+            arguments=arguments,
+            result_rows=0,
+            result_data=[],
+            duration_ms=0.0,
+            error=error,
+        )
+
+
+def _register_logging(mcp: FastMCP) -> None:
+    """Advertise the MCP ``logging`` capability and accept ``logging/setLevel``.
+
+    The runtime streams per-call observability as ``notifications/message`` (see
+    ``_emit_runtime_log``), but the spec requires a server that emits logs to
+    declare the ``logging`` capability — which the lowlevel server only does when
+    a ``set_logging_level`` handler is registered. Without this, a compliant
+    client (e.g. Claude) is not told it can receive Elliot's logs and a
+    ``logging/setLevel`` call fails with "Method not found". Registering the
+    handler both advertises the capability and lets the client choose its
+    minimum severity; the lowlevel session then filters notifications to that
+    level automatically.
+    """
+    from mcp import types
+
+    @mcp._mcp_server.set_logging_level()  # type: ignore[no-untyped-call, untyped-decorator]
+    async def _set_level(level: types.LoggingLevel) -> None:  # pragma: no cover - thin shim
+        # The ServerSession records the level and filters send_log_message on it;
+        # we only need to accept the request so the capability is advertised.
+        return None
 
 
 def _register_tool(
@@ -508,7 +685,7 @@ def _register_tool(
         client_version: str | None = None
         with contextlib.suppress(Exception):
             ctx = mcp.get_context()
-            await ctx.info(f"tool.call.start: {td.id}", logger="elliot.runtime")
+        await _emit_runtime_log(ctx, "debug", {"event": "tool.call.start", "tool": td.id})
         if ctx is not None:
             # request_id is per-call — only a last-resort correlation id.
             with contextlib.suppress(Exception):
@@ -576,6 +753,7 @@ def _register_tool(
                 }
                 if _result_truncated(result):
                     payload["truncated"] = True
+                    payload["truncation_note"] = _truncation_note(result)
                 return payload
 
             task_id = task_store.submit(td.id, _work())
@@ -593,17 +771,24 @@ def _register_tool(
             result = await active_executor.execute(td, kwargs)
             duration_ms = round((time.monotonic() - t0) * 1000, 1)
             await _observe(td.id, kwargs, result.rows, duration_ms, None, session_id)
-            if ctx is not None:
-                with contextlib.suppress(Exception):
-                    await ctx.info(
-                        f"tool.call.complete: {td.id} rows={len(result.rows)} duration_ms={duration_ms}",
-                        logger="elliot.runtime",
-                    )
+            await _emit_runtime_log(
+                ctx,
+                "info",
+                {
+                    "event": "tool.call.complete",
+                    "tool": td.id,
+                    "rows": len(result.rows),
+                    "duration_ms": duration_ms,
+                    "truncated": _result_truncated(result),
+                },
+            )
             payload = {"rows": result.rows, "count": len(result.rows)}
             if _result_truncated(result):
                 # Marker so the agent knows the result set was capped at
-                # ELLIOT_MAX_RESULT_ROWS and is not the complete answer.
+                # ELLIOT_MAX_RESULT_ROWS and is not the complete answer, plus
+                # an actionable note telling it how to get a complete result.
                 payload["truncated"] = True
+                payload["truncation_note"] = _truncation_note(result)
             return payload
         except Exception as exc:
             # Every failure must be observed — not just ElliotError. A tool
@@ -619,12 +804,11 @@ def _register_tool(
             )
             await _observe(td.id, kwargs, [], duration_ms, str(elliot_exc), session_id)
             error_content = to_mcp_error_content(elliot_exc)
-            if ctx is not None:
-                with contextlib.suppress(Exception):
-                    await ctx.warning(
-                        f"tool.call.error: {td.id} code={elliot_exc.code}",
-                        logger="elliot.runtime",
-                    )
+            await _emit_runtime_log(
+                ctx,
+                "warning",
+                {"event": "tool.call.error", "tool": td.id, "code": elliot_exc.code},
+            )
             raise ValueError(error_content["text"]) from exc
 
     _handler.__name__ = td.id
@@ -633,13 +817,27 @@ def _register_tool(
     params = []
     for p in td.parameters:
         if p.type == "integer":
-            annotation: Any = int
+            base: Any = int
         elif p.type == "number":
-            annotation = float
+            base = float
         elif p.type == "boolean":
-            annotation = bool
+            base = bool
         else:
-            annotation = str
+            base = str
+        # Carry the author's parameter description and allowed values into the
+        # MCP inputSchema the agent reads. Without this, the contract the linter
+        # enforces — every parameter described, closed value sets declared as
+        # enums — never reaches the consuming agent, so it cannot tell what a
+        # parameter means or which values are valid and guesses wrong (e.g.
+        # passing "active" to a status that only accepts "open"). This is the
+        # core of principle 1: tool descriptions, parameters included, are the
+        # contract.
+        field_kwargs: dict[str, Any] = {}
+        if p.description.strip():
+            field_kwargs["description"] = p.description.strip()
+        if p.enum:
+            field_kwargs["json_schema_extra"] = {"enum": list(p.enum)}
+        annotation: Any = Annotated[base, Field(**field_kwargs)] if field_kwargs else base
         default = inspect.Parameter.empty if p.required else None
         params.append(
             inspect.Parameter(
@@ -654,7 +852,16 @@ def _register_tool(
             inspect.Parameter(
                 "confirm",
                 inspect.Parameter.KEYWORD_ONLY,
-                annotation=bool,
+                annotation=Annotated[
+                    bool,
+                    Field(
+                        description=(
+                            "Safety gate for this destructive operation. Leave false to have "
+                            "the call rejected with CONFIRMATION_REQUIRED; set true only after "
+                            "the user has authorised the change, then re-call to execute it."
+                        )
+                    ),
+                ],
                 default=False,
             )
         )

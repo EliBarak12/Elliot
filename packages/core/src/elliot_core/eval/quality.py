@@ -3,23 +3,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from elliot_core.linter import _VERB_RE
 from elliot_core.types.connector import ConnectorConfig
 from elliot_core.types.tool import ToolDefinition
 
-# Accept both the third-person-singular present form ("Returns the X")
-# and the imperative form ("Return the X"). Real users — and the agentic
-# builder — write both, and prior to this they tripped the false-positive
-# starts_with_verb warning purely because of conjugation. Each entry below
-# matches both ``Verb`` and ``Verbs`` thanks to the optional trailing s.
-_VERB_RE = re.compile(
-    r"^(Return|List|Get|Find|Create|Update|Delete|Calculate|"
-    r"Search|Fetch|Check|Count|Filter|Retrieve|"
-    r"Aggregate|Export|Generate|Compute|Load|Send|Submit|"
-    r"Remove|Show|Run|Execute|Insert|Stream|Resolve|Validate|"
-    r"Surface|Pull|Lookup|Identify|Detect|Match|Group|Rank|Sort|Join|Map|Report|Summari[sz]e|"
-    r"Yield|Produce|Build|Compose|Assemble)s?\b",
-    re.IGNORECASE,
-)
+# The "starts with an action verb" matcher (_VERB_RE) is defined once in
+# elliot_core.linter and imported here so the linter and the quality scan can
+# never disagree about the same description. It accepts both the imperative
+# ("Return the X") and the third-person-singular present form ("Returns the X").
 # "from" was removed: it is an ordinary English preposition ("Return rows from
 # the orders source") far more often than SQL leakage, so flagging it produced
 # false positives on otherwise clean, natural descriptions.

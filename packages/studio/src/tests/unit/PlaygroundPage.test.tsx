@@ -38,16 +38,16 @@ vi.mock("@/components/ui/select", () => {
         {children}
       </select>
     ),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    SelectTrigger: ({ children }: any) => <>{children}</>,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    SelectValue: ({ placeholder }: any) => <>{placeholder}</>,
+    // The native <select> may contain only <option> elements (plus the text
+    // inside them). Render the trigger/value as nothing and each item as a
+    // text-only <option> keyed by value — the tests drive selection by value,
+    // so the visible label is irrelevant and this keeps the mocked DOM valid.
+    SelectTrigger: () => null,
+    SelectValue: () => null,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     SelectContent: ({ children }: any) => <>{children}</>,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    SelectItem: ({ value, children }: any) => (
-      <option value={value}>{children}</option>
-    ),
+    SelectItem: ({ value }: any) => <option value={value}>{value}</option>,
   };
 });
 

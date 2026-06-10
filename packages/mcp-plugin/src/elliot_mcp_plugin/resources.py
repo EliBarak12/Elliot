@@ -224,8 +224,12 @@ becomes the auth header. "Each caller brings their own token" is expressed with
 _ERROR_CODES_MD = """# Elliot Error Codes
 
 Every `ElliotError` raised by the platform uses a stable code. When an agent
-encounters one of these, it has a deterministic recovery path. Codes are
-intentionally coarse — fine-grained details live in the `details` field.
+encounters one of these, it has a deterministic recovery path. The error you
+receive over MCP is the string `[CODE] message`, and the **message always
+carries the specifics you need to recover** — the available table/column names,
+the connect URL(s), the valid ids. (Errors also have a structured `details`
+field, but that is for the server-side audit log and is not sent over MCP, so
+recover from the message text, not from a `details.*` field.)
 
 | Code | When raised | Recovery |
 |------|-------------|----------|
@@ -234,8 +238,8 @@ intentionally coarse — fine-grained details live in the `details` field.
 | `TOOL_NOT_FOUND` | Referenced tool id does not exist in the registry | List tools (`elliot_list_tools`); use a valid id |
 | `SOURCE_UNREACHABLE` | A configured source did not respond | Check the env var holding the URL; verify the user has network access |
 | `AUTH_FAILED` | Source rejected credentials | Confirm the env var name and that it's exported in the shell — do NOT ask the user for the secret value |
-| `AUTH_REQUIRED` | A `per_user` source was called by a user who hasn't connected their account yet | Surface the connect URL(s) from `details.connect`; the user logs in once, then retry the tool. See `elliot://docs/authentication`. |
-| `SCHEMA_NOT_FOUND` | Postgres/MySQL schema does not exist | Pick from `details.available` |
+| `AUTH_REQUIRED` | A `per_user` source was called by a user who hasn't connected their account yet | Open the connect URL(s) included in the error message; the user logs in once, then retry the tool. See `elliot://docs/authentication`. |
+| `TABLE_NOT_FOUND` | A tool's SQL references a table the connector did not materialize | Read the available table names from the message; fix the tool's `source_ids`/SQL |
 | `QUERY_TIMEOUT` | A DB query exceeded the per-query timeout | Tighten filters, add an index, or split the request |
 | `INVALID_SKILL` | Skill definition failed validation | Read the message; each step needs `{alias, tool_id, params}` |
 | `INTERNAL_ERROR` | Unexpected exception inside Elliot | Report to the user; the stack trace is in the server log |

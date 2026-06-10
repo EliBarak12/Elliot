@@ -187,6 +187,34 @@ async def test_executor_rest_source_row_cap(monkeypatch: pytest.MonkeyPatch) -> 
     # Materialized rows are capped at 3, so the WHERE species='cat' query
     # cannot return more than 3.
     assert len(result.rows) <= 3
+    # The snapshot was capped at fetch time, so the result must NOT pretend to
+    # be complete — it is flagged as a source-level truncation so the agent is
+    # told the underlying data may be missing rows (principle 3).
+    assert result.truncated is True
+    assert result.truncation_reason == "source_cap"
+
+
+@respx.mock
+async def test_executor_rest_source_under_cap_not_truncated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A REST source whose snapshot fits under the cap is not flagged: the
+    source-truncation marker must not fire on complete data."""
+    from elliot_connector_runtime.server import _result_truncated
+
+    monkeypatch.setenv("ELLIOT_MAX_RESULT_ROWS", "50")
+    respx.get("https://api.example.com/animals").mock(
+        return_value=httpx.Response(
+            200,
+            json={"items": [{"id": i, "species": "cat"} for i in range(5)]},
+        )
+    )
+    tool = CONNECTOR.tools[0]
+    executor = ToolExecutor(CONNECTOR, secrets={})
+    result = await executor.execute(tool, {"species": "cat"})
+    assert result.truncated is False
+    assert result.truncation_reason is None
+    assert _result_truncated(result) is False
 
 
 @respx.mock
@@ -842,3 +870,233 @@ async def test_executor_db_pushdown_skipped_for_raw_sql(monkeypatch: pytest.Monk
 
     assert calls == ["query_database"]
     assert result.rows[0]["status"] == "open"
+
+
+def test_capped_result_reports_total_and_actionable_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Truncation must be actionable (principle 3): the QueryResult carries the
+    true total, and the runtime's note tells the agent the partial-result count
+    and the concrete next step."""
+    from elliot_connector_runtime.server import _result_truncated, _truncation_note
+
+    monkeypatch.setenv("ELLIOT_MAX_RESULT_ROWS", "3")
+
+    class _StubEngine:
+        def query(self, sql: str, params: dict) -> list[dict]:  # type: ignore[type-arg]
+            return [{"id": i} for i in range(10)]
+
+    tool = ToolDefinition(
+        id="list_things",
+        name="List Things",
+        description="Return every thing",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT id FROM things",
+        parameters=[],
+    )
+    executor = ToolExecutor(CONNECTOR, secrets={}, engine=_StubEngine())  # type: ignore[arg-type]
+
+    import asyncio
+
+    result = asyncio.run(executor.execute(tool, {}))
+
+    assert result.truncated is True
+    assert len(result.rows) == 3
+    assert result.total_rows == 10
+
+    assert _result_truncated(result) is True
+    note = _truncation_note(result)
+    assert "3 of 10" in note
+    assert "narrow" in note.lower()
+
+
+def test_truncation_note_without_total_is_still_actionable() -> None:
+    """A legacy result that flags truncation but carries no total still yields a
+    note that names the cap and the next step."""
+    from elliot_connector_runtime.server import _truncation_note
+    from elliot_core.types import QueryResult
+
+    note = _truncation_note(QueryResult(rows=[], tool_id="t", truncated=True))
+    assert "narrow" in note.lower()
+
+
+def test_source_cap_note_advises_upstream_filtering() -> None:
+    """A source-capped result gets distinct advice: the upstream snapshot is
+    incomplete, so 'narrow the request' is the WRONG fix — recommend upstream
+    filtering/pagination instead."""
+    from elliot_connector_runtime.server import _truncation_note
+    from elliot_core.types import QueryResult
+
+    note = _truncation_note(
+        QueryResult(rows=[{"id": 1}], tool_id="t", truncated=True, truncation_reason="source_cap")
+    )
+    assert "incomplete" in note.lower()
+    assert "upstream" in note.lower()
+    # It must NOT tell the agent to merely narrow its own request, which cannot
+    # recover rows the source dropped at fetch time.
+    assert "narrow the request" not in note.lower()
+
+
+def test_omitted_param_uses_author_default_in_runtime() -> None:
+    """Production must apply an author-declared parameter default just like the
+    design-time preview executor does. FastMCP passes an omitted optional param
+    through as None; without default-filling, `LIMIT :limit` would bind NULL
+    (no limit) instead of the author's default — a preview/production divergence
+    and an unbounded over-fetch."""
+    import asyncio
+
+    captured: dict = {}
+
+    class _CapturingEngine:
+        def query(self, sql: str, params: dict) -> list[dict]:  # type: ignore[type-arg]
+            captured.update(params)
+            return [{"id": 1}]
+
+    tool = ToolDefinition(
+        id="list_things",
+        name="List Things",
+        description="Return things up to a limit",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT id FROM things LIMIT :limit",
+        parameters=[
+            ParameterDefinition(
+                name="limit",
+                type="integer",
+                required=False,
+                description="Max rows to return.",
+                default=50,
+            )
+        ],
+    )
+    executor = ToolExecutor(CONNECTOR, secrets={}, engine=_CapturingEngine())  # type: ignore[arg-type]
+
+    # Agent omits `limit` — FastMCP delivers it as None.
+    asyncio.run(executor.execute(tool, {"limit": None}))
+    assert captured["limit"] == 50, "author default not applied when param omitted"
+
+    # An explicit value still wins over the default.
+    captured.clear()
+    asyncio.run(executor.execute(tool, {"limit": 5}))
+    assert captured["limit"] == 5
+
+
+@respx.mock
+async def test_executor_write_tool_posts_via_api_mapping() -> None:
+    """A published WRITE/ACTION tool must actually execute its mutation: map the
+    agent's params into method + path + query + body and POST upstream. Before
+    this the runtime advertised the tool but failed the call with 'no sql or
+    filter_groups defined' — no published mutation tool could run."""
+    from elliot_core.types import ApiRequestMapping
+
+    tool = ToolDefinition(
+        id="create_order",
+        name="Create Order",
+        description="Create a new order for an org",
+        category="ACTION",
+        source_ids=["api"],
+        api_mapping=ApiRequestMapping(
+            method="POST",
+            path_template="/orgs/{org}/orders",
+            query_params=["notify"],
+            body_params=["item"],
+            body_format="json",
+        ),
+        parameters=[
+            ParameterDefinition(name="org", type="string", required=True, description="org slug"),
+            ParameterDefinition(name="item", type="string", required=True, description="item"),
+            ParameterDefinition(
+                name="notify", type="boolean", required=False, description="notify"
+            ),
+        ],
+    )
+    connector = ConnectorConfig(
+        name="Shop",
+        slug="shop",
+        version="1.0.0",
+        sources=[SourceConfig(id="api", name="API", type="rest", url="https://api.example.com")],
+        tools=[tool],
+        skills=[],
+    )
+    route = respx.post("https://api.example.com/orgs/acme/orders").mock(
+        return_value=httpx.Response(201, json={"id": 7, "item": "widget"})
+    )
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(tool, {"org": "acme", "item": "widget", "notify": True})
+
+    assert result.rows == [{"id": 7, "item": "widget"}]
+    req = route.calls.last.request
+    assert req.method == "POST"
+    # Path placeholder substituted; query + JSON body carried through.
+    assert "notify=true" in str(req.url)
+    import json as _json
+
+    assert _json.loads(req.content) == {"item": "widget"}
+
+
+@respx.mock
+async def test_executor_write_tool_surfaces_http_status() -> None:
+    """An upstream error becomes an actionable API_REQUEST_FAILED carrying the
+    status code — not a raw stack trace, and not a silent success."""
+    from elliot_core.errors import ElliotError
+    from elliot_core.types import ApiRequestMapping
+
+    tool = ToolDefinition(
+        id="delete_order",
+        name="Delete Order",
+        description="Delete an order by id",
+        category="ACTION",
+        source_ids=["api"],
+        api_mapping=ApiRequestMapping(method="DELETE", path_template="/orders/{order_id}"),
+        parameters=[
+            ParameterDefinition(name="order_id", type="string", required=True, description="id")
+        ],
+    )
+    connector = ConnectorConfig(
+        name="Shop",
+        slug="shop",
+        version="1.0.0",
+        sources=[SourceConfig(id="api", name="API", type="rest", url="https://api.example.com")],
+        tools=[tool],
+        skills=[],
+    )
+    respx.delete("https://api.example.com/orders/abc").mock(
+        return_value=httpx.Response(404, json={"error": "not found"})
+    )
+    executor = ToolExecutor(connector, secrets={})
+    with pytest.raises(ElliotError) as exc_info:
+        await executor.execute(tool, {"order_id": "abc"})
+    assert exc_info.value.code == "API_REQUEST_FAILED"
+    assert exc_info.value.detail["status_code"] == 404
+
+
+@respx.mock
+async def test_executor_write_tool_handles_no_content() -> None:
+    """A 204 No Content mutation reports a compact success row instead of
+    failing on an empty JSON body."""
+    from elliot_core.types import ApiRequestMapping
+
+    tool = ToolDefinition(
+        id="archive_order",
+        name="Archive Order",
+        description="Archive an order by id",
+        category="ACTION",
+        source_ids=["api"],
+        api_mapping=ApiRequestMapping(method="POST", path_template="/orders/{order_id}/archive"),
+        parameters=[
+            ParameterDefinition(name="order_id", type="string", required=True, description="id")
+        ],
+    )
+    connector = ConnectorConfig(
+        name="Shop",
+        slug="shop",
+        version="1.0.0",
+        sources=[SourceConfig(id="api", name="API", type="rest", url="https://api.example.com")],
+        tools=[tool],
+        skills=[],
+    )
+    respx.post("https://api.example.com/orders/abc/archive").mock(return_value=httpx.Response(204))
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(tool, {"order_id": "abc"})
+    assert result.rows == [{"ok": True, "status_code": 204}]

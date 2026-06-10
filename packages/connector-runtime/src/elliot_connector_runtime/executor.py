@@ -86,6 +86,9 @@ class ToolExecutor:
         # fetch/flatten/load for the same source without blocking unrelated
         # sources.
         self._locks: dict[str, asyncio.Lock] = {}
+        # Source ids whose most recent fetch hit the row cap, so the snapshot
+        # the tool now queries is itself incomplete. Cleared on re-materialize.
+        self._truncated_sources: set[str] = set()
 
     async def execute(
         self,
@@ -93,6 +96,25 @@ class ToolExecutor:
         arguments: dict[str, Any],
     ) -> QueryResult:
         from elliot_core.sqlite.query_runner import validate_tool_sql
+
+        # Apply each parameter's author-declared default before any execution
+        # path runs. The design-time preview executor (elliot_core.tools.executor)
+        # already does this, but the published runtime did not: FastMCP passes an
+        # omitted optional param through as None, so a tool with `LIMIT :limit`
+        # and a default of 50 ran as `LIMIT NULL` (= no limit) in production while
+        # returning 50 rows in preview — a silent preview/production divergence
+        # and an unbounded over-fetch. Filling defaults here keeps every path
+        # (pushdown, snapshot SQL, filter_groups, passthrough) consistent.
+        arguments = self._apply_param_defaults(tool, arguments)
+
+        # WRITE / ACTION tools mutate an upstream REST API through their
+        # api_mapping (method + path/query/body) rather than querying a snapshot.
+        # The design-time preview executor already runs these; without this the
+        # published runtime advertised every mutation tool but failed the call
+        # with "no sql or filter_groups defined" — so no published WRITE tool
+        # could ever execute.
+        if tool.category in ("WRITE", "ACTION"):
+            return await self._execute_write(tool, arguments)
 
         # DB filter push-down: when a tool's filters compile to a SELECT and
         # it needs exactly one Postgres/MySQL source, run that SELECT straight
@@ -182,10 +204,26 @@ class ToolExecutor:
                         return self._capped_result(tool.id, [])
             raise
 
-        return self._capped_result(tool.id, rows)
+        return self._capped_result(tool.id, rows, source_capped=self._tool_source_capped(tool))
 
-    def _capped_result(self, tool_id: str, rows: list[dict[str, Any]]) -> QueryResult:
-        """Apply the hard row cap, flagging truncation when it bites."""
+    def _capped_result(
+        self,
+        tool_id: str,
+        rows: list[dict[str, Any]],
+        source_capped: bool = False,
+    ) -> QueryResult:
+        """Apply the hard row cap, flagging truncation when it bites.
+
+        Two independent kinds of incompleteness are surfaced:
+
+        * ``result_cap`` — THIS query matched more rows than the cap. Returning
+          the first ``cap`` and telling the agent to narrow the request yields a
+          complete, context-sized answer.
+        * ``source_cap`` — the upstream snapshot the query ran against was itself
+          capped at fetch time (a REST source with more than ``cap`` rows), so
+          rows may be missing that no client-side filter can recover. This is
+          reported even when the query's own result is small.
+        """
         cap = max_result_rows()
         if len(rows) > cap:
             log.warning(
@@ -194,8 +232,46 @@ class ToolExecutor:
                 returned=cap,
                 total=len(rows),
             )
-            return QueryResult(rows=rows[:cap], tool_id=tool_id, truncated=True)
+            return QueryResult(
+                rows=rows[:cap],
+                tool_id=tool_id,
+                truncated=True,
+                total_rows=len(rows),
+                truncation_reason="result_cap",
+            )
+        if source_capped:
+            log.warning("tool.result.source_truncated", tool_id=tool_id, cap=cap)
+            return QueryResult(
+                rows=rows,
+                tool_id=tool_id,
+                truncated=True,
+                truncation_reason="source_cap",
+            )
         return QueryResult(rows=rows, tool_id=tool_id)
+
+    @staticmethod
+    def _apply_param_defaults(tool: ToolDefinition, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Fill omitted parameters with their author-declared default.
+
+        Only params that declare a non-None default and are currently absent or
+        None are filled — so optional filter params (default None) stay None and
+        keep their SQL bind, while value-like params (limit, page_size) get the
+        default the author intended instead of NULL.
+        """
+        if not any(p.default is not None for p in tool.parameters):
+            return arguments
+        out = dict(arguments)
+        for p in tool.parameters:
+            if p.default is not None and out.get(p.name) is None:
+                out[p.name] = p.default
+        return out
+
+    def _tool_source_capped(self, tool: ToolDefinition) -> bool:
+        """Whether any source this tool reads from had its snapshot capped."""
+        if not self._truncated_sources:
+            return False
+        needed = {s.id for s in self._sources_needed_for(tool)}
+        return bool(self._truncated_sources & needed)
 
     # ── materialization ────────────────────────────────────────────────────
 
@@ -255,6 +331,9 @@ class ToolExecutor:
 
             assert self._engine is not None  # set by _ensure_materialized
             table_name = source.table_name or source.id
+            # This snapshot is about to be replaced — drop any stale "capped"
+            # mark so a now-smaller source isn't reported as truncated.
+            self._truncated_sources.discard(source.id)
             try:
                 rows = await self._fetch_source(source, arguments)
             except Exception as exc:
@@ -373,8 +452,11 @@ class ToolExecutor:
                 all_rows.extend(rows)
 
                 # FIX 3: stop paginating and truncate once the accumulated
-                # row count reaches the cap.
+                # row count reaches the cap. Record that this source's snapshot
+                # is now incomplete so the executor can tell the agent (a result
+                # built on a capped snapshot may be silently missing matches).
                 if len(all_rows) >= row_cap:
+                    self._truncated_sources.add(source.id)
                     if len(all_rows) > row_cap:
                         log.warning(
                             "source.fetch.rows_truncated",
@@ -504,6 +586,10 @@ class ToolExecutor:
             )
 
         api_params = {k: arguments[k] for k in tool.rest_query_params if k in arguments}
+        # Passthrough fetches live every call, so clear any cap mark from a
+        # prior call before re-fetching; _fetch_rest re-adds it if this fetch
+        # hits the cap.
+        self._truncated_sources.discard(source.id)
         rows = await self._fetch_rest(source, arguments, extra_params=api_params)
 
         if tool.sql or tool.filter_groups or tool.return_fields:
@@ -531,6 +617,109 @@ class ToolExecutor:
             tool_id=tool.id,
             source_id=source.id,
             api_params=sorted(api_params),
+            row_count=len(rows),
+        )
+        return self._capped_result(
+            tool.id, rows, source_capped=source.id in self._truncated_sources
+        )
+
+    async def _execute_write(
+        self,
+        tool: ToolDefinition,
+        arguments: dict[str, Any],
+    ) -> QueryResult:
+        """Execute a WRITE/ACTION tool: a real HTTP mutation to a REST source.
+
+        The tool's ``api_mapping`` says how its parameters map into the request:
+        ``method``, a ``path_template`` (``/orders/{order_id}``), ``query_params``
+        and ``body_params``. Path placeholders are URL-encoded so an agent value
+        like ``../admin`` cannot escape its segment, and the request runs through
+        the SAME SSRF defense as reads — the URL is validated and the connection
+        pinned to the vetted IP — so a tenant connector cannot be used to POST to
+        an internal address.
+        """
+        from urllib.parse import urlsplit
+
+        import httpx
+
+        from elliot_core.http import SSRFError, safe_client, validate_url
+
+        mapping = tool.api_mapping
+        if mapping is None:
+            raise ExecutorError(f"{tool.category} tool {tool.id!r} has no api_mapping to execute")
+        if not tool.source_ids:
+            raise ExecutorError(f"{tool.category} tool {tool.id!r} has no source_ids")
+        source = self._sources.get(tool.source_ids[0])
+        if source is None:
+            raise ExecutorError(
+                f"Source {tool.source_ids[0]!r} for tool {tool.id!r} is not configured"
+            )
+        if source.type != "rest":
+            raise ExecutorError(
+                f"{tool.category} tool {tool.id!r} needs a 'rest' source, but {source.id!r} "
+                f"is type {source.type!r}"
+            )
+
+        base_url = (source.url or "").rstrip("/")
+        # _interpolate only substitutes {name} placeholders present in arguments
+        # (the declared, schema-validated params) and percent-encodes each value.
+        path = _interpolate(mapping.path_template or "", arguments)
+        url = base_url + path
+        query = {k: arguments[k] for k in mapping.query_params if arguments.get(k) is not None}
+        body = {k: arguments[k] for k in mapping.body_params if arguments.get(k) is not None}
+        headers = _build_auth_headers(source.auth, self._secrets) if source.auth else {}
+
+        try:
+            initial_ips = validate_url(url)
+        except SSRFError as exc:
+            raise ExecutorError(f"Refusing to call write endpoint: {exc.message}") from exc
+        host = urlsplit(url).hostname or ""
+        pinned_hosts = {host: initial_ips[0]} if (host and initial_ips) else None
+
+        async with safe_client(
+            timeout=source.timeout_ms / 1000, pinned_hosts=pinned_hosts
+        ) as client:
+            try:
+                resp = await client.request(
+                    mapping.method,
+                    url,
+                    params=query or None,
+                    json=body if mapping.body_format == "json" else None,
+                    data=body if mapping.body_format == "form" else None,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                # Surface the status so the agent can recover (principle 3): a 401
+                # means auth, 404 a bad id, 422 bad input. The upstream body is
+                # not echoed — it may carry data the agent shouldn't see.
+                status = exc.response.status_code
+                from elliot_core.errors import ElliotError
+
+                log.error("tool.write.http_error", tool_id=tool.id, status=status)
+                raise ElliotError(
+                    "API_REQUEST_FAILED",
+                    f"The {tool.category} tool's upstream API returned HTTP {status}. "
+                    "Check the parameters you sent and the source's credentials.",
+                    detail={"tool_id": tool.id, "status_code": status},
+                ) from exc
+
+            # Many mutations reply 204 No Content or a non-JSON body; report a
+            # compact success row in that case rather than failing on json().
+            if resp.status_code == 204 or not resp.content:
+                rows: list[dict[str, Any]] = [{"ok": True, "status_code": resp.status_code}]
+            else:
+                try:
+                    data = resp.json()
+                    rows = data if isinstance(data, list) else [data]
+                except ValueError:
+                    rows = [{"ok": True, "status_code": resp.status_code}]
+
+        log.info(
+            "tool.write",
+            tool_id=tool.id,
+            source_id=source.id,
+            method=mapping.method,
             row_count=len(rows),
         )
         return self._capped_result(tool.id, rows)

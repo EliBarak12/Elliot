@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class OAuth2Config(BaseModel):
@@ -100,6 +100,11 @@ class SourceConfig(BaseModel):
     table_name: str | None = None
     row_count: int | None = None
     config_snapshot: dict[str, Any] | None = None
+    # Child tables produced by the flattener for nested arrays (e.g. a REST
+    # response with ``orders[].line_items[]`` yields ``orders_line_items``).
+    # Persisted so an agent can rediscover the full relational schema via
+    # ``elliot_list_sources`` without re-fetching the source.
+    related_tables: list[str] = Field(default_factory=list)
 
 
 class FetchResult(BaseModel):

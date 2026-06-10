@@ -27,6 +27,34 @@ def test_merge_client_info_no_name_returns_base() -> None:
     assert merge_client_info(base, "   ") is base
 
 
+def test_model_from_explicit_header() -> None:
+    # MCP carries no model, so a client volunteers it in a header.
+    ident = parse_agent_identity({"x-client-name": "cursor", "x-model": "claude-opus-4-8"})
+    assert ident.client == "cursor"
+    assert ident.model == "claude-opus-4-8"
+    # X-Model-Name is accepted too, and an explicit header beats the UA guess.
+    ident2 = parse_agent_identity({"user-agent": "agent-codex gpt-5", "x-model-name": "o3-mini"})
+    assert ident2.model == "o3-mini"
+
+
+def test_merge_overlays_handshake_protocol_and_capabilities() -> None:
+    merged = merge_client_info(
+        AgentIdentity(client="mcp"),
+        "Claude Code",
+        "1.42.0",
+        protocol_version="2025-06-18",
+        capabilities=("roots", "sampling"),
+        model="claude-opus-4-8",
+    )
+    assert merged.protocol_version == "2025-06-18"
+    assert merged.capabilities == ("roots", "sampling")
+    assert merged.model == "claude-opus-4-8"
+    # round-trips through the dict payload the observation store persists
+    d = merged.to_dict()
+    assert d["protocol_version"] == "2025-06-18"
+    assert d["capabilities"] == ["roots", "sampling"]
+
+
 def test_merge_client_info_handles_none_identity() -> None:
     merged = merge_client_info(None, "codex-mcp-client", "0.108.0")
     assert merged.client == "codex-mcp-client"

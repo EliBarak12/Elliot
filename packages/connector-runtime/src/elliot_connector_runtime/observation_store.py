@@ -33,6 +33,11 @@ class _AgentSession(_Base):
     agent_model = Column(String(128), index=True)
     agent_modality = Column(String(64))
     user_agent = Column(String(512))
+    # Spec-backed MCP handshake fields: the protocol version the client speaks
+    # and a comma-separated list of advertised capabilities (roots, sampling,
+    # elicitation, experimental).
+    agent_protocol_version = Column(String(32))
+    agent_capabilities = Column(String(255))
     connector_slug = Column(String(128))
     total_tool_calls = Column(Integer, default=0)
     total_tokens_estimated = Column(Integer, default=0)
@@ -118,6 +123,8 @@ class ObservationStore:
             ("agent_model", "VARCHAR(128)"),
             ("agent_modality", "VARCHAR(64)"),
             ("user_agent", "VARCHAR(512)"),
+            ("agent_protocol_version", "VARCHAR(32)"),
+            ("agent_capabilities", "VARCHAR(255)"),
         ]
         with self._engine.begin() as conn:
             for col_name, col_type in additions:
@@ -158,6 +165,28 @@ class ObservationStore:
                     connector_slug=connector_slug,
                 )
             )
+            # Keep the session's denormalized rollups CURRENT on every call.
+            # MCP-over-HTTP clients usually drop their connection without a clean
+            # shutdown, so ``close_session`` (which recomputes these) often never
+            # fires — leaving ``total_tool_calls`` at 0 and making the dashboard's
+            # calls-per-session / error-rate read as empty under real traffic.
+            # Incrementing here means the per-agent breakdown is correct the
+            # instant a call lands; ``close_session`` later recomputes the same
+            # totals from the tool_calls table, so the two never double-count.
+            if session_id is not None:
+                sess = db.query(_AgentSession).filter_by(session_id=session_id).first()
+                if sess is not None:
+                    if not error:
+                        sess.total_tool_calls = (sess.total_tool_calls or 0) + 1  # type: ignore[assignment]
+                    else:
+                        sess.error_count = (sess.error_count or 0) + 1  # type: ignore[assignment]
+                    sess.total_tokens_estimated = (sess.total_tokens_estimated or 0) + int(  # type: ignore[assignment]
+                        result_token_estimate or 0
+                    )
+                    sess.total_duration_ms = (sess.total_duration_ms or 0.0) + float(  # type: ignore[assignment]
+                        duration_ms or 0.0
+                    )
+                    sess.ended_at = time.time()  # type: ignore[assignment]
             db.commit()
 
     def write_feedback(
@@ -202,6 +231,7 @@ class ObservationStore:
         identity = agent_identity or {}
         with Session(self._engine) as db:
             if db.query(_AgentSession).filter_by(session_id=session_id).first() is None:
+                caps = identity.get("capabilities")
                 db.add(
                     _AgentSession(
                         session_id=session_id,
@@ -213,6 +243,8 @@ class ObservationStore:
                         agent_model=identity.get("model"),
                         agent_modality=identity.get("modality"),
                         user_agent=identity.get("user_agent"),
+                        agent_protocol_version=identity.get("protocol_version"),
+                        agent_capabilities=",".join(caps) if caps else None,
                     )
                 )
                 db.commit()

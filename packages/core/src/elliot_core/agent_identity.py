@@ -47,6 +47,12 @@ class AgentIdentity:
     model: str | None = None
     modality: str | None = None
     user_agent: str | None = None
+    # From the MCP ``initialize`` handshake (not headers): the spec version the
+    # client speaks, and the capability names it advertised (roots, sampling,
+    # elicitation, …). These are spec-backed — unlike ``model``, which MCP does
+    # not carry, so it must be volunteered by the client (X-Model header / UA).
+    protocol_version: str | None = None
+    capabilities: tuple[str, ...] | None = None
 
     def display(self) -> str:
         """One-line label for logs and the legacy ``agent_hint`` column."""
@@ -71,6 +77,8 @@ class AgentIdentity:
             "model": self.model,
             "modality": self.modality,
             "user_agent": self.user_agent,
+            "protocol_version": self.protocol_version,
+            "capabilities": list(self.capabilities) if self.capabilities is not None else None,
         }
 
 
@@ -103,6 +111,11 @@ def parse_agent_identity(headers: Mapping[str, str]) -> AgentIdentity:
     """
     user_agent = headers.get("user-agent") or None
     explicit_client = headers.get("x-client-name") or None
+    # MCP carries no model field, so a client that wants its model attributed
+    # volunteers it in an explicit header. This is the reliable channel; the
+    # User-Agent parse below is a best-effort fallback.
+    explicit_model = headers.get("x-model") or headers.get("x-model-name") or None
+    explicit_modality = headers.get("x-modality") or None
 
     client: str | None = None
     client_version: str | None = None
@@ -138,6 +151,11 @@ def parse_agent_identity(headers: Mapping[str, str]) -> AgentIdentity:
 
     if not client and explicit_client:
         client = explicit_client.lower()
+    # An explicit header wins over the UA heuristic for model/modality.
+    if explicit_model:
+        model = explicit_model.lower()
+    if explicit_modality:
+        modality = explicit_modality.lower()
 
     return AgentIdentity(
         client=client,
@@ -152,21 +170,33 @@ def merge_client_info(
     identity: AgentIdentity | None,
     client_name: str | None,
     client_version: str | None = None,
+    *,
+    protocol_version: str | None = None,
+    capabilities: tuple[str, ...] | None = None,
+    model: str | None = None,
 ) -> AgentIdentity:
-    """Overlay an MCP ``initialize`` clientInfo onto a header-parsed identity.
+    """Overlay MCP ``initialize`` data onto a header-parsed identity.
 
-    The MCP handshake's ``clientInfo`` is the most reliable signal of which
-    harness is connected (Claude Code, Cursor, Codex, ...), so it takes
-    precedence over the User-Agent parse for the ``client`` field. Model and
-    modality — which MCP does not carry — are preserved from the header parse.
+    The handshake's ``clientInfo`` is the most reliable signal of which harness
+    is connected (Claude Code, Cursor, Codex, ...), so it takes precedence over
+    the User-Agent parse for the ``client`` field. ``protocol_version`` and
+    ``capabilities`` are spec-backed handshake fields. ``model`` — which MCP
+    does not carry — is only set here when a caller resolved it out-of-band
+    (e.g. an X-Model header) and never overwrites an existing value with None.
     """
     base = identity or AgentIdentity()
-    if not client_name or not client_name.strip():
+    has_name = bool(client_name and client_name.strip())
+    # Nothing to overlay — return the input untouched (callers rely on identity).
+    if not has_name and not protocol_version and capabilities is None and not model:
         return base
+    name = client_name.strip().lower() if client_name and client_name.strip() else base.client
     return replace(
         base,
-        client=client_name.strip().lower(),
+        client=name,
         client_version=client_version or base.client_version,
+        protocol_version=protocol_version or base.protocol_version,
+        capabilities=capabilities if capabilities is not None else base.capabilities,
+        model=model or base.model,
     )
 
 

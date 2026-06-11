@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from elliot_core.eval.quality import (
+    BEST_PRACTICES,
     analyze_connector_quality,
     analyze_tool_quality,
 )
@@ -180,3 +181,124 @@ def test_connector_counts_errors_and_warnings():
     )
     result = analyze_connector_quality(config)
     assert result.error_count > 0
+
+
+# ── mcp-builder best-practice tagging ──────────────────────────────────────────
+
+
+def test_every_issue_carries_a_known_principle():
+    known = {bp["id"] for bp in BEST_PRACTICES}
+    tool = _make_tool(
+        tool_id="getData",  # snake_case + generic
+        description="SQL table dump",  # short + jargon + no verb
+        params=[_undescribed_param("data")],
+    )
+    result = analyze_tool_quality(tool)
+    assert result.issues  # sanity: this tool is genuinely bad
+    for issue in result.issues:
+        assert issue.principle in known
+
+
+def test_min_length_tagged_context_and_params_tagged_schema():
+    tool = _make_tool(description="Too short", params=[_undescribed_param("user_id")])
+    by_check = {i.check: i.principle for i in analyze_tool_quality(tool).issues}
+    assert by_check["min_length"] == "context"
+    assert by_check["has_params_described"] == "schema"
+
+
+# ── enum_for_closed_set ─────────────────────────────────────────────────────────
+
+
+def test_closed_value_set_string_param_warns_to_use_enum():
+    tool = _make_tool(
+        description="Returns orders filtered by their current status value",
+        params=[
+            ParameterDefinition(
+                name="order_status",
+                type="string",
+                required=True,
+                description="The status, must be one of open, closed, or pending",
+            )
+        ],
+    )
+    result = analyze_tool_quality(tool)
+    issue = next((i for i in result.issues if i.check == "enum_for_closed_set"), None)
+    assert issue is not None
+    assert issue.principle == "schema"
+
+
+def test_param_already_enum_no_enum_warning():
+    tool = _make_tool(
+        description="Returns orders filtered by their current status value",
+        params=[
+            ParameterDefinition(
+                name="order_status",
+                type="string",
+                required=True,
+                description="The status, must be one of open, closed, or pending",
+                enum=["open", "closed", "pending"],
+            )
+        ],
+    )
+    result = analyze_tool_quality(tool)
+    assert not any(i.check == "enum_for_closed_set" for i in result.issues)
+
+
+# ── pagination ──────────────────────────────────────────────────────────────────
+
+
+def test_unbounded_sql_list_tool_warns_pagination():
+    tool = ToolDefinition(
+        id="list_orders",
+        name="list_orders",
+        description="Returns every order placed by every customer",
+        category="READ",
+        source_ids=["src"],
+        sql="SELECT id, total FROM orders",
+    )
+    result = analyze_tool_quality(tool)
+    issue = next((i for i in result.issues if i.check == "pagination"), None)
+    assert issue is not None
+    assert issue.principle == "context"
+
+
+def test_sql_list_tool_with_limit_no_pagination_warning():
+    tool = ToolDefinition(
+        id="list_orders",
+        name="list_orders",
+        description="Returns recent orders placed by every customer",
+        category="READ",
+        source_ids=["src"],
+        sql="SELECT id, total FROM orders LIMIT 50",
+    )
+    result = analyze_tool_quality(tool)
+    assert not any(i.check == "pagination" for i in result.issues)
+
+
+# ── mutation_hint ────────────────────────────────────────────────────────────────
+
+
+def test_write_tool_without_mutation_word_warns():
+    tool = ToolDefinition(
+        id="register_customer",
+        name="register_customer",
+        description="Registers a brand new customer in the billing system",
+        category="WRITE",
+        source_ids=["src"],
+    )
+    result = analyze_tool_quality(tool)
+    issue = next((i for i in result.issues if i.check == "mutation_hint"), None)
+    assert issue is not None
+    assert issue.principle == "annotations"
+
+
+def test_write_tool_with_mutation_word_no_warning():
+    tool = ToolDefinition(
+        id="create_customer",
+        name="create_customer",
+        description="Creates a brand new customer record in the billing system",
+        category="WRITE",
+        source_ids=["src"],
+    )
+    result = analyze_tool_quality(tool)
+    assert not any(i.check == "mutation_hint" for i in result.issues)

@@ -63,6 +63,9 @@ interface ToolIssue {
   check: string;
   severity: string;
   message: string;
+  // The mcp-builder principle this check enforces (naming, context, schema,
+  // annotations, consistency). Optional for resilience against older servers.
+  principle?: string;
 }
 
 interface ToolScore {
@@ -71,13 +74,64 @@ interface ToolScore {
   issues: ToolIssue[];
 }
 
+interface BestPractice {
+  id: string;
+  title: string;
+  summary: string;
+}
+
 interface QualityScanResult {
   overall_score: number;
   error_count: number;
   warning_count: number;
   last_eval_score: number | null;
+  best_practices?: BestPractice[];
   tool_scores: ToolScore[];
 }
+
+// Fallback catalog mirroring elliot_core.eval.quality.BEST_PRACTICES, used when
+// an older server doesn't send `best_practices` in the scan response. The
+// server copy is authoritative when present.
+const FALLBACK_BEST_PRACTICES: BestPractice[] = [
+  {
+    id: "naming",
+    title: "Tool naming & discoverability",
+    summary:
+      "Clear, action-oriented, domain-specific names and verb-first descriptions so agents locate the right tool quickly.",
+  },
+  {
+    id: "context",
+    title: "Context management",
+    summary:
+      "Concise, jargon-free descriptions and bounded results — list tools support a LIMIT or pagination so they never dump an unbounded set.",
+  },
+  {
+    id: "schema",
+    title: "Input & output schema design",
+    summary:
+      "Every parameter carries a description, and closed value sets are typed as enums so agents cannot guess wrong.",
+  },
+  {
+    id: "annotations",
+    title: "Tool annotations",
+    summary:
+      "Mutating (WRITE / ACTION) tools state their effect in the description so agents never call them by accident.",
+  },
+  {
+    id: "consistency",
+    title: "Consistency",
+    summary: "Uniform snake_case identifiers across the whole tool set.",
+  },
+];
+
+// Short labels for the per-issue principle chip.
+const PRINCIPLE_LABELS: Record<string, string> = {
+  naming: "Naming",
+  context: "Context",
+  schema: "Schema",
+  annotations: "Annotations",
+  consistency: "Consistency",
+};
 
 function ScoreRing({ score }: { score: number }) {
   const tone =
@@ -345,6 +399,72 @@ function EvalSuitesTab() {
   );
 }
 
+// Coverage of Anthropic's mcp-builder best practices: for each principle, how
+// many of the scanned issues fall under it. Zero issues under a principle means
+// the tool set follows that guidance.
+function BestPracticeCoverage({ result }: { result: QualityScanResult }) {
+  const catalog = result.best_practices?.length ? result.best_practices : FALLBACK_BEST_PRACTICES;
+  const issues = result.tool_scores.flatMap((t) => t.issues);
+  const countFor = (id: string) => issues.filter((i) => (i.principle ?? "naming") === id).length;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ClipboardCheck className="h-4 w-4 text-primary" />
+          MCP best-practice coverage
+        </CardTitle>
+        <CardDescription>
+          Checks based on Anthropic&apos;s{" "}
+          <a
+            href="https://github.com/anthropics/skills/blob/main/skills/mcp-builder/SKILL.md"
+            target="_blank"
+            rel="noreferrer"
+            className="underline underline-offset-2 hover:text-foreground"
+          >
+            mcp-builder skill
+          </a>
+          . Each tool is graded against these principles.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {catalog.map((bp) => {
+            const n = countFor(bp.id);
+            return (
+              <div
+                key={bp.id}
+                className="flex items-start gap-3 rounded-md border border-border/60 bg-muted/20 px-3 py-2.5"
+              >
+                {n === 0 ? (
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+                ) : (
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                )}
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs font-medium">{bp.title}</p>
+                    {n === 0 ? (
+                      <Badge variant="success" className="text-2xs">
+                        clean
+                      </Badge>
+                    ) : (
+                      <Badge variant="warning" className="text-2xs tabular-nums">
+                        {n} {n === 1 ? "issue" : "issues"}
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-2xs text-muted-foreground">{bp.summary}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function QualityScanTab() {
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState<QualityScanResult | null>(null);
@@ -418,6 +538,8 @@ function QualityScanTab() {
         </div>
       )}
 
+      {result && <BestPracticeCoverage result={result} />}
+
       {result && (
         <div className="space-y-3">
           {result.tool_scores.map((ts) => (
@@ -447,7 +569,14 @@ function QualityScanTab() {
                         >
                           {issue.severity}
                         </Badge>
-                        <p className="text-xs text-muted-foreground">{issue.message}</p>
+                        <div className="space-y-1">
+                          <p className="text-xs text-muted-foreground">{issue.message}</p>
+                          {issue.principle && PRINCIPLE_LABELS[issue.principle] && (
+                            <Badge variant="muted" className="text-2xs">
+                              {PRINCIPLE_LABELS[issue.principle]}
+                            </Badge>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -466,7 +595,7 @@ export default function EvaluationPage() {
     <div className="space-y-6">
       <PageHeader
         title="Evaluation"
-        description="Run eval suites against your connector and scan tool quality before deploy."
+        description="Run eval suites against your connector and grade tool quality against Anthropic's mcp-builder best practices before deploy."
         actions={
           <Badge variant="muted" className="gap-1.5">
             <ClipboardCheck className="h-3 w-3" />

@@ -14,7 +14,7 @@ from mcp.server.fastmcp import FastMCP
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.eval.models import EvalCase, EvalSuite
-from elliot_core.eval.quality import analyze_connector_quality
+from elliot_core.eval.quality import BEST_PRACTICES, analyze_connector_quality
 from elliot_core.eval.runner import load_results, run_eval_suite, save_result
 from elliot_core.eval_runner import EvalRunner
 from elliot_core.eval_types import load_eval_suite as load_yaml_eval_suite
@@ -155,7 +155,12 @@ def register_eval_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
     @mcp.tool()
     def elliot_quality_scan() -> dict:  # type: ignore[type-arg]
-        """Run a quality analysis on the current connector and return per-tool scores."""
+        """Run a quality analysis on the current connector and return per-tool scores.
+
+        Each issue is tagged with the ``principle`` from Anthropic's mcp-builder
+        skill that it enforces, and the response includes the ``best_practices``
+        catalog so the Evaluation page can group results by best-practice area.
+        """
         try:
             log.info("quality.scan.start")
             if session.connector is None:
@@ -172,6 +177,7 @@ def register_eval_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 "error_count": result.error_count,
                 "warning_count": result.warning_count,
                 "last_eval_score": last_score,
+                "best_practices": BEST_PRACTICES,
                 "tool_scores": [
                     {
                         "tool_id": ts.tool_id,

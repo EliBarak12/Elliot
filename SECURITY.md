@@ -7,7 +7,7 @@ issue or pull request for a suspected vulnerability.
 
 - Preferred: open a [private vulnerability report](https://github.com/EliBarak12/Elliot/security/advisories/new)
   via GitHub Security Advisories.
-- Alternatively, email **barak3656@gmail.com** with the details and a way to
+- Alternatively, email **support@elliot-cloud.com** with the details and a way to
   reach you.
 
 Please include, where possible:

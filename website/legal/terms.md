@@ -69,4 +69,4 @@ updated" date above. Continued use after a change constitutes acceptance.
 
 ## 9. Contact
 
-Questions about these terms: **barak3656@gmail.com**.
+Questions about these terms: **support@elliot-cloud.com**.

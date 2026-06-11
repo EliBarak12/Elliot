@@ -18,7 +18,7 @@ description: How Elliot Cloud collects, uses, and protects data when you connect
 ## Who we are
 
 Elliot Cloud is operated by the Elliot maintainers. For any privacy question or
-request, contact **barak3656@gmail.com**.
+request, contact **support@elliot-cloud.com**.
 
 ## What we collect
 
@@ -70,7 +70,7 @@ logs to train models.
   delete a connector and its associated records from the dashboard.
 - You can revoke any connected agent at any time under **Connected agents**,
   which immediately blocks further access.
-- To delete your account and associated data, contact **barak3656@gmail.com**.
+- To delete your account and associated data, contact **support@elliot-cloud.com**.
 
 ## Sub-processors
 
@@ -81,7 +81,7 @@ only as needed to deliver their part of the service.
 ## Your rights
 
 Depending on your jurisdiction you may have rights to access, correct, export,
-or delete your personal data. Contact **barak3656@gmail.com** to exercise them.
+or delete your personal data. Contact **support@elliot-cloud.com** to exercise them.
 
 ## Changes
 

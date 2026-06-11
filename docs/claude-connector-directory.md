@@ -28,7 +28,7 @@ The hard requirements for a remote MCP connector. Elliot's hosted backend
 | Discovery documents readable cross-origin (`Access-Control-Allow-Origin: *`) | ✅ | `_public_metadata` in `routers/oauth.py` |
 | Per-user identity, revocable grants | ✅ | `scope: per_user`, `/api/me/oauth-grants` |
 | Privacy policy + Terms of Service URLs | ✅ drafted (have counsel review) | `website/legal/privacy.md`, `website/legal/terms.md` |
-| Support contact | ✅ | barak3656@gmail.com / GitHub Security Advisories |
+| Support contact | ✅ | support@elliot-cloud.com / GitHub Security Advisories |
 | Verb-first, typed tool descriptions sized for context | ✅ | enforced by the connector linter (five principles) |
 
 > **Open item before submission:** have counsel review the drafted privacy
@@ -106,7 +106,7 @@ These now live in the docs site (`website/legal/`) and publish at:
   contact).
 - **Terms of service** — https://elibarak12.github.io/Elliot/legal/terms
   (acceptable use, availability, liability).
-- **Support** — barak3656@gmail.com and the GitHub Security Advisories link in
+- **Support** — support@elliot-cloud.com and the GitHub Security Advisories link in
   `SECURITY.md` for vulnerability reports.
 
 Both are drafts written against Elliot's actual data handling — have legal

@@ -322,6 +322,28 @@ def _result_truncated(result: Any) -> bool:
     return False
 
 
+def _payload_for(result: Any) -> dict[str, Any]:
+    """Build the agent-facing tool result.
+
+    Always carries an ``estimated_tokens`` count of the returned rows — token
+    cost is a first-class signal the agent can use to decide whether to narrow
+    a request, not just an internal metric — plus the truncation marker + note
+    when the set was capped.
+    """
+    from .session_tracker import _estimate_tokens
+
+    rows = getattr(result, "rows", []) or []
+    payload: dict[str, Any] = {
+        "rows": rows,
+        "count": len(rows),
+        "estimated_tokens": _estimate_tokens(rows),
+    }
+    if _result_truncated(result):
+        payload["truncated"] = True
+        payload["truncation_note"] = _truncation_note(result)
+    return payload
+
+
 def _truncation_note(result: Any) -> str:
     """Actionable guidance for an agent whose result was capped (principle 3).
 
@@ -331,10 +353,25 @@ def _truncation_note(result: Any) -> str:
     of either trying to process a context-blowing dump or silently treating a
     capped set as the whole answer.
     """
-    from .executor import max_result_rows
+    from .executor import max_result_rows, max_result_tokens
 
     cap = max_result_rows()
     reason = getattr(result, "truncation_reason", None)
+    if reason == "token_budget":
+        # The rows fit the row cap but were too large (fat fields) to fit the
+        # per-call token budget, so fewer were returned.
+        total = getattr(result, "total_rows", None)
+        returned = len(getattr(result, "rows", []) or [])
+        scope = (
+            f"Returned {returned} of {total} matching rows"
+            if isinstance(total, int)
+            else f"Returned {returned} rows"
+        )
+        return (
+            f"{scope}: the full set exceeded the {max_result_tokens()}-token per-call "
+            "budget (the rows carry large fields). Select only the fields you need "
+            "(narrow return_fields), or add a tighter filter, then call again."
+        )
     if reason == "source_cap":
         # The upstream snapshot was capped before this query ran, so the rows
         # returned may be missing matches that no client-side filter recovers.
@@ -794,14 +831,7 @@ def _register_tool(
 
             async def _work() -> dict[str, Any]:
                 result = await active_executor.execute(td, kwargs)
-                payload: dict[str, Any] = {
-                    "rows": result.rows,
-                    "count": len(result.rows),
-                }
-                if _result_truncated(result):
-                    payload["truncated"] = True
-                    payload["truncation_note"] = _truncation_note(result)
-                return payload
+                return _payload_for(result)
 
             task_id = task_store.submit(td.id, _work())
             return {
@@ -829,14 +859,10 @@ def _register_tool(
                     "truncated": _result_truncated(result),
                 },
             )
-            payload = {"rows": result.rows, "count": len(result.rows)}
-            if _result_truncated(result):
-                # Marker so the agent knows the result set was capped at
-                # ELLIOT_MAX_RESULT_ROWS and is not the complete answer, plus
-                # an actionable note telling it how to get a complete result.
-                payload["truncated"] = True
-                payload["truncation_note"] = _truncation_note(result)
-            return payload
+            # Agent-facing result: rows + count + a token estimate, plus the
+            # truncation marker/note when the set was capped (by row cap, source
+            # cap, or the per-call token budget).
+            return _payload_for(result)
         except Exception as exc:
             # Every failure must be observed — not just ElliotError. A tool
             # backed by a REST source fails with httpx.HTTPStatusError /

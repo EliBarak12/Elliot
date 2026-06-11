@@ -195,9 +195,10 @@ class TestQueryDatabase:
         assert "default_transaction_read_only=on" in options
         assert "statement_timeout=30000" in options
 
-    def test_mysql_uses_no_pg_connect_args(self) -> None:
-        """MySQL has no session read-only equivalent; it must not get the
-        Postgres-only options string."""
+    def test_mysql_uses_read_only_init_command(self) -> None:
+        """MySQL must enforce a read-only session (init_command) so a write/DDL
+        the validator missed is rejected by MySQL itself — not the Postgres-only
+        options string."""
         from elliot_core.sources.db_connector import query_database
 
         source = _mysql_source(url="mysql+pymysql://root:pass@localhost/test")
@@ -207,7 +208,8 @@ class TestQueryDatabase:
             query_database(source, {})
 
         connect_args = ce.call_args.kwargs["connect_args"]
-        assert "options" not in connect_args
+        assert "options" not in connect_args  # not the Postgres options string
+        assert connect_args["init_command"] == "SET SESSION TRANSACTION READ ONLY"
 
     def test_fetch_result_has_fetched_at(self) -> None:
         from elliot_core.sources.db_connector import query_database

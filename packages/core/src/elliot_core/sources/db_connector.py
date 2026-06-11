@@ -96,12 +96,17 @@ def _get_engine(dsn: str, dialect: str) -> Engine:
         connect_args: dict[str, Any] = {}
         if dialect == "postgres":
             # Enforce read-only at the connection level: any write or DDL the
-            # validator missed will be rejected by Postgres itself. MySQL has no
-            # session-level read-only equivalent, so it relies on
-            # validate_tool_sql.
+            # validator missed is rejected by Postgres itself.
             connect_args["options"] = (
                 "-c statement_timeout=30000 -c default_transaction_read_only=on"
             )
+        elif dialect == "mysql":
+            # MySQL 5.6.5+ supports session read-only transactions. ``init_command``
+            # runs on every new pooled connection, so a write/DDL the validator
+            # missed is rejected by MySQL itself — defence-in-depth matching
+            # Postgres, not validator-only. DB sources are read-only by design
+            # (mutations go through REST api_mapping), so this is safe.
+            connect_args["init_command"] = "SET SESSION TRANSACTION READ ONLY"
         engine = create_engine(dsn, connect_args=connect_args, pool_pre_ping=True)
         _engine_cache[key] = engine
         return engine

@@ -95,6 +95,17 @@ class SourceConfig(BaseModel):
     format: Literal["csv", "json", "jsonl"] | None = None
     encoding: str = "utf-8"
     delimiter: str = ","
+    # File — inline content. When set, the file's bytes travel WITH the source
+    # (inside session.json and the published connector spec) instead of being
+    # re-read from ``path`` on the host filesystem. This is what makes a file
+    # source portable across the builder and the published runtime — which run
+    # in different processes (and, in the cloud, different containers) with no
+    # shared disk — and durable across restarts/evictions, where the builder's
+    # workspace files are gone but the saved source must still materialize.
+    # ``content`` is UTF-8 text by default, or base64 when
+    # ``content_encoding == "base64"`` (binary / non-UTF-8 files).
+    content: str | None = None
+    content_encoding: Literal["text", "base64"] = "text"
 
     # Runtime tracking (populated after a fetch)
     table_name: str | None = None

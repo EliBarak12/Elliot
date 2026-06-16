@@ -672,6 +672,91 @@ def test_upload_file_overwrite_is_atomic(mcp: FastMCP, session: ElliotSession):
     assert not leftover.exists()
 
 
+# ── file sources are self-contained (inline content survives publish/restart) ─
+
+
+def test_discover_file_with_inline_content_no_disk(mcp: FastMCP, session: ElliotSession):
+    """An agent can register a file source in ONE call by passing the body
+    inline — no upload, no path, no ELLIOT_FILE_ROOT, no disk access at all."""
+    out = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"content": '[{"id": 1}, {"id": 2}]', "format": "json"},
+        name="people",
+    )
+    assert out["row_count"] == 2
+    # The bytes are persisted ON the source, so it travels into the published
+    # spec and re-materializes after a restart without the original file.
+    src = next(iter(session.sources.values()))
+    assert src.content is not None and src.content_encoding == "text"
+    assert src.config_snapshot is not None and "content" not in src.config_snapshot
+
+
+def test_discover_file_inline_csv(mcp: FastMCP, session: ElliotSession):
+    out = _tool(mcp, "elliot_discover_source")(
+        source_type="csv",
+        config={"content": "id,name\n1,Ada\n2,Lin\n", "format": "csv"},
+        name="people",
+    )
+    assert out["row_count"] == 2
+
+
+def test_discover_from_path_inlines_content(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Discovering via a path (e.g. an uploaded file) inlines the bytes onto
+    the source so the published connector no longer depends on that path."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ELLIOT_FILE_ROOT", raising=False)
+    payload = json.dumps([{"id": 1}, {"id": 2}, {"id": 3}])
+    upload = _tool(mcp, "elliot_upload_file")(file_name="data.json", content=payload)
+    _tool(mcp, "elliot_discover_source")(
+        source_type="file", config={"path": upload["managed_path"]}, name="d"
+    )
+    src = next(iter(session.sources.values()))
+    assert src.content is not None
+    # And it now reads correctly even if the original file disappears.
+    Path(upload["managed_path"]).unlink()
+    from elliot_core.sources.file_reader import read_file
+
+    assert len(read_file(src).rows) == 3
+
+
+def test_discover_inline_oversize_rejected(mcp: FastMCP, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ELLIOT_MAX_FILE_BYTES", "1024")
+    big = json.dumps([{"x": 1}] * 500)
+    out = _tool(mcp, "elliot_discover_source")(
+        source_type="file", config={"content": big, "format": "json"}, name="big"
+    )
+    assert _is_error(out) and "FILE_TOO_LARGE" in out.get("text", "")
+
+
+def test_refresh_file_source_uses_inline_content(mcp: FastMCP, session: ElliotSession):
+    _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"content": '[{"id": 1}, {"id": 2}]', "format": "json"},
+        name="people",
+    )
+    sid = next(iter(session.sources))
+    out = _tool(mcp, "elliot_refresh_source")(source_id=sid)
+    assert out["row_count"] == 2
+
+
+def test_discover_path_traversal_still_blocked(
+    mcp: FastMCP, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """ATTACK: a connector that tries to inline an arbitrary host file (e.g.
+    /etc/passwd) via `path` must still be refused by the allowlist."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ELLIOT_FILE_ROOT", str(tmp_path))
+    monkeypatch.delenv("ELLIOT_FILE_READER_ALLOW_ABSOLUTE", raising=False)
+    secret = tmp_path.parent / "secret.json"
+    secret.write_text('[{"pw": "hunter2"}]')
+    out = _tool(mcp, "elliot_discover_source")(
+        source_type="file", config={"path": str(secret)}, name="x"
+    )
+    assert _is_error(out) and "FILE_NOT_ALLOWED" in out.get("text", "")
+
+
 # ---------------------------------------------------------------------------
 # elliot_connect_source — design-time interactive OAuth login for discover
 # ---------------------------------------------------------------------------

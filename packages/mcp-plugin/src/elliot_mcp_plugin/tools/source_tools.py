@@ -8,7 +8,7 @@ import os
 import re
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 from mcp.server.fastmcp import FastMCP
@@ -17,7 +17,7 @@ from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.paths import PathEscape, safe_join
 from elliot_core.sources.api_fetcher import _resolve_secret, fetch_endpoint
 from elliot_core.sources.db_connector import query_database
-from elliot_core.sources.file_reader import read_file
+from elliot_core.sources.file_reader import read_file, resolve_source_path
 from elliot_core.sqlite.flattener import flatten
 from elliot_core.types.source import SourceConfig
 from elliot_core.types.sqlite import FlattenResult
@@ -120,6 +120,72 @@ def _build_source_config(
     config = _normalize_auth(config)
     merged = {"id": source_id, "type": mapped_type, "name": name, **config}
     return SourceConfig.model_validate(merged)
+
+
+def _read_raw_file_bytes(session: ElliotSession, raw_path: str) -> bytes:
+    """Read the raw bytes of a file source path for inlining.
+
+    Files that ``elliot_upload_file`` staged under the session's managed
+    sources directory are trusted and read directly (that directory is
+    server-controlled and may sit outside ``ELLIOT_FILE_ROOT`` in the cloud,
+    where the workspace is not under the process cwd). Any other path is
+    resolved through the file-reader allowlist so an arbitrary host file can
+    never be slurped into a connector.
+    """
+    sources_dir = _sources_dir(session)
+    try:
+        candidate = safe_join(sources_dir, Path(raw_path).name)
+        if candidate.exists() and Path(raw_path).resolve() == candidate.resolve():
+            return candidate.read_bytes()
+    except PathEscape:
+        pass
+    resolved = resolve_source_path(raw_path)
+    if not resolved.exists():
+        raise ElliotError("FILE_NOT_FOUND", f"File not found: {raw_path}")
+    return resolved.read_bytes()
+
+
+def _inline_file_content(session: ElliotSession, cfg: SourceConfig) -> None:
+    """Embed a file source's bytes into ``cfg.content`` so it is self-contained.
+
+    A file source must travel WITH its data: the builder and the published
+    runtime run in different processes (and, in the cloud, different containers)
+    with no shared disk, and the builder workspace is ephemeral. If the agent
+    supplied ``content`` inline we keep it; otherwise we read the file at
+    ``path`` once, here, and inline it so every downstream consumer
+    (session.json, the published spec, re-materialization after a restart) works
+    without the original file ever being present again.
+    """
+    if cfg.type != "file" or cfg.content is not None or not cfg.path:
+        return
+    raw = _read_raw_file_bytes(session, cfg.path)
+    max_bytes = _upload_max_bytes()
+    if len(raw) > max_bytes:
+        raise ElliotError(
+            "FILE_TOO_LARGE",
+            f"file is {len(raw)} bytes; exceeds the {max_bytes} byte inline limit. "
+            "Set ELLIOT_UPLOAD_MAX_BYTES to raise the cap if the source is genuinely large.",
+            detail={"bytes": len(raw), "limit": max_bytes},
+        )
+    if not cfg.format:
+        cfg.format = _detect_upload_format(cfg.path)
+    try:
+        cfg.content = raw.decode("utf-8")
+        cfg.content_encoding = "text"
+    except UnicodeDecodeError:
+        cfg.content = base64.b64encode(raw).decode("ascii")
+        cfg.content_encoding = "base64"
+
+
+def _detect_upload_format(name: str) -> Literal["csv", "json", "jsonl"] | None:
+    suffix = Path(name).suffix.lower().lstrip(".")
+    if suffix in ("jsonl", "ndjson"):
+        return "jsonl"
+    if suffix == "csv":
+        return "csv"
+    if suffix == "json":
+        return "json"
+    return None
 
 
 async def _resolve_build_oauth_token(
@@ -246,6 +312,11 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
         here, and Elliot saves them under .elliot/sources/. The returned
         managed_path is always inside the file-reader allowlist, so the
         agent does NOT need to configure ELLIOT_FILE_ROOT.
+
+        Shortcut: you can skip this tool entirely and pass the body straight to
+        elliot_discover_source(config={"content": ..., "format": ...}) — either
+        way the bytes are saved with the source so the published connector keeps
+        working without your local file.
 
         Workflow:
             up = elliot_upload_file(file_name="data.json", content="...")
@@ -469,8 +540,16 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
         source_type: 'api'|'rest'|'http' for REST APIs, 'file'|'csv'|'json' for files,
                      'db'|'postgres'|'postgresql'|'mysql' for databases.
+
+        FILE sources: pass the data inline so it is saved WITH the source and
+        works after publish (the published runtime has no access to your disk):
+            config={"content": "<file body>", "format": "csv"}   # or json / jsonl
+        Use content_encoding="base64" inside config for binary/non-UTF-8 data.
+        You may instead pass {"path": ...} (e.g. the managed_path from
+        elliot_upload_file); Elliot reads it once and inlines the bytes for you.
+
         config: source-specific config dict. Common keys:
-            - url / path / table — the source location.
+            - url / path / content / table — the source location or inline body.
             - auth — {"type": "api_key", "header_name": "...", "secret_key": "..."}
               or {"type": "bearer", "token": "..."} or
               {"type": "basic", "username": "...", "password": "..."}.
@@ -496,6 +575,10 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
             rows: list[dict[str, Any]]
             if cfg.type == "file":
+                # Make the file source self-contained before reading it, so the
+                # exact bytes are persisted with the source and survive into the
+                # published connector / a builder restart (no shared disk).
+                _inline_file_content(session, cfg)
                 result = read_file(cfg)
                 rows = result.rows
 
@@ -517,7 +600,12 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
             cfg.table_name = name
             cfg.row_count = len(rows)
-            cfg.config_snapshot = config
+            # Keep the snapshot lean: a file source's bytes already live in
+            # cfg.content, so don't duplicate them (and the raw text/base64
+            # blob) inside config_snapshot too.
+            cfg.config_snapshot = {
+                k: v for k, v in config.items() if k not in ("content", "content_encoding")
+            }
             cfg.related_tables = [t.name for t in flat.related_tables]
             session.sources[source_id] = cfg
             session.save()
@@ -638,6 +726,20 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             src = session.sources.get(source_id)
             if src is None:
                 return {"error": f"Source not found: {source_id}"}
+            # File sources carry their data inline (or at a local path) — there
+            # is no live upstream to re-poll, and config_snapshot intentionally
+            # omits the content blob. Re-materialize straight from the stored
+            # SourceConfig instead of routing through discover.
+            if src.type == "file":
+                flat = flatten(read_file(src).rows, table_name=src.table_name or src.name)
+                session.engine.load_result(flat)
+                src.row_count = len(flat.primary_table.rows)
+                session.save()
+                return {
+                    "source_id": source_id,
+                    "table_name": src.table_name or src.name,
+                    "row_count": src.row_count,
+                }
             # Map SourceConfig.type back to friendly type
             reverse_map = {v: k for k, v in _TYPE_MAP.items()}
             friendly_type = reverse_map.get(src.type, src.type)

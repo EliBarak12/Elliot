@@ -89,6 +89,99 @@ def test_interpolate_percent_encodes_values() -> None:
     assert result == "https://api.example.com/users/..%2Fadmin%3Fforce%3D1/posts"
 
 
+def _file_connector(content: str, fmt: str = "json", *, encoding: str = "text") -> ConnectorConfig:
+    return ConnectorConfig(
+        name="Files",
+        slug="files",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="people",
+                name="People",
+                type="file",
+                content=content,
+                content_encoding=encoding,  # type: ignore[arg-type]
+                format=fmt,  # type: ignore[arg-type]
+                table_name="people",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="list_people",
+                name="List people",
+                description="List people from the uploaded file.",
+                category="READ",
+                source_ids=["people"],
+                sql="SELECT * FROM people WHERE name = :name",
+                parameters=[
+                    ParameterDefinition(name="name", type="string", required=True, description="")
+                ],
+            )
+        ],
+        skills=[],
+    )
+
+
+async def test_executor_file_source_inline_content_no_disk() -> None:
+    """E2E gap-2 fix: a PUBLISHED connector whose file source carries its bytes
+    inline materializes and serves queries with NO file on disk anywhere — the
+    runtime instance has no access to the builder's workspace."""
+    connector = _file_connector('[{"id": 1, "name": "Ada"}, {"id": 2, "name": "Lin"}]')
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(connector.tools[0], {"name": "Ada"})
+    assert len(result.rows) == 1
+    assert result.rows[0]["id"] == 1
+
+
+async def test_executor_file_source_inline_base64() -> None:
+    import base64 as _b64
+
+    raw = _b64.b64encode(b"id,name\n1,Ada\n2,Lin\n").decode("ascii")
+    connector = _file_connector(raw, fmt="csv", encoding="base64")
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(connector.tools[0], {"name": "Lin"})
+    assert len(result.rows) == 1
+    assert result.rows[0]["id"] == "2"
+
+
+async def test_executor_file_source_path_outside_allowlist_refused(tmp_path, monkeypatch) -> None:
+    """ATTACK: a published spec whose file source points at an arbitrary host
+    path (no inline content) must NOT be able to read it — containment holds
+    inside the runtime executor too."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ELLIOT_FILE_ROOT", str(tmp_path))
+    monkeypatch.delenv("ELLIOT_FILE_READER_ALLOW_ABSOLUTE", raising=False)
+    secret = tmp_path.parent / "victim.json"
+    secret.write_text('[{"name": "Ada", "pw": "hunter2"}]')
+    connector = ConnectorConfig(
+        name="Files",
+        slug="files",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="people", name="People", type="file", path=str(secret), table_name="people"
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="list_people",
+                name="List people",
+                description="List people.",
+                category="READ",
+                source_ids=["people"],
+                sql="SELECT * FROM people",
+            )
+        ],
+        skills=[],
+    )
+    from elliot_core.errors import ElliotError
+
+    executor = ToolExecutor(connector, secrets={})
+    with pytest.raises(ElliotError) as ei:
+        await executor.execute(connector.tools[0], {})
+    assert ei.value.code == "FILE_NOT_ALLOWED"
+
+
 @respx.mock
 async def test_executor_rest_source() -> None:
     respx.get("https://api.example.com/animals").mock(

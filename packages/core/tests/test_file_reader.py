@@ -167,6 +167,117 @@ def test_json_unwrap_ignores_lists_of_scalars(tmp_path: Path):
     assert result.rows[0]["name"] == "config"
 
 
+def _inline_cfg(
+    content: str,
+    fmt: str | None = None,
+    encoding: str = "text",
+) -> SourceConfig:
+    return SourceConfig(
+        id="t",
+        name="t",
+        type="file",
+        content=content,
+        content_encoding=encoding,  # type: ignore[arg-type]
+        format=fmt,  # type: ignore[arg-type]
+    )
+
+
+# ── inline content (self-contained file sources) ────────────────────────────
+
+
+def test_inline_json_text():
+    result = read_file(_inline_cfg('[{"id": 1}, {"id": 2}]', "json"))
+    assert len(result.rows) == 2
+    assert result.rows[0]["id"] == 1
+
+
+def test_inline_json_defaults_to_json_format():
+    # No format given and no filename to sniff → JSON.
+    result = read_file(_inline_cfg('{"data": [{"id": "x"}]}'))
+    assert result.rows == [{"id": "x"}]
+
+
+def test_inline_csv_with_delimiter():
+    cfg = SourceConfig(
+        id="t", name="t", type="file", content="a;b\n1;2\n", format="csv", delimiter=";"
+    )
+    result = read_file(cfg)
+    assert result.rows == [{"a": "1", "b": "2"}]
+
+
+def test_inline_jsonl():
+    result = read_file(_inline_cfg('{"x": 1}\n{"x": 2}\n', "jsonl"))
+    assert [r["x"] for r in result.rows] == [1, 2]
+
+
+def test_inline_base64_content():
+    import base64 as _b64
+
+    raw = _b64.b64encode(b'[{"id": 7}]').decode("ascii")
+    result = read_file(_inline_cfg(raw, "json", encoding="base64"))
+    assert result.rows == [{"id": 7}]
+
+
+def test_inline_takes_precedence_over_path(tmp_path: Path):
+    # A source that has BOTH content and a (bogus) path uses content; the path
+    # is never touched — proving the published runtime never needs the disk.
+    cfg = SourceConfig(
+        id="t",
+        name="t",
+        type="file",
+        path="/does/not/exist.json",
+        content='[{"id": 1}]',
+        format="json",
+    )
+    result = read_file(cfg)
+    assert result.rows == [{"id": 1}]
+
+
+def test_inline_invalid_base64_raises():
+    with pytest.raises(ElliotError) as ei:
+        read_file(_inline_cfg("not!base64!", "json", encoding="base64"))
+    assert ei.value.code == "FILE_PARSE_ERROR"
+
+
+def test_inline_invalid_json_raises():
+    with pytest.raises(ElliotError) as ei:
+        read_file(_inline_cfg("{not valid", "json"))
+    assert ei.value.code == "FILE_PARSE_ERROR"
+
+
+def test_inline_oversized_text_rejected(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ELLIOT_MAX_FILE_BYTES", "1024")
+    with pytest.raises(ElliotError) as ei:
+        read_file(_inline_cfg("[" + ",".join(['{"x":1}'] * 500) + "]", "json"))
+    assert ei.value.code == "FILE_TOO_LARGE"
+
+
+def test_inline_oversized_base64_rejected(monkeypatch: pytest.MonkeyPatch):
+    import base64 as _b64
+
+    monkeypatch.setenv("ELLIOT_MAX_FILE_BYTES", "1024")
+    raw = _b64.b64encode(b"x" * 4096).decode("ascii")
+    with pytest.raises(ElliotError) as ei:
+        read_file(_inline_cfg(raw, "json", encoding="base64"))
+    assert ei.value.code == "FILE_TOO_LARGE"
+
+
+def test_inline_empty_content_warns():
+    result = read_file(_inline_cfg("[]", "json"))
+    assert result.rows == []
+    assert any("empty" in w.lower() for w in result.warnings)
+
+
+def test_inline_base64_non_utf8_after_decode_raises():
+    import base64 as _b64
+
+    # 0xff 0xfe is not valid UTF-8.
+    raw = _b64.b64encode(b"\xff\xfe\xff").decode("ascii")
+    with pytest.raises(ElliotError) as ei:
+        read_file(_inline_cfg(raw, "json", encoding="base64"))
+    assert ei.value.code == "FILE_PARSE_ERROR"
+
+
 def test_file_not_allowed_message_names_allowed_roots(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

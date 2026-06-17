@@ -77,12 +77,20 @@ def _parse_skill_file(path: Path) -> Skill | None:
 
 
 def _find_skills_dir() -> Path | None:
-    """Locate the plugin-root `skills/` directory.
+    """Locate the `skills/` directory.
 
     Order:
       1. ELLIOT_SKILLS_DIR env var override (deployable image / packaged install)
       2. Repo-root layout: walk up from this file looking for a `skills/`
-         directory that sits next to `.claude-plugin/` (the plugin root).
+         directory that sits next to `.claude-plugin/` (the plugin root) — this
+         is the editable-install / source-checkout path.
+      3. Bundled-in-wheel fallback: ``elliot_mcp_plugin/_bundled_skills``. The
+         repo-root `skills/` is force-included into the wheel at build time (see
+         the package's pyproject), so when the plugin is installed from a git
+         subdirectory — as Elliot Cloud installs it — the skills travel with the
+         package even though they live outside ``src/`` in the repo. Without this
+         the cloud builder served an empty ``prompts/list`` (no skills, no
+         ``getting_started``).
     """
     override = os.environ.get("ELLIOT_SKILLS_DIR")
     if override:
@@ -99,6 +107,10 @@ def _find_skills_dir() -> Path | None:
             candidate = parent / "skills"
             if candidate.is_dir():
                 return candidate
+
+    bundled = here.parent / "_bundled_skills"
+    if bundled.is_dir():
+        return bundled
     return None
 
 

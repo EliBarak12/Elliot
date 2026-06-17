@@ -19,5 +19,14 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/elliot_mcp_plugin"]
 
+# Bundle the repo-root `skills/` (the single source of truth, shared with the
+# .claude-plugin / .codex-plugin loaders) into the wheel as package data. Those
+# files live OUTSIDE this package's `src/`, so a normal build leaves them out —
+# which is why an installed-from-git plugin (e.g. Elliot Cloud, which installs
+# this subdirectory) served an empty prompts list. `_find_skills_dir` looks for
+# this bundled copy when the source-checkout layout isn't present.
+[tool.hatch.build.targets.wheel.force-include]
+"../../skills" = "elliot_mcp_plugin/_bundled_skills"
+
 [project.scripts]
 elliot-mcp = "elliot_mcp_plugin.cli:main"

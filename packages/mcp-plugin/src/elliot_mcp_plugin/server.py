@@ -84,27 +84,9 @@ def create_server(config: ConnectorConfig, secrets: dict[str, str]) -> Server:
     return server
 
 
-def create_elliot_server(session: Any) -> FastMCP:
-    """Create a FastMCP server with all Elliot tool groups, prompts, and resources registered."""
-    from elliot_mcp_plugin.prompts import get_prompts_instructions_text, register_prompts
-    from elliot_mcp_plugin.resources import register_resources
-    from elliot_mcp_plugin.tools.audit_tools import register_audit_tools
-    from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
-    from elliot_mcp_plugin.tools.context_tools import register_context_tools
-    from elliot_mcp_plugin.tools.eval_tools import register_eval_tools
-    from elliot_mcp_plugin.tools.onboarding_tools import register_onboarding_tools
-    from elliot_mcp_plugin.tools.skill_tools import register_skill_tools
-    from elliot_mcp_plugin.tools.source_tools import register_source_tools
-    from elliot_mcp_plugin.tools.sql_tools import register_sql_tools
-    from elliot_mcp_plugin.tools.studio_tools import register_studio_tools
-    from elliot_mcp_plugin.tools.tool_tools import register_tool_tools
-    from elliot_mcp_plugin.tools.trace_tools import register_trace_tools
-
-    # Generate the prompt list from the skills actually on disk so the advertised
-    # set can't drift from what prompts/list serves (it previously hard-coded 8
-    # while the server served 10).
-    prompts_section = get_prompts_instructions_text()
-    instructions = (
+def _local_instructions(prompts_section: str) -> str:
+    """Server instructions for a locally-run Elliot stack (CLI / `make dev`)."""
+    return (
         "Elliot turns any API or database into agent-ready MCP tools. You are the "
         "agent that designs, lints, evaluates, and deploys those tools — Elliot is "
         "the workbench.\n"
@@ -125,6 +107,69 @@ def create_elliot_server(session: Any) -> FastMCP:
         "Available resources (call `resources/list`): connector templates "
         "(rest-api-key, postgres-readonly, paginated-rest, openapi-petstore), "
         "principles, error-code reference, install docs."
+    )
+
+
+def _cloud_instructions(prompts_section: str) -> str:
+    """Server instructions for the hosted Elliot Cloud builder (``/b/mcp``).
+
+    Deliberately free of any localhost / `make dev` / local-clone guidance: in
+    the cloud the agent talks to the hosted builder and ships via
+    ``elliot_cloud_publish``, never a local runtime."""
+    return (
+        "Elliot turns any API or database into agent-ready MCP tools. You are the "
+        "agent that designs, lints, evaluates, and publishes those tools on Elliot "
+        "Cloud — Elliot is the workbench.\n"
+        "\n"
+        "FIRST MOVE on any new session: call `prompts/get name=getting_started`. "
+        "It teaches the five principles, the canonical workflow, AND how to recover "
+        "if an Elliot tool call fails.\n"
+        "\n"
+        "If an Elliot tool call hits a transport / authorization error, STOP "
+        "retrying: you are connected to the hosted Elliot Cloud builder. If a "
+        "browser tab opened asking the user to authorize Elliot Cloud, ask them to "
+        "complete that sign-in; otherwise have them confirm their Elliot Cloud "
+        "account is active, then retry.\n"
+        "\n"
+        "When the connector is ready, deploy it with `elliot_cloud_publish` — it "
+        "publishes to your Elliot Cloud tenant and returns the public MCP URL (the "
+        "cloud equivalent of starting a local runtime).\n"
+        "\n"
+        f"{prompts_section}\n"
+        "\n"
+        "Available resources (call `resources/list`): connector templates "
+        "(rest-api-key, postgres-readonly, paginated-rest, openapi-petstore), "
+        "principles, error-code reference, install docs."
+    )
+
+
+def create_elliot_server(session: Any, *, cloud: bool = False) -> FastMCP:
+    """Create a FastMCP server with all Elliot tool groups, prompts, and resources registered.
+
+    ``cloud=True`` selects the hosted Elliot Cloud builder instructions, which
+    carry no localhost / local-runtime guidance — Elliot Cloud serves this same
+    builder over ``/b/mcp`` and connectors ship via ``elliot_cloud_publish``.
+    """
+    from elliot_mcp_plugin.prompts import get_prompts_instructions_text, register_prompts
+    from elliot_mcp_plugin.resources import register_resources
+    from elliot_mcp_plugin.tools.audit_tools import register_audit_tools
+    from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
+    from elliot_mcp_plugin.tools.context_tools import register_context_tools
+    from elliot_mcp_plugin.tools.eval_tools import register_eval_tools
+    from elliot_mcp_plugin.tools.onboarding_tools import register_onboarding_tools
+    from elliot_mcp_plugin.tools.skill_tools import register_skill_tools
+    from elliot_mcp_plugin.tools.source_tools import register_source_tools
+    from elliot_mcp_plugin.tools.sql_tools import register_sql_tools
+    from elliot_mcp_plugin.tools.studio_tools import register_studio_tools
+    from elliot_mcp_plugin.tools.tool_tools import register_tool_tools
+    from elliot_mcp_plugin.tools.trace_tools import register_trace_tools
+
+    # Generate the prompt list from the skills actually on disk so the advertised
+    # set can't drift from what prompts/list serves (it previously hard-coded 8
+    # while the server served 10).
+    prompts_section = get_prompts_instructions_text()
+    instructions = (
+        _cloud_instructions(prompts_section) if cloud else _local_instructions(prompts_section)
     )
     mcp = FastMCP(
         "elliot", instructions=instructions, streamable_http_path="/", stateless_http=True

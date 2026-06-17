@@ -7,6 +7,7 @@ import contextlib
 import inspect
 import json
 import os
+import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -419,6 +420,31 @@ async def _emit_runtime_log(ctx: Any, level: str, data: dict[str, Any]) -> None:
         )
 
 
+def _slug_prefix(connector_slug: str | None) -> str:
+    """Return an MCP-tool-name-safe ``{slug}_`` prefix, or ``""`` when unslugged.
+
+    The built-in feedback and task tools are namespaced under the connector's
+    slug so they read as part of *that* connector and don't collide when an
+    agent connects to several Elliot connectors at once (every connector would
+    otherwise expose identically named ``submit_feedback`` / ``get_task`` tools).
+    Non-identifier characters in the slug (e.g. the hyphen in ``postgres-readonly``)
+    are folded to ``_`` so the result is a valid MCP tool name.
+    """
+    if not connector_slug:
+        return ""
+    safe = re.sub(r"[^a-zA-Z0-9_]", "_", connector_slug).strip("_")
+    return f"{safe}_" if safe else ""
+
+
+def _feedback_tool_name(prefix: str) -> str:
+    return f"{prefix}submit_feedback" if prefix else "submit_feedback"
+
+
+def _task_tool_name(prefix: str) -> str:
+    # No slug: keep the historical ``elliot_get_task`` name for backward compat.
+    return f"{prefix}get_task" if prefix else "elliot_get_task"
+
+
 def _suggest(tool_id: str, avg_tokens: float, max_tokens: float) -> str | None:
     if avg_tokens > 1000:
         return f"Average {avg_tokens:.0f} tokens is very high. Add LIMIT clause or SELECT only needed columns."
@@ -451,6 +477,11 @@ def create_runtime_server(
     from elliot_core.types import ConnectorConfig
 
     cfg: ConnectorConfig = config
+    connector_slug = getattr(cfg, "slug", None)
+    prefix = _slug_prefix(connector_slug)
+    feedback_tool_name = _feedback_tool_name(prefix)
+    task_tool_name = _task_tool_name(prefix)
+
     instructions = (
         cfg.instructions
         if cfg.instructions
@@ -460,12 +491,21 @@ def create_runtime_server(
             "Use list_tools to see available tools, then call them with the required parameters."
         )
     )
+    # Tell the agent the connector ships a feedback tool and to use it — the
+    # tool only exists when there's an observation store to persist to, so the
+    # instruction is conditional on the same thing the registration is.
+    if store is not None:
+        instructions = (
+            instructions.rstrip()
+            + f"\n\nAfter calling a tool, report how it worked with `{feedback_tool_name}` "
+            "(outcome 'success', 'failure', or 'partial') so the connector author "
+            "can see what to improve."
+        )
     # streamable_http_path="/" so that mounting at /mcp exposes the MCP
     # endpoint at /mcp/ (matching the plugin and the docs), not /mcp/mcp/.
     mcp = FastMCP("elliot-runtime", instructions=instructions, streamable_http_path="/")
 
     task_store = get_task_store()
-    connector_slug = getattr(cfg, "slug", None)
     for tool_def in cfg.tools:
         _register_tool(
             mcp,
@@ -477,13 +517,14 @@ def create_runtime_server(
             store=store,
             connector_slug=connector_slug,
             executor_pool=executor_pool,
+            task_tool_name=task_tool_name,
         )
 
     _register_resources(mcp, cfg, executor, json)
     _register_prompts(mcp, cfg)
-    _register_task_tool(mcp, task_store)
+    _register_task_tool(mcp, task_store, task_tool_name)
     if store is not None:
-        _register_feedback_tool(mcp, store, connector_slug)
+        _register_feedback_tool(mcp, store, connector_slug, feedback_tool_name)
 
     _register_logging(mcp)
     _register_validation_capture(mcp, store, tracker, connector_slug)
@@ -614,6 +655,7 @@ def _register_tool(
     store: ObservationStore | None = None,
     connector_slug: str | None = None,
     executor_pool: ExecutorPool | None = None,
+    task_tool_name: str = "elliot_get_task",
 ) -> None:
     from elliot_core.errors import ElliotError, to_mcp_error_content
     from elliot_core.types import ToolDefinition
@@ -839,7 +881,7 @@ def _register_tool(
                 "task_id": task_id,
                 "message": (
                     f"Running in background. "
-                    f"Call elliot_get_task(task_id='{task_id}') to retrieve results."
+                    f"Call {task_tool_name}(task_id='{task_id}') to retrieve results."
                 ),
             }
 
@@ -950,11 +992,18 @@ def _register_tool(
     )
 
 
-def _register_task_tool(mcp: FastMCP, task_store: TaskStore) -> None:
-    """Register elliot_get_task so agents can poll background task results."""
+def _register_task_tool(
+    mcp: FastMCP, task_store: TaskStore, task_tool_name: str = "elliot_get_task"
+) -> None:
+    """Register the background-task polling tool.
+
+    Named ``{connector_slug}_get_task`` so it reads as part of the connector
+    (and doesn't collide across connectors); falls back to the historical
+    ``elliot_get_task`` when the connector has no slug.
+    """
 
     @mcp.tool(
-        name="elliot_get_task",
+        name=task_tool_name,
         description=(
             "Poll the result of a background tool execution. "
             "Use when a previous tool call returned status='accepted' with a task_id. "
@@ -979,18 +1028,19 @@ def _register_feedback_tool(
     mcp: FastMCP,
     store: ObservationStore,
     connector_slug: str | None,
+    feedback_tool_name: str = "submit_feedback",
 ) -> None:
-    """Register ``submit_feedback`` — a built-in tool present on every connector.
+    """Register the agent-feedback tool — a built-in present on every connector.
 
     The agent calls it to tell the connector author how a tool behaved: why it
     was chosen, what was passed in and returned, and whether the call succeeded,
     failed, or only partly worked. Feedback is persisted to the observation
     store and surfaced in Studio's Agent Console.
 
-    The name is connector-generic on purpose — the connector the agent is
-    talking to already owns the namespace via its MCP URL, so prefixing this
-    one tool with the platform name made it look like an Elliot tool sitting
-    on top of the user's connector rather than part of it.
+    The name is namespaced under the connector's slug
+    (``{slug}_submit_feedback``) so it reads as part of *this* connector and
+    doesn't collide when an agent has several Elliot connectors connected at
+    once. Connectors with no slug keep the plain ``submit_feedback`` name.
     """
     from elliot_core.errors import ElliotError, to_mcp_error_content
 
@@ -1003,7 +1053,7 @@ def _register_feedback_tool(
     )
 
     @mcp.tool(
-        name="submit_feedback",
+        name=feedback_tool_name,
         title="Submit agent feedback",
         description=(
             "Report how one of this connector's tools worked so the connector "

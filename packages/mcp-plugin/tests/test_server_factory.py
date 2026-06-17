@@ -21,6 +21,25 @@ def test_create_elliot_server_returns_fastmcp(session: ElliotSession):
     assert isinstance(server, FastMCP)
 
 
+def test_local_instructions_keep_make_dev_recovery(session: ElliotSession):
+    server = create_elliot_server(session)
+    instructions = server.instructions or ""
+    # The local builder guides the user to start the stack themselves.
+    assert "make dev" in instructions
+    assert "localhost:5173" in instructions
+
+
+def test_cloud_instructions_have_no_localhost(session: ElliotSession):
+    """The hosted Elliot Cloud builder must not tell agents to reach localhost
+    or run `make dev`; it ships connectors via elliot_cloud_publish."""
+    server = create_elliot_server(session, cloud=True)
+    instructions = server.instructions or ""
+    assert "localhost" not in instructions
+    assert "make dev" not in instructions
+    assert "Elliot Cloud" in instructions
+    assert "elliot_cloud_publish" in instructions
+
+
 def test_create_elliot_server_registers_tools(session: ElliotSession):
     server = create_elliot_server(session)
     # FastMCP stores tools in _tool_manager

@@ -102,13 +102,28 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
         slug: str,
         version: str | None = None,
         description: str = "",
+        instructions: str = "",
         tool_ids: list[str] | None = None,
         skill_ids: list[str] | None = None,
     ) -> dict:  # type: ignore[type-arg]
-        """Assemble a ConnectorConfig from selected (or all) tools and skills."""
+        """Assemble a ConnectorConfig from selected (or all) tools and skills.
+
+        ``instructions`` is connector-level guidance the agent authors for this
+        connector — the same role Elliot's own ``instructions`` play for the
+        platform. The connector runtime surfaces it to any MCP client on the
+        ``initialize`` handshake (and it is shown to the connector's owner in
+        the Studio / cloud UI), so use it to tell downstream agents how to use
+        these tools: auth quirks, pagination defaults, which tool to reach for
+        first. Leave empty to fall back to an auto-generated description.
+        """
         try:
             effective_version = (
                 version or (session.connector.version if session.connector else None) or "1.0.0"
+            )
+            # Preserve previously-authored instructions across a rebuild that
+            # omits them, mirroring how version is carried forward.
+            effective_instructions = instructions or (
+                session.connector.instructions if session.connector else ""
             )
             selected_tools = (
                 [t for t in session.registry.get_all() if t.id in tool_ids]
@@ -142,7 +157,11 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             ]
 
             config = session.builder.set_meta(
-                name=name, slug=slug, version=effective_version, description=description
+                name=name,
+                slug=slug,
+                version=effective_version,
+                description=description,
+                instructions=effective_instructions,
             ).build(sources=sources_named, tools=tools_remapped, skills=selected_skills)
 
             session.connector = config

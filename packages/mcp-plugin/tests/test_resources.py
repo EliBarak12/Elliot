@@ -100,6 +100,31 @@ async def test_install_resource_covers_three_install_paths():
 
 
 @pytest.mark.asyncio
+async def test_local_install_resource_mentions_local_run():
+    mcp = FastMCP("test")
+    register_resources(mcp)
+    contents = await mcp.read_resource("elliot://docs/install")
+    text = contents[0].content
+    # Local default still documents running the stack yourself.
+    assert "localhost" in text
+    assert "make dev" in text
+
+
+@pytest.mark.asyncio
+async def test_cloud_install_resource_has_no_localhost():
+    """The hosted builder serves a hosted-only install doc — no localhost /
+    `make dev`, but still the OAuth-protected cloud URL + install methods."""
+    mcp = FastMCP("test")
+    register_resources(mcp, cloud=True)
+    contents = await mcp.read_resource("elliot://docs/install")
+    text = contents[0].content
+    assert "localhost" not in text
+    assert "make dev" not in text
+    assert "api.elliot-cloud.com" in text
+    assert "marketplace add" in text.lower()
+
+
+@pytest.mark.asyncio
 async def test_template_resource_is_valid_json():
     mcp = FastMCP("test")
     register_resources(mcp)

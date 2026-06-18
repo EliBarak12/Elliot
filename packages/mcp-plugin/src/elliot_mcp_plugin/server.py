@@ -188,7 +188,7 @@ def create_elliot_server(session: Any, *, cloud: bool = False) -> FastMCP:
     # Pass the session so skills it already holds are surfaced as MCP prompts
     # (F-027); skills created later are registered live by elliot_create_skill.
     register_prompts(mcp, session)
-    register_resources(mcp)
+    register_resources(mcp, cloud=cloud)
     _hide_destructive_tools_from_other_agents(mcp)
     return mcp
 

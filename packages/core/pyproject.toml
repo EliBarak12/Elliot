@@ -25,3 +25,10 @@ elliot = "elliot_core.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/elliot_core"]
+# Hatchling's default wheel inclusion drops the non-Python connector templates
+# under elliot_core/templates/, so a wheel-installed core (e.g. Elliot Cloud,
+# which pip-installs this package from git) shipped without them — and the MCP
+# resource layer served zero connector templates while the server instructions
+# still advertised them. Force-include the directory so the templates travel
+# with the wheel as package data.
+artifacts = ["src/elliot_core/templates/*.json"]

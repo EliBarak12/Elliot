@@ -21,6 +21,23 @@ def test_create_elliot_server_returns_fastmcp(session: ElliotSession):
     assert isinstance(server, FastMCP)
 
 
+def test_local_instructions_keep_make_dev_recovery(session: ElliotSession):
+    server = create_elliot_server(session)
+    instructions = server.instructions or ""
+    # The local builder guides the user to start the stack themselves.
+    assert "make dev" in instructions
+    assert "localhost:5173" in instructions
+
+
+def test_local_server_does_not_register_skill_prompts(session: ElliotSession):
+    """Skills are delivered locally by the plugin SKILL.md loader, not as MCP
+    prompts — those are a cloud-only channel registered in the cloud layer."""
+    server = create_elliot_server(session)
+    assert server._prompt_manager._prompts == {}
+    # And the instructions point at the plugin skill, not `prompts/get`.
+    assert "prompts/get" not in (server.instructions or "")
+
+
 def test_create_elliot_server_registers_tools(session: ElliotSession):
     server = create_elliot_server(session)
     # FastMCP stores tools in _tool_manager

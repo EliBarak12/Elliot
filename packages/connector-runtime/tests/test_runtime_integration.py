@@ -929,7 +929,9 @@ def test_feedback_tool_registered_and_records(tmp_path: Path) -> None:
 
     mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
 
-    tool = mcp._tool_manager.get_tool("submit_feedback")
+    # Built-in tools are namespaced under the connector slug ("pets").
+    assert mcp._tool_manager.get_tool("submit_feedback") is None
+    tool = mcp._tool_manager.get_tool("pets_submit_feedback")
     assert tool is not None
 
     identity = AgentIdentity(client="claude-code", model="claude-opus-4-7")
@@ -984,7 +986,7 @@ def test_feedback_tool_rejects_invalid_outcome(tmp_path: Path) -> None:
             pass
 
     mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
-    tool = mcp._tool_manager.get_tool("submit_feedback")
+    tool = mcp._tool_manager.get_tool("pets_submit_feedback")
     assert tool is not None
 
     with pytest.raises(ValueError, match="VALIDATION_INVALID_OUTCOME"):
@@ -1004,7 +1006,62 @@ def test_feedback_tool_absent_without_store(tmp_path: Path) -> None:
     config = ConnectorCache().get(cfg_path)
     executor = ToolExecutor(config, secrets={})
     mcp = create_runtime_server(config, executor)
+    assert mcp._tool_manager.get_tool("pets_submit_feedback") is None
     assert mcp._tool_manager.get_tool("submit_feedback") is None
+
+
+def test_task_tool_namespaced_under_slug(tmp_path: Path) -> None:
+    """The background-task polling tool carries the connector slug prefix."""
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+
+    cfg_path = tmp_path / "pets.connector.json"
+    cfg_path.write_text(json.dumps(MINIMAL_CONNECTOR))
+    config = ConnectorCache().get(cfg_path)
+    executor = ToolExecutor(config, secrets={})
+    mcp = create_runtime_server(config, executor)
+    assert mcp._tool_manager.get_tool("pets_get_task") is not None
+    assert mcp._tool_manager.get_tool("elliot_get_task") is None
+
+
+def test_instructions_mention_feedback_tool_when_store_present(tmp_path: Path) -> None:
+    """When the connector can record feedback, its instructions tell the agent
+    to use the (slug-namespaced) feedback tool."""
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.observation_store import ObservationStore as _Store
+    from elliot_connector_runtime.server import create_runtime_server
+
+    cfg_path = tmp_path / "pets.connector.json"
+    cfg_path.write_text(json.dumps(MINIMAL_CONNECTOR))
+    config = ConnectorCache().get(cfg_path)
+    executor = ToolExecutor(config, secrets={})
+    store = _Store(f"sqlite:///{tmp_path / 'obs.db'}")
+
+    mcp = create_runtime_server(config, executor, store=store)
+    assert "pets_submit_feedback" in (mcp.instructions or "")
+
+    # No store → no feedback tool → no feedback line in the instructions.
+    mcp_no_store = create_runtime_server(config, executor)
+    assert "submit_feedback" not in (mcp_no_store.instructions or "")
+
+
+def test_slug_prefix_helpers_fall_back_without_slug() -> None:
+    from elliot_connector_runtime.server import (
+        _feedback_tool_name,
+        _slug_prefix,
+        _task_tool_name,
+    )
+
+    assert _slug_prefix(None) == ""
+    assert _slug_prefix("") == ""
+    # Hyphens (and other non-identifier chars) fold to underscores.
+    assert _slug_prefix("postgres-readonly") == "postgres_readonly_"
+    assert _feedback_tool_name("") == "submit_feedback"
+    assert _task_tool_name("") == "elliot_get_task"
+    assert _feedback_tool_name("pets_") == "pets_submit_feedback"
+    assert _task_tool_name("pets_") == "pets_get_task"
 
 
 def test_agent_identity_middleware_registered(app) -> None:

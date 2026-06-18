@@ -84,9 +84,45 @@ def create_server(config: ConnectorConfig, secrets: dict[str, str]) -> Server:
     return server
 
 
+def _local_instructions() -> str:
+    """Server instructions for the locally-installed Elliot plugin.
+
+    Skills are delivered by the agent's plugin loader (Claude Code / Codex
+    auto-discover the SKILL.md files under ``skills/``), not as MCP prompts —
+    so this text points at the plugin-loaded ``getting-started`` skill rather
+    than ``prompts/get``. The hosted Elliot Cloud builder swaps in its own
+    instructions (and serves the skills as MCP prompts) in the cloud layer."""
+    return (
+        "Elliot turns any API or database into agent-ready MCP tools. You are the "
+        "agent that designs, lints, evaluates, and deploys those tools — Elliot is "
+        "the workbench.\n"
+        "\n"
+        "Your harness loads Elliot's skills from the installed plugin (Claude Code "
+        "and Codex auto-discover them under `skills/`). Consult the `getting-started` "
+        "skill first: it teaches the five principles, the canonical workflow, AND "
+        "what to do when an Elliot tool call fails with a connection error (the "
+        "usual cause is the user hasn't started the Elliot stack yet).\n"
+        "\n"
+        "If a later Elliot tool call hits a transport / connection-refused error, "
+        "STOP retrying and re-read the `getting-started` skill. The recovery path is "
+        "to ask the user to run `make dev` from a clone of EliBarak12/Elliot — "
+        "Studio (http://localhost:5173) opens automatically in their browser when "
+        "the stack is up.\n"
+        "\n"
+        "Available resources (call `resources/list`): connector templates "
+        "(rest-api-key, postgres-readonly, paginated-rest, openapi-petstore), "
+        "principles, error-code reference, install docs."
+    )
+
+
 def create_elliot_server(session: Any) -> FastMCP:
-    """Create a FastMCP server with all Elliot tool groups, prompts, and resources registered."""
-    from elliot_mcp_plugin.prompts import get_prompts_instructions_text, register_prompts
+    """Create a FastMCP server with all Elliot tool groups and resources registered.
+
+    Skills are NOT registered as MCP prompts here: locally the agent's plugin
+    loader delivers them as SKILL.md files. The hosted Elliot Cloud builder
+    registers them as prompts (and overrides the instructions / install doc)
+    post-build in its own layer — see the cloud runtime.
+    """
     from elliot_mcp_plugin.resources import register_resources
     from elliot_mcp_plugin.tools.audit_tools import register_audit_tools
     from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
@@ -100,34 +136,11 @@ def create_elliot_server(session: Any) -> FastMCP:
     from elliot_mcp_plugin.tools.tool_tools import register_tool_tools
     from elliot_mcp_plugin.tools.trace_tools import register_trace_tools
 
-    # Generate the prompt list from the skills actually on disk so the advertised
-    # set can't drift from what prompts/list serves (it previously hard-coded 8
-    # while the server served 10).
-    prompts_section = get_prompts_instructions_text()
-    instructions = (
-        "Elliot turns any API or database into agent-ready MCP tools. You are the "
-        "agent that designs, lints, evaluates, and deploys those tools — Elliot is "
-        "the workbench.\n"
-        "\n"
-        "FIRST MOVE on any new session: call `prompts/get name=getting_started`. "
-        "It teaches the five principles, the canonical workflow, AND what to do "
-        "when an Elliot tool call fails with a connection error (the usual cause "
-        "is the user hasn't started the Elliot stack yet).\n"
-        "\n"
-        "If a later Elliot tool call hits a transport / connection-refused error, "
-        "STOP retrying and re-read `getting_started`. The recovery path is to "
-        "ask the user to run `make dev` from a clone of EliBarak12/Elliot — "
-        "Studio (http://localhost:5173) opens automatically in their browser when "
-        "the stack is up.\n"
-        "\n"
-        f"{prompts_section}\n"
-        "\n"
-        "Available resources (call `resources/list`): connector templates "
-        "(rest-api-key, postgres-readonly, paginated-rest, openapi-petstore), "
-        "principles, error-code reference, install docs."
-    )
     mcp = FastMCP(
-        "elliot", instructions=instructions, streamable_http_path="/", stateless_http=True
+        "elliot",
+        instructions=_local_instructions(),
+        streamable_http_path="/",
+        stateless_http=True,
     )
     register_source_tools(mcp, session)
     register_sql_tools(mcp, session)
@@ -140,9 +153,6 @@ def create_elliot_server(session: Any) -> FastMCP:
     register_onboarding_tools(mcp, session)
     register_audit_tools(mcp, session)
     register_trace_tools(mcp, session)
-    # Pass the session so skills it already holds are surfaced as MCP prompts
-    # (F-027); skills created later are registered live by elliot_create_skill.
-    register_prompts(mcp, session)
     register_resources(mcp)
     _hide_destructive_tools_from_other_agents(mcp)
     return mcp

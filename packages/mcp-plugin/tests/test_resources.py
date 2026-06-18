@@ -100,6 +100,19 @@ async def test_install_resource_covers_three_install_paths():
 
 
 @pytest.mark.asyncio
+async def test_install_resource_documents_local_run():
+    mcp = FastMCP("test")
+    register_resources(mcp)
+    contents = await mcp.read_resource("elliot://docs/install")
+    text = contents[0].content
+    # The OSS engine's install doc documents running the stack yourself; the
+    # hosted Elliot Cloud builder swaps in its own localhost-free copy in the
+    # cloud layer.
+    assert "localhost" in text
+    assert "make dev" in text
+
+
+@pytest.mark.asyncio
 async def test_template_resource_is_valid_json():
     mcp = FastMCP("test")
     register_resources(mcp)

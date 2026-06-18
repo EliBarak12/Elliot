@@ -41,6 +41,29 @@ def test_build_returns_connector_config():
     assert len(config.tools) == 1
 
 
+def test_build_carries_instructions():
+    config = (
+        ConnectorBuilder()
+        .set_meta(
+            name="Test",
+            version="1.0.0",
+            slug="test",
+            instructions="Always paginate with the cursor parameter.",
+        )
+        .build(sources=[_source()], tools=[_tool()])
+    )
+    assert config.instructions == "Always paginate with the cursor parameter."
+
+
+def test_build_instructions_default_empty():
+    config = (
+        ConnectorBuilder()
+        .set_meta(name="Test", version="1.0.0", slug="test")
+        .build(sources=[_source()], tools=[_tool()])
+    )
+    assert config.instructions == ""
+
+
 def test_build_with_skills():
     from elliot_core.types.tool import SkillDefinition, SkillStep
 

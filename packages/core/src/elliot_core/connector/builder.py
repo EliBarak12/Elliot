@@ -18,12 +18,14 @@ class ConnectorBuilder:
         version: str,
         slug: str,
         description: str = "",
+        instructions: str = "",
     ) -> ConnectorBuilder:
         self._meta = {
             "name": name,
             "version": version,
             "slug": slug,
             "description": description,
+            "instructions": instructions,
         }
         return self
 

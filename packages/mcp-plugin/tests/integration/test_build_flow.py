@@ -103,6 +103,42 @@ def test_full_build_flow(mcp: FastMCP, session: ElliotSession, tmp_path: Path, c
     assert config.name == "TestCo Connector"
 
 
+def test_build_connector_sets_and_preserves_instructions(
+    mcp: FastMCP, session: ElliotSession, csv_file: Path
+):
+    """The agent can author connector-level instructions, and a later rebuild
+    that omits them preserves the previously-set guidance."""
+    _tool(mcp, "elliot_discover_source")(
+        source_type="file", config={"path": str(csv_file)}, name="customers"
+    )
+    r = _tool(mcp, "elliot_create_tool")(
+        name="list_customers",
+        description="Returns all customer records from the database",
+        category="READ",
+        sql='SELECT * FROM "customers"',
+        parameters=[],
+    )
+    tool_id = r["tool_id"]
+
+    guidance = "Call list_customers first; results are capped at 100 rows."
+    r = _tool(mcp, "elliot_build_connector")(
+        name="TestCo Connector",
+        slug="testco",
+        version="1.0.0",
+        instructions=guidance,
+        tool_ids=[tool_id],
+    )
+    assert r["status"] == "built"
+    assert session.connector is not None
+    assert session.connector.instructions == guidance
+
+    # Rebuild without instructions — the prior guidance must survive.
+    _tool(mcp, "elliot_build_connector")(
+        name="TestCo Connector", slug="testco", version="1.0.0", tool_ids=[tool_id]
+    )
+    assert session.connector.instructions == guidance
+
+
 def test_export_is_blocked_on_lint_error(
     mcp: FastMCP, session: ElliotSession, tmp_path: Path, csv_file: Path
 ):

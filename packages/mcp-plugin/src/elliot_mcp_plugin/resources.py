@@ -353,39 +353,6 @@ for each task.
 """
 
 
-_INSTALL_CLOUD_INTRO = """# Installing Elliot in Your Project
-
-Elliot is an MCP server. Your agent connects to it over HTTP and gains access
-to the tools you've built.
-
-## The hosted endpoint
-
-You are connected to the hosted Elliot Cloud builder at
-`https://api.elliot-cloud.com/b/mcp`. No local server is required: your agent
-connects straight to Elliot Cloud and gets the full build/lint/eval/publish
-tools and skills.
-
-The endpoint is OAuth-protected. The config carries only the URL — on the first
-tool call your agent opens a browser tab to authorize Elliot Cloud (no API key
-to paste). After that the agent stays connected.
-
-If a tool call returns an authorization/connection error, complete the Elliot
-Cloud sign-in in the browser tab (or confirm your Elliot Cloud account is
-active), then retry.
-
-"""
-
-
-def _cloud_install_md() -> str:
-    """The install doc for the hosted builder: the localhost / `make dev` intro
-    is replaced with a hosted-only intro, keeping the install methods (which all
-    point at the Elliot Cloud URL)."""
-    marker = "## 1. Marketplace install"
-    idx = _INSTALL_MD.find(marker)
-    tail = _INSTALL_MD[idx:] if idx != -1 else ""
-    return _INSTALL_CLOUD_INTRO + tail
-
-
 def _load_templates_dir() -> Path | None:
     """Locate `packages/core/src/elliot_core/templates/`."""
     try:
@@ -416,11 +383,8 @@ def _slug_from_template_filename(filename: str) -> str:
     return base
 
 
-def register_resources(mcp: FastMCP, *, cloud: bool = False) -> int:
+def register_resources(mcp: FastMCP) -> int:
     """Register reference docs and connector templates as MCP resources.
-
-    ``cloud=True`` serves the hosted Elliot Cloud install doc (no localhost /
-    `make dev` guidance), matching the cloud builder instructions.
 
     Returns the count of resources registered.
     """
@@ -466,7 +430,7 @@ def register_resources(mcp: FastMCP, *, cloud: bool = False) -> int:
         "elliot://docs/install",
         "install",
         "How to install Elliot into Claude Code, Codex, Cursor, VS Code, or Windsurf.",
-        _cloud_install_md() if cloud else _INSTALL_MD,
+        _INSTALL_MD,
     )
 
     templates_dir = _load_templates_dir()

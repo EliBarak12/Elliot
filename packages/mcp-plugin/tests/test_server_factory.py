@@ -29,15 +29,13 @@ def test_local_instructions_keep_make_dev_recovery(session: ElliotSession):
     assert "localhost:5173" in instructions
 
 
-def test_cloud_instructions_have_no_localhost(session: ElliotSession):
-    """The hosted Elliot Cloud builder must not tell agents to reach localhost
-    or run `make dev`; it ships connectors via elliot_cloud_publish."""
-    server = create_elliot_server(session, cloud=True)
-    instructions = server.instructions or ""
-    assert "localhost" not in instructions
-    assert "make dev" not in instructions
-    assert "Elliot Cloud" in instructions
-    assert "elliot_cloud_publish" in instructions
+def test_local_server_does_not_register_skill_prompts(session: ElliotSession):
+    """Skills are delivered locally by the plugin SKILL.md loader, not as MCP
+    prompts — those are a cloud-only channel registered in the cloud layer."""
+    server = create_elliot_server(session)
+    assert server._prompt_manager._prompts == {}
+    # And the instructions point at the plugin skill, not `prompts/get`.
+    assert "prompts/get" not in (server.instructions or "")
 
 
 def test_create_elliot_server_registers_tools(session: ElliotSession):

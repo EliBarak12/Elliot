@@ -84,73 +84,45 @@ def create_server(config: ConnectorConfig, secrets: dict[str, str]) -> Server:
     return server
 
 
-def _local_instructions(prompts_section: str) -> str:
-    """Server instructions for a locally-run Elliot stack (CLI / `make dev`)."""
+def _local_instructions() -> str:
+    """Server instructions for the locally-installed Elliot plugin.
+
+    Skills are delivered by the agent's plugin loader (Claude Code / Codex
+    auto-discover the SKILL.md files under ``skills/``), not as MCP prompts —
+    so this text points at the plugin-loaded ``getting-started`` skill rather
+    than ``prompts/get``. The hosted Elliot Cloud builder swaps in its own
+    instructions (and serves the skills as MCP prompts) in the cloud layer."""
     return (
         "Elliot turns any API or database into agent-ready MCP tools. You are the "
         "agent that designs, lints, evaluates, and deploys those tools — Elliot is "
         "the workbench.\n"
         "\n"
-        "FIRST MOVE on any new session: call `prompts/get name=getting_started`. "
-        "It teaches the five principles, the canonical workflow, AND what to do "
-        "when an Elliot tool call fails with a connection error (the usual cause "
-        "is the user hasn't started the Elliot stack yet).\n"
+        "Your harness loads Elliot's skills from the installed plugin (Claude Code "
+        "and Codex auto-discover them under `skills/`). Consult the `getting-started` "
+        "skill first: it teaches the five principles, the canonical workflow, AND "
+        "what to do when an Elliot tool call fails with a connection error (the "
+        "usual cause is the user hasn't started the Elliot stack yet).\n"
         "\n"
         "If a later Elliot tool call hits a transport / connection-refused error, "
-        "STOP retrying and re-read `getting_started`. The recovery path is to "
-        "ask the user to run `make dev` from a clone of EliBarak12/Elliot — "
+        "STOP retrying and re-read the `getting-started` skill. The recovery path is "
+        "to ask the user to run `make dev` from a clone of EliBarak12/Elliot — "
         "Studio (http://localhost:5173) opens automatically in their browser when "
         "the stack is up.\n"
         "\n"
-        f"{prompts_section}\n"
-        "\n"
         "Available resources (call `resources/list`): connector templates "
         "(rest-api-key, postgres-readonly, paginated-rest, openapi-petstore), "
         "principles, error-code reference, install docs."
     )
 
 
-def _cloud_instructions(prompts_section: str) -> str:
-    """Server instructions for the hosted Elliot Cloud builder (``/b/mcp``).
+def create_elliot_server(session: Any) -> FastMCP:
+    """Create a FastMCP server with all Elliot tool groups and resources registered.
 
-    Deliberately free of any localhost / `make dev` / local-clone guidance: in
-    the cloud the agent talks to the hosted builder and ships via
-    ``elliot_cloud_publish``, never a local runtime."""
-    return (
-        "Elliot turns any API or database into agent-ready MCP tools. You are the "
-        "agent that designs, lints, evaluates, and publishes those tools on Elliot "
-        "Cloud — Elliot is the workbench.\n"
-        "\n"
-        "FIRST MOVE on any new session: call `prompts/get name=getting_started`. "
-        "It teaches the five principles, the canonical workflow, AND how to recover "
-        "if an Elliot tool call fails.\n"
-        "\n"
-        "If an Elliot tool call hits a transport / authorization error, STOP "
-        "retrying: you are connected to the hosted Elliot Cloud builder. If a "
-        "browser tab opened asking the user to authorize Elliot Cloud, ask them to "
-        "complete that sign-in; otherwise have them confirm their Elliot Cloud "
-        "account is active, then retry.\n"
-        "\n"
-        "When the connector is ready, deploy it with `elliot_cloud_publish` — it "
-        "publishes to your Elliot Cloud tenant and returns the public MCP URL (the "
-        "cloud equivalent of starting a local runtime).\n"
-        "\n"
-        f"{prompts_section}\n"
-        "\n"
-        "Available resources (call `resources/list`): connector templates "
-        "(rest-api-key, postgres-readonly, paginated-rest, openapi-petstore), "
-        "principles, error-code reference, install docs."
-    )
-
-
-def create_elliot_server(session: Any, *, cloud: bool = False) -> FastMCP:
-    """Create a FastMCP server with all Elliot tool groups, prompts, and resources registered.
-
-    ``cloud=True`` selects the hosted Elliot Cloud builder instructions, which
-    carry no localhost / local-runtime guidance — Elliot Cloud serves this same
-    builder over ``/b/mcp`` and connectors ship via ``elliot_cloud_publish``.
+    Skills are NOT registered as MCP prompts here: locally the agent's plugin
+    loader delivers them as SKILL.md files. The hosted Elliot Cloud builder
+    registers them as prompts (and overrides the instructions / install doc)
+    post-build in its own layer — see the cloud runtime.
     """
-    from elliot_mcp_plugin.prompts import get_prompts_instructions_text, register_prompts
     from elliot_mcp_plugin.resources import register_resources
     from elliot_mcp_plugin.tools.audit_tools import register_audit_tools
     from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
@@ -164,15 +136,11 @@ def create_elliot_server(session: Any, *, cloud: bool = False) -> FastMCP:
     from elliot_mcp_plugin.tools.tool_tools import register_tool_tools
     from elliot_mcp_plugin.tools.trace_tools import register_trace_tools
 
-    # Generate the prompt list from the skills actually on disk so the advertised
-    # set can't drift from what prompts/list serves (it previously hard-coded 8
-    # while the server served 10).
-    prompts_section = get_prompts_instructions_text()
-    instructions = (
-        _cloud_instructions(prompts_section) if cloud else _local_instructions(prompts_section)
-    )
     mcp = FastMCP(
-        "elliot", instructions=instructions, streamable_http_path="/", stateless_http=True
+        "elliot",
+        instructions=_local_instructions(),
+        streamable_http_path="/",
+        stateless_http=True,
     )
     register_source_tools(mcp, session)
     register_sql_tools(mcp, session)
@@ -185,10 +153,7 @@ def create_elliot_server(session: Any, *, cloud: bool = False) -> FastMCP:
     register_onboarding_tools(mcp, session)
     register_audit_tools(mcp, session)
     register_trace_tools(mcp, session)
-    # Pass the session so skills it already holds are surfaced as MCP prompts
-    # (F-027); skills created later are registered live by elliot_create_skill.
-    register_prompts(mcp, session)
-    register_resources(mcp, cloud=cloud)
+    register_resources(mcp)
     _hide_destructive_tools_from_other_agents(mcp)
     return mcp
 

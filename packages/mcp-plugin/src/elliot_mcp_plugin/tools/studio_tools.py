@@ -6,10 +6,11 @@ import json
 import os
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import structlog
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_mcp_plugin.session import ElliotSession
@@ -76,7 +77,9 @@ def register_studio_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
-    def studio_get_audit_log(limit: int = 50) -> list:  # type: ignore[type-arg]
+    def studio_get_audit_log(
+        limit: Annotated[int, Field(json_schema_extra={"minimum": 1, "maximum": 1000})] = 50,
+    ) -> list:  # type: ignore[type-arg]
         """Return the last N audit log entries (Studio only)."""
         try:
             log.info("studio.audit_log.start", limit=limit)
@@ -91,7 +94,9 @@ def register_studio_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return []
 
     @mcp.tool()
-    def studio_get_metrics(days: int = 30) -> dict:  # type: ignore[type-arg]
+    def studio_get_metrics(
+        days: Annotated[int, Field(json_schema_extra={"minimum": 1, "maximum": 365})] = 30,
+    ) -> dict:  # type: ignore[type-arg]
         """Return aggregated tool call metrics (Studio only)."""
         try:
             import time as _time

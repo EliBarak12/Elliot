@@ -8,10 +8,11 @@ import os
 import re
 import uuid
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import structlog
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.paths import PathEscape, safe_join
@@ -41,6 +42,23 @@ _TYPE_MAP: dict[str, str] = {
     "postgresql": "postgres",
     "mysql": "mysql",
 }
+
+# Accepted source_type values, advertised in the tool input schema so an agent
+# picks a valid one up front. The runtime stays case-insensitive (see
+# ``source_type.lower()`` below), so this enum is guidance, not a tightening.
+_SOURCE_TYPE_VALUES = [
+    "api",
+    "rest",
+    "http",
+    "file",
+    "csv",
+    "json",
+    "db",
+    "postgres",
+    "postgresql",
+    "mysql",
+]
+_SourceType = Annotated[str, Field(json_schema_extra={"enum": _SOURCE_TYPE_VALUES})]
 
 # Uploaded file basename rules (used by elliot_upload_file). Bounded length,
 # no traversal, only printable ASCII letters / digits / `.-_`.
@@ -301,7 +319,10 @@ def _describe_flattened_schema(flat: FlattenResult) -> tuple[list[dict[str, Any]
 def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
     @mcp.tool()
     def elliot_upload_file(
-        file_name: str,
+        file_name: Annotated[
+            str,
+            Field(json_schema_extra={"pattern": r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"}),
+        ],
         content: str,
         encoding: Literal["text", "base64"] = "text",
         append: bool = False,
@@ -323,8 +344,13 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
         Large files — send them in CHUNKS: call once with the first chunk, then
         call again with append=true (same file_name) for each remaining chunk.
         Each call must fit within the MCP transport limit; the staged total is
-        capped at ELLIOT_UPLOAD_MAX_BYTES. For binary / non-UTF-8 data set
-        encoding="base64" and base64-encode EACH chunk independently.
+        capped at the configured upload limit (50 MB by default). For binary /
+        non-UTF-8 data set encoding="base64" and base64-encode EACH chunk
+        independently.
+
+        On Elliot Cloud, where bytes through this tool would pass through your
+        context, prefer elliot_request_file_upload for large files — it returns
+        a URL to upload the bytes out of band.
 
         Workflow:
             up = elliot_upload_file(file_name="data.json", content="...")
@@ -443,7 +469,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
     @mcp.tool()
     def elliot_connect_source(
-        source_type: str,
+        source_type: _SourceType,
         config: dict,  # type: ignore[type-arg]
         name: str,
     ) -> dict:  # type: ignore[type-arg]
@@ -565,7 +591,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
     @mcp.tool()
     async def elliot_discover_source(
-        source_type: str,
+        source_type: _SourceType,
         config: dict,  # type: ignore[type-arg]
         name: str,
     ) -> dict:  # type: ignore[type-arg]
@@ -722,7 +748,10 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
-    def elliot_preview_source(table_name: str, limit: int = 10) -> dict:  # type: ignore[type-arg]
+    def elliot_preview_source(
+        table_name: str,
+        limit: Annotated[int, Field(json_schema_extra={"minimum": 1, "maximum": 1000})] = 10,
+    ) -> dict:  # type: ignore[type-arg]
         """Return the first N rows from a loaded source table."""
         try:
             rows = session.engine.query(f'SELECT * FROM "{table_name}" LIMIT :n', {"n": limit})

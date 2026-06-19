@@ -672,6 +672,45 @@ def test_upload_file_overwrite_is_atomic(mcp: FastMCP, session: ElliotSession):
     assert not leftover.exists()
 
 
+def test_upload_file_append_chunks_then_discover(mcp: FastMCP, session: ElliotSession):
+    """A large file can be sent across multiple calls with append=true and the
+    staged bytes concatenate in order."""
+    head = '[{"id":1,"name":"Ada"},'
+    tail = '{"id":2,"name":"Lin"}]'
+    first = _tool(mcp, "elliot_upload_file")(file_name="big.json", content=head)
+    assert first["appended"] is False
+    assert first["size_bytes"] == len(head.encode("utf-8"))
+
+    second = _tool(mcp, "elliot_upload_file")(file_name="big.json", content=tail, append=True)
+    assert second["appended"] is True
+    assert second["bytes_written"] == len(tail.encode("utf-8"))
+    assert second["size_bytes"] == len((head + tail).encode("utf-8"))
+    assert Path(second["managed_path"]).read_text() == head + tail
+
+    out = _tool(mcp, "elliot_discover_source")(
+        source_type="json", config={"path": second["managed_path"]}, name="big"
+    )
+    assert out["row_count"] == 2
+
+
+def test_upload_file_append_to_missing_creates(mcp: FastMCP, session: ElliotSession):
+    """append=true with no existing staged file behaves as a fresh create."""
+    out = _tool(mcp, "elliot_upload_file")(file_name="fresh.json", content='{"v":1}', append=True)
+    assert out["appended"] is False
+    assert Path(out["managed_path"]).read_text() == '{"v":1}'
+
+
+def test_upload_file_append_enforces_total_cap(mcp: FastMCP, monkeypatch: pytest.MonkeyPatch):
+    """The size cap applies to the accumulated total, so append can't smuggle a
+    large file past the limit one chunk at a time."""
+    monkeypatch.setenv("ELLIOT_UPLOAD_MAX_BYTES", "1024")
+    ok = _tool(mcp, "elliot_upload_file")(file_name="big.csv", content="x" * 800)
+    assert "managed_path" in ok
+    bad = _tool(mcp, "elliot_upload_file")(file_name="big.csv", content="x" * 800, append=True)
+    assert "text" in bad
+    assert "FILE_TOO_LARGE" in bad["text"]
+
+
 # ── file sources are self-contained (inline content survives publish/restart) ─
 
 

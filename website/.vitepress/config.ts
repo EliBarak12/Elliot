@@ -1,7 +1,20 @@
 import { defineConfig } from "vitepress";
 
-const ogImage = "/og-image.svg";
 const siteUrl = "https://elibarak12.github.io/Elliot/";
+
+// Social-card image. Two hard requirements from real-world link unfurlers
+// (Slack, iMessage, X/Twitter, Facebook, LinkedIn, Discord, WhatsApp):
+//   1. It must be a RASTER image (PNG/JPG). None of them render SVG og:images,
+//      so an SVG card silently falls back to whatever they cached before —
+//      which is why the preview kept showing the old logo.
+//   2. It must be an ABSOLUTE URL under the deployed base path. A bare
+//      "/og-image.svg" both points outside the /Elliot/ base and isn't
+//      resolvable by an off-site crawler.
+// These platforms also cache previews per-image-URL for a long time, so bump
+// `ogImageVersion` whenever the art changes to force every platform to refetch
+// instead of serving the stale card.
+const ogImageVersion = "20260619";
+const ogImage = `${siteUrl}og-image.png?v=${ogImageVersion}`;
 
 // Brand-aligned syntax themes — warm/crimson palette, no blue, so code
 // blocks stay on-brand with the rest of the Elliot docs.
@@ -108,9 +121,27 @@ export default defineConfig({
       },
     ],
     ["meta", { property: "og:image", content: ogImage }],
+    ["meta", { property: "og:image:secure_url", content: ogImage }],
+    ["meta", { property: "og:image:type", content: "image/png" }],
+    ["meta", { property: "og:image:width", content: "1200" }],
+    ["meta", { property: "og:image:height", content: "630" }],
+    [
+      "meta",
+      {
+        property: "og:image:alt",
+        content: "Elliot — Build your connector. Make your product agent-ready.",
+      },
+    ],
     ["meta", { property: "og:url", content: siteUrl }],
     ["meta", { name: "twitter:card", content: "summary_large_image" }],
     ["meta", { name: "twitter:image", content: ogImage }],
+    [
+      "meta",
+      {
+        name: "twitter:image:alt",
+        content: "Elliot — Build your connector. Make your product agent-ready.",
+      },
+    ],
   ],
 
   themeConfig: {

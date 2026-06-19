@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+from typing import Annotated
 
 import structlog
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from elliot_core.errors import ElliotError
 from elliot_core.sql import safe_ident
@@ -46,9 +48,9 @@ def register_sql_tools(mcp: FastMCP, session: ElliotSession) -> None:
     def elliot_query_sql(sql: str, params: dict | None = None) -> dict:  # type: ignore[type-arg]
         """Run a validated SELECT query against in-memory SQLite. Returns rows and meta.
 
-        Results are capped at ELLIOT_MAX_RESULT_ROWS (default 10,000); when the
-        cap is hit the response sets ``truncated: true`` so the agent knows the
-        set is incomplete and should narrow the query.
+        Results are capped (10,000 rows by default); when the cap is hit the
+        response sets ``truncated: true`` so the agent knows the set is
+        incomplete and should narrow the query.
         """
         try:
             rows = run_tool_query(session.engine, sql, params)
@@ -77,7 +79,10 @@ def register_sql_tools(mcp: FastMCP, session: ElliotSession) -> None:
             raise ElliotError("INTERNAL_ERROR", str(exc)) from exc
 
     @mcp.tool()
-    def elliot_sample_data(table_name: str, limit: int = 10) -> dict:  # type: ignore[type-arg]
+    def elliot_sample_data(
+        table_name: str,
+        limit: Annotated[int, Field(json_schema_extra={"minimum": 1, "maximum": 1000})] = 10,
+    ) -> dict:  # type: ignore[type-arg]
         """Return N random rows from a table."""
         try:
             # safe_ident validates table_name against ^[A-Za-z_][A-Za-z0-9_]*$

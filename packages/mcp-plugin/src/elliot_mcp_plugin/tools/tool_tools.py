@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 import structlog
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.naming import is_valid_identifier, slugify_identifier
@@ -13,6 +14,26 @@ from elliot_core.sql import extract_table_names
 from elliot_core.sqlite.query_runner import validate_tool_sql
 from elliot_core.types.tool import ToolDefinition
 from elliot_mcp_plugin.session import ElliotSession
+
+# JSON-schema description of a single tool parameter spec, advertised on the
+# array params so an agent sees the expected item shape instead of a bare
+# "object". Runtime stays a permissive list[dict]; this is schema guidance only.
+_PARAM_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "type": {
+            "type": "string",
+            "enum": ["string", "integer", "number", "boolean", "date"],
+        },
+        "required": {"type": "boolean"},
+        "description": {"type": "string"},
+        "enum": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["name"],
+}
+_ParamList = Annotated[list[dict[str, Any]], Field(json_schema_extra={"items": _PARAM_ITEM_SCHEMA})]
+_Category = Annotated[str, Field(json_schema_extra={"enum": ["READ", "WRITE", "ACTION"]})]
 
 log = structlog.get_logger(__name__)
 
@@ -135,9 +156,9 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
     def elliot_create_tool(
         name: str,
         description: str,
-        category: str,
+        category: _Category,
         sql: str,
-        parameters: list[dict],  # type: ignore[type-arg]
+        parameters: _ParamList,
     ) -> dict:  # type: ignore[type-arg]
         """Define a new SQL-backed business tool and register it in the session.
 
@@ -212,8 +233,8 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
         name: str,
         description: str,
         source_id: str,
-        query_params: list[dict],  # type: ignore[type-arg]
-        parameters: list[dict] | None = None,  # type: ignore[type-arg]
+        query_params: _ParamList,
+        parameters: _ParamList | None = None,
     ) -> dict:  # type: ignore[type-arg]
         """Define a LIVE REST passthrough tool (call-time parameterized fetch).
 

@@ -11,9 +11,11 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Annotated
 
 import structlog
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from elliot_core.audit import (
     audit_rubric,
@@ -37,7 +39,9 @@ _NO_CONNECTOR = ElliotError(
 
 def register_audit_tools(mcp: FastMCP, session: ElliotSession) -> None:
     @mcp.tool()
-    def elliot_generate_audit_seeds(count: int = 5) -> dict:  # type: ignore[type-arg]
+    def elliot_generate_audit_seeds(
+        count: Annotated[int, Field(json_schema_extra={"minimum": 1, "maximum": 20})] = 5,
+    ) -> dict:  # type: ignore[type-arg]
         """Generate realistic agent-task seeds for auditing the built connector.
 
         Returns up to ``count`` seeds plus the rubric and the instructions for
@@ -73,16 +77,21 @@ def register_audit_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
-    def elliot_submit_audit_transcript(transcript_json: str) -> dict:  # type: ignore[type-arg]
+    def elliot_submit_audit_transcript(
+        transcript_json: dict | str,  # type: ignore[type-arg]
+    ) -> dict:  # type: ignore[type-arg]
         """Submit one audit sub-agent's transcript.
 
-        ``transcript_json`` is an AuditTranscript object: seed_id, task,
-        agent_label, task_completed, summary, and a `calls` list where each
-        call has tool_id, arguments, ok, error_code, error_message,
-        result_row_count, result_token_estimate, note.
+        ``transcript_json`` is an AuditTranscript: pass it as an object
+        (preferred) or a JSON string. Fields: seed_id, task, agent_label,
+        task_completed, summary, and a `calls` list where each call has
+        tool_id, arguments, ok, error_code, error_message, result_row_count,
+        result_token_estimate, note.
         """
         try:
-            data = json.loads(transcript_json)
+            data = (
+                json.loads(transcript_json) if isinstance(transcript_json, str) else transcript_json
+            )
             transcript = AuditTranscript.model_validate(data)
             session.audit_transcripts.append(transcript)
             session.save()

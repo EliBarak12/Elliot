@@ -8,10 +8,11 @@ import os
 import re
 import uuid
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import structlog
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.paths import PathEscape, safe_join
@@ -41,6 +42,23 @@ _TYPE_MAP: dict[str, str] = {
     "postgresql": "postgres",
     "mysql": "mysql",
 }
+
+# Accepted source_type values, advertised in the tool input schema so an agent
+# picks a valid one up front. The runtime stays case-insensitive (see
+# ``source_type.lower()`` below), so this enum is guidance, not a tightening.
+_SOURCE_TYPE_VALUES = [
+    "api",
+    "rest",
+    "http",
+    "file",
+    "csv",
+    "json",
+    "db",
+    "postgres",
+    "postgresql",
+    "mysql",
+]
+_SourceType = Annotated[str, Field(json_schema_extra={"enum": _SOURCE_TYPE_VALUES})]
 
 # Uploaded file basename rules (used by elliot_upload_file). Bounded length,
 # no traversal, only printable ASCII letters / digits / `.-_`.
@@ -301,22 +319,38 @@ def _describe_flattened_schema(flat: FlattenResult) -> tuple[list[dict[str, Any]
 def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
     @mcp.tool()
     def elliot_upload_file(
-        file_name: str,
+        file_name: Annotated[
+            str,
+            Field(json_schema_extra={"pattern": r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"}),
+        ],
         content: str,
-        encoding: str = "text",
+        encoding: Literal["text", "base64"] = "text",
+        append: bool = False,
     ) -> dict:  # type: ignore[type-arg]
-        """Stage a file inside Elliot's managed sources directory and return its path.
+        """Send a file's bytes to the Elliot builder and get a path discover can read.
 
-        Use this before elliot_discover_source when the file lives on the
-        user's machine. The agent reads the local file, sends the contents
-        here, and Elliot saves them under .elliot/sources/. The returned
-        managed_path is always inside the file-reader allowlist, so the
-        agent does NOT need to configure ELLIOT_FILE_ROOT.
+        The builder loads file sources from ITS OWN storage, not your machine —
+        in Elliot Cloud it has no access to your local disk at all. To use a
+        local file you therefore SEND its bytes here: Elliot stages them
+        server-side and returns a ``managed_path`` that elliot_discover_source
+        can read. No local path setup or ELLIOT_FILE_ROOT tuning is needed,
+        in the cloud or locally.
 
         Shortcut: you can skip this tool entirely and pass the body straight to
         elliot_discover_source(config={"content": ..., "format": ...}) — either
         way the bytes are saved with the source so the published connector keeps
-        working without your local file.
+        working without your original file.
+
+        Large files — send them in CHUNKS: call once with the first chunk, then
+        call again with append=true (same file_name) for each remaining chunk.
+        Each call must fit within the MCP transport limit; the staged total is
+        capped at the configured upload limit (50 MB by default). For binary /
+        non-UTF-8 data set encoding="base64" and base64-encode EACH chunk
+        independently.
+
+        On Elliot Cloud, where bytes through this tool would pass through your
+        context, prefer elliot_request_file_upload for large files — it returns
+        a URL to upload the bytes out of band.
 
         Workflow:
             up = elliot_upload_file(file_name="data.json", content="...")
@@ -326,13 +360,20 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 name="my_source",
             )
 
+        NOTE: a local file path you did NOT upload here is not readable by the
+        cloud builder — upload the bytes (or pass them inline) instead of
+        passing such a path to elliot_discover_source.
+
         Args:
             file_name: basename only (no directory parts). Must match
                 ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ and end in one of
                 .json / .jsonl / .ndjson / .csv / .txt / .yaml / .yml.
-            content: file body as UTF-8 text (default) or base64-encoded
-                bytes (set encoding="base64" for binary).
+            content: file body (this chunk) as UTF-8 text (default) or
+                base64-encoded bytes (set encoding="base64" for binary).
             encoding: "text" or "base64". Defaults to "text".
+            append: when true, append this chunk to an already-staged file of
+                the same name instead of replacing it — use for multi-chunk
+                uploads of a large file. Defaults to false (create/replace).
         """
         try:
             log.info("source.upload.start", file_name=file_name, encoding=encoding)
@@ -369,15 +410,6 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             else:
                 data = content.encode("utf-8")
 
-            max_bytes = _upload_max_bytes()
-            if len(data) > max_bytes:
-                raise ElliotError(
-                    "FILE_TOO_LARGE",
-                    f"file exceeds {max_bytes} bytes; set ELLIOT_UPLOAD_MAX_BYTES "
-                    "to raise the cap if the source is genuinely large",
-                    detail={"bytes": len(data), "limit": max_bytes},
-                )
-
             # safe_join guarantees the resolved destination stays under the
             # session's sources/ directory — even though _FILENAME_RE already
             # forbids `..` / `/`, this is defence-in-depth.
@@ -390,17 +422,44 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                     "file_name resolves outside the managed sources directory",
                 ) from exc
 
-            # Atomic write — readers never see a half-written file even if
-            # the agent re-uploads while a discover is in-flight.
-            tmp = dest.with_name(dest.name + ".tmp")
-            tmp.write_bytes(data)
-            os.replace(tmp, dest)
+            # Cap on the STAGED TOTAL, not just this call, so a chunked (append)
+            # upload can't slip a large file past the limit one chunk at a time.
+            existing = dest.stat().st_size if (append and dest.exists()) else 0
+            max_bytes = _upload_max_bytes()
+            total = existing + len(data)
+            if total > max_bytes:
+                raise ElliotError(
+                    "FILE_TOO_LARGE",
+                    f"staged file would be {total} bytes; exceeds the {max_bytes} byte "
+                    "limit. Set ELLIOT_UPLOAD_MAX_BYTES to raise the cap if the source "
+                    "is genuinely large.",
+                    detail={"bytes": total, "limit": max_bytes},
+                )
 
-            log.info("source.upload.saved", path=str(dest), bytes=len(data))
+            if append and existing:
+                # Sequential append for multi-chunk uploads. The agent drives
+                # chunk order; a fresh (append=false) upload still replaces
+                # atomically below so readers never see a half-written file.
+                with open(dest, "ab") as fh:
+                    fh.write(data)
+            else:
+                tmp = dest.with_name(dest.name + ".tmp")
+                tmp.write_bytes(data)
+                os.replace(tmp, dest)
+
+            log.info(
+                "source.upload.saved",
+                path=str(dest),
+                bytes=len(data),
+                total_bytes=total,
+                append=append,
+            )
             return {
                 "managed_path": str(dest),
                 "file_name": file_name,
-                "size_bytes": len(data),
+                "size_bytes": total,
+                "bytes_written": len(data),
+                "appended": bool(append and existing),
             }
         except ElliotError as exc:
             return to_mcp_error_content(exc)
@@ -410,7 +469,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
     @mcp.tool()
     def elliot_connect_source(
-        source_type: str,
+        source_type: _SourceType,
         config: dict,  # type: ignore[type-arg]
         name: str,
     ) -> dict:  # type: ignore[type-arg]
@@ -532,7 +591,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
     @mcp.tool()
     async def elliot_discover_source(
-        source_type: str,
+        source_type: _SourceType,
         config: dict,  # type: ignore[type-arg]
         name: str,
     ) -> dict:  # type: ignore[type-arg]
@@ -689,7 +748,10 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
-    def elliot_preview_source(table_name: str, limit: int = 10) -> dict:  # type: ignore[type-arg]
+    def elliot_preview_source(
+        table_name: str,
+        limit: Annotated[int, Field(json_schema_extra={"minimum": 1, "maximum": 1000})] = 10,
+    ) -> dict:  # type: ignore[type-arg]
         """Return the first N rows from a loaded source table."""
         try:
             rows = session.engine.query(f'SELECT * FROM "{table_name}" LIMIT :n', {"n": limit})

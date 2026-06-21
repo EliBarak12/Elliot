@@ -82,3 +82,44 @@ def extract_table_names(sql: str) -> list[str]:
         if name and name not in seen:
             seen.append(name)
     return seen
+
+
+# A SQLite named bind parameter: ``:name`` where name starts with a letter or
+# underscore. The leading-letter rule avoids matching time literals (``12:30``)
+# and Postgres-style ``::cast`` as parameters.
+_BIND_PARAM_RE = re.compile(r"(?<![:\w]):([A-Za-z_]\w*)")
+
+
+def extract_sql_params(sql: str) -> list[str]:
+    """Pull every ``:name`` bind parameter referenced in ``sql``.
+
+    Used to verify at tool-create time that every parameter the SQL binds is
+    actually declared on the tool (audit B2): an undeclared ``:max_fast``
+    used to register fine and only blow up at call time with a cryptic
+    "no such parameter" from SQLite. Order is first-occurrence, deduped.
+    """
+    seen: list[str] = []
+    for match in _BIND_PARAM_RE.finditer(sql or ""):
+        name = match.group(1)
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
+# ``SELECT *`` / ``SELECT t.*`` projection. ``COUNT(*)`` and other aggregates
+# are fine — only a bare star *projection* is the token-bloat / unstable-contract
+# footgun the linter cares about, so we anchor to SELECT and allow an optional
+# ``DISTINCT`` and a single ``table.`` qualifier.
+_SELECT_STAR_RE = re.compile(r"\bSELECT\s+(?:DISTINCT\s+)?(?:[A-Za-z_]\w*\.)?\*", re.IGNORECASE)
+
+
+def has_select_star(sql: str) -> bool:
+    """True if ``sql`` projects ``SELECT *`` (or ``SELECT t.*``).
+
+    A star projection returns every column of the underlying snapshot, which
+    bloats the agent's context and makes the tool's output schema drift
+    whenever the upstream shape changes — the opposite of a typed contract
+    (audit B2 / principle 2). ``COUNT(*)`` and ``*`` inside expressions are
+    not matched.
+    """
+    return bool(_SELECT_STAR_RE.search(sql or ""))

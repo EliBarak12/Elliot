@@ -159,6 +159,23 @@ def test_validate_sql_semicolon_invalid(mcp: FastMCP):
     assert result["valid"] is False
 
 
+# ── H4: schema-aware validation once data is loaded ─────────────────────────
+
+
+def test_validate_sql_flags_unknown_table(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    _load_table(session, tmp_path)  # loads table "items"
+    result = _tool(mcp, "elliot_validate_sql")(sql="SELECT id FROM nope")
+    assert result["valid"] is False
+    assert "nope" in result["reason"]
+    assert result["missing_tables"] == ["nope"]
+
+
+def test_validate_sql_accepts_known_table(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    _load_table(session, tmp_path)  # loads table "items"
+    result = _tool(mcp, "elliot_validate_sql")(sql="SELECT id FROM items")
+    assert result["valid"] is True
+
+
 # ---------------------------------------------------------------------------
 # elliot_sample_data
 # ---------------------------------------------------------------------------

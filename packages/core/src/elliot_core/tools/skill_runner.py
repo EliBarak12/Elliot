@@ -29,8 +29,28 @@ async def execute_skill(
         result = await executor.execute(step.tool_id, resolved)
         step_results[step.alias] = result
 
-    last = list(step_results.values())[-1] if step_results else ToolResult(rows=[], meta={})
-    return last
+    if not step_results:
+        return ToolResult(rows=[], meta={})
+
+    # The skill's primary result is still the final step's rows (a 2-step
+    # "look up X, then summarise" skill answers with the summary). But the
+    # intermediate steps used to be computed and silently dropped, so a
+    # "give me X AND Y" skill returned only Y (audit H7). Expose every step's
+    # output under meta.steps so the caller can recover all of them, and mark
+    # which alias is the primary one.
+    last_alias, last = list(step_results.items())[-1]
+    return ToolResult(
+        rows=last.rows,
+        meta={
+            **last.meta,
+            "primary_step": last_alias,
+            "step_count": len(step_results),
+            "steps": {
+                alias: {"rows": r.rows, "row_count": len(r.rows), "meta": r.meta}
+                for alias, r in step_results.items()
+            },
+        },
+    )
 
 
 def _resolve_bindings(

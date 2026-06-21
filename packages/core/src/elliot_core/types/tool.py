@@ -19,6 +19,11 @@ class ParameterDefinition(BaseModel):
     description: str = ""
     default: Any | None = None
     enum: list[str] | None = None
+    # Inclusive numeric bounds for integer/number params. When set, the runtime
+    # rejects out-of-range values at the validation boundary — the declarative
+    # way to cap a `limit`/`page_size` instead of hand-writing MAX(MIN(...)).
+    minimum: int | None = None
+    maximum: int | None = None
 
 
 class FilterCondition(BaseModel):

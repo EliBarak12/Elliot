@@ -28,8 +28,8 @@ def mcp(session: ElliotSession) -> FastMCP:
 @pytest.fixture(autouse=True)
 def _audit_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "elliot_mcp_plugin.tools.audit_tools.AUDIT_RESULTS_DIR",
-        str(tmp_path / ".elliot" / "audit-results"),
+        "elliot_mcp_plugin.tools.audit_tools._audit_results_dir",
+        lambda session: tmp_path / ".elliot" / "audit-results",
     )
 
 
@@ -143,3 +143,19 @@ def test_judge_flags_failed_task(mcp: FastMCP, session: ElliotSession) -> None:
     result = _tool(mcp, "elliot_judge_audit")()
     assert result["passed"] is False
     assert result["findings"]
+
+
+def test_audit_results_dir_defaults_under_workspace(tmp_path: Path, monkeypatch):
+    """B1/H9: results must land under the session workspace (ELLIOT_WORKSPACE),
+    not a cwd-relative '.elliot' that is read-only on the hosted builder."""
+    monkeypatch.delenv("ELLIOT_AUDIT_RESULTS_DIR", raising=False)
+    monkeypatch.setattr(
+        "elliot_mcp_plugin.tools.audit_tools._AUDIT_RESULTS_DIR_ENV", None, raising=False
+    )
+    from elliot_mcp_plugin.tools.audit_tools import _audit_results_dir
+
+    session = ElliotSession(cwd=str(tmp_path))
+    expected = session.workspace._dir / "audit-results"
+    assert _audit_results_dir(session) == expected
+    # And the resolved path lives under the workspace, not the process cwd.
+    assert str(expected).startswith(str(tmp_path))

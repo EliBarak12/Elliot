@@ -17,6 +17,16 @@ All notable changes to Elliot are documented here. The format follows [Keep a Ch
 - README hero rewritten around the agent-first value proposition with badges, a 60-second quickstart, and per-client install snippets.
 
 ### Fixed
+- Production-readiness audit follow-ups (from a real Elliot Cloud connector build):
+  - `elliot_judge_audit` no longer fails with `[Errno 13] Permission denied: '.elliot'` on the hosted builder — judged audit reports are written under the session workspace (`ELLIOT_WORKSPACE/.elliot/audit-results`) instead of a cwd-relative path. Override with `ELLIOT_AUDIT_RESULTS_DIR`.
+  - `elliot_create_tool` / `elliot_update_tool` now reject a SQL bind parameter that isn't declared on the tool (`UNDECLARED_PARAM`) at create time instead of letting it fail on every call, and flag a bare `SELECT *` projection as a non-blocking warning.
+  - `elliot_validate_sql` is now schema-aware once data is loaded: a query referencing an unmaterialized table is reported invalid, naming the missing and available tables (previously passed syntax-only, then failed at runtime).
+  - The published connector runtime now validates call-time parameters with the same rules as the design-time preview — unknown params, `enum` membership, declared numeric bounds, and types are all enforced (an invalid `enum` value used to be silently accepted in production while preview rejected it). Validation/coercion now lives in one shared module, `elliot_core.tools.param_validation`.
+  - `ParameterDefinition` gained optional `minimum` / `maximum` bounds so a `limit`/`page_size` cap is declarative and enforced server-side, instead of relying on hand-written `LIMIT MAX(MIN(:limit, N), 1)`.
+  - Deterministic skills now expose every step's output under `meta.steps` (with `primary_step`) instead of silently dropping intermediate results; the primary rows remain the final step's.
+  - REST passthrough tools (`elliot_create_rest_tool`) are now previewable in-session: `elliot_preview_tool` fetches them live from their source with the supplied params, so they can be tested before publish.
+  - `elliot_build_connector` smoke-checks each SQL tool against the loaded schema and returns `warnings` for any tool referencing an unmaterialized table, so broken tools aren't shipped silently.
+  - `elliot_validate_tool` now infers `source_ids` (from the SQL, else all session sources) the same way `elliot_create_tool` does, so the same payload validates consistently across both tools.
 - Plugin skills now load in Claude Code and Codex. They were nested in `.claude-plugin/skills/`, where neither host discovers them — only the MCP server attached. Skills now live in a single plugin-root `skills/` directory that Claude Code and Codex both auto-discover; the Codex manifest declares it via `skills`, and the Codex marketplace moved to the spec location `.agents/plugins/marketplace.json`. The per-host skill mirrors and `scripts/sync_skills.py` are gone.
 
 ## [0.1.0] — Unreleased

@@ -29,7 +29,19 @@ from elliot_mcp_plugin.session import ElliotSession
 
 log = structlog.get_logger(__name__)
 
-AUDIT_RESULTS_DIR = os.environ.get("ELLIOT_AUDIT_RESULTS_DIR", ".elliot/audit-results")
+# Explicit override for where judged audit reports are written. When unset we
+# fall back to the session's workspace dir (ELLIOT_WORKSPACE/.elliot/...) at
+# call time — NOT a cwd-relative ".elliot", which on the hosted builder is a
+# read-only directory and made elliot_judge_audit fail with
+# "[Errno 13] Permission denied: '.elliot'" (audit B1/H9).
+_AUDIT_RESULTS_DIR_ENV = os.environ.get("ELLIOT_AUDIT_RESULTS_DIR")
+
+
+def _audit_results_dir(session: ElliotSession) -> Path:
+    if _AUDIT_RESULTS_DIR_ENV:
+        return Path(_AUDIT_RESULTS_DIR_ENV)
+    return session.workspace._dir / "audit-results"
+
 
 _NO_CONNECTOR = ElliotError(
     "NO_CONNECTOR",
@@ -160,7 +172,7 @@ def register_audit_tools(mcp: FastMCP, session: ElliotSession) -> None:
                     "submit their transcripts first.",
                 )
             report = judge_audit(session.audit_transcripts, session.connector)
-            saved = save_audit_report(report, Path(AUDIT_RESULTS_DIR))
+            saved = save_audit_report(report, _audit_results_dir(session))
             log.info("audit.judged", passed=report.passed, path=str(saved))
             result = report.model_dump()
             result["report_path"] = str(saved)

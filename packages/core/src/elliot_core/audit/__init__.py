@@ -10,6 +10,15 @@ findings that cite the exact failing call (`AuditReport`).
 from __future__ import annotations
 
 from elliot_core.audit.judge import judge_audit
+from elliot_core.audit.llm_judge import (
+    LLM_JUDGE_DIMENSIONS,
+    CombinedAuditReport,
+    LlmDimensionRating,
+    LlmJudgeFinding,
+    LlmJudgment,
+    build_llm_judge_prompt,
+    merge_llm_judgment,
+)
 from elliot_core.audit.models import (
     AuditFinding,
     AuditReport,
@@ -27,16 +36,23 @@ from elliot_core.audit.store import (
 )
 
 __all__ = [
+    "LLM_JUDGE_DIMENSIONS",
     "AuditFinding",
     "AuditReport",
     "AuditSeed",
     "AuditToolCall",
     "AuditTranscript",
+    "CombinedAuditReport",
     "DimensionScore",
+    "LlmDimensionRating",
+    "LlmJudgeFinding",
+    "LlmJudgment",
     "ProductIntent",
     "audit_rubric",
+    "build_llm_judge_prompt",
     "generate_audit_seeds",
     "judge_audit",
     "load_audit_reports",
+    "merge_llm_judgment",
     "save_audit_report",
 ]

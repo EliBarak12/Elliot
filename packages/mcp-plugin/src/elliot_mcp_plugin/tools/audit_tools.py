@@ -19,10 +19,13 @@ from pydantic import Field
 
 from elliot_core.audit import (
     audit_rubric,
+    build_llm_judge_prompt,
     generate_audit_seeds,
     judge_audit,
+    merge_llm_judgment,
     save_audit_report,
 )
+from elliot_core.audit.llm_judge import LlmJudgment
 from elliot_core.audit.models import AuditTranscript
 from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_mcp_plugin.session import ElliotSession
@@ -181,4 +184,83 @@ def register_audit_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(exc)
         except Exception as exc:
             log.error("audit.judge.failed", error=str(exc), exc_info=True)
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+
+    @mcp.tool()
+    def elliot_request_llm_judgment() -> dict:  # type: ignore[type-arg]
+        """Return the LLM-judge brief for YOU, the calling agent, to grade.
+
+        Elliot never calls a model — you are the LLM judge. This hands you the
+        connector's tools, the submitted audit transcripts, the qualitative
+        rubric dimensions, and the exact JSON shape to send back. Read it, rate
+        each dimension 1-10 with a rationale, note any qualitative findings, then
+        call elliot_submit_llm_judgment with your judgement.
+        """
+        try:
+            if session.connector is None:
+                raise _NO_CONNECTOR
+            if not session.audit_transcripts:
+                raise ElliotError(
+                    "NO_TRANSCRIPTS",
+                    "No transcripts submitted — run the audit sub-agents and "
+                    "submit their transcripts first.",
+                )
+            prompt = build_llm_judge_prompt(session.audit_transcripts, session.connector)
+            log.info("audit.llm_judge.requested", transcripts=len(session.audit_transcripts))
+            return prompt
+        except ElliotError as exc:
+            return to_mcp_error_content(exc)
+        except Exception as exc:
+            log.error("audit.llm_judge.request_failed", error=str(exc), exc_info=True)
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+
+    @mcp.tool()
+    def elliot_submit_llm_judgment(
+        judgment_json: dict | str,  # type: ignore[type-arg]
+    ) -> dict:  # type: ignore[type-arg]
+        """Submit your LLM-judge judgement and get the combined audit report.
+
+        ``judgment_json`` is the shape from elliot_request_llm_judgment's
+        ``submit_shape``: ``model``, ``ratings`` (dimension/score/rationale),
+        ``findings`` (tool_id/severity/message/suggestion) and ``summary``.
+        Elliot runs the deterministic judge, folds your judgement in (your
+        error-severity findings can fail an otherwise-passing connector), saves
+        the combined report, and returns it.
+        """
+        try:
+            if session.connector is None:
+                raise _NO_CONNECTOR
+            if not session.audit_transcripts:
+                raise ElliotError(
+                    "NO_TRANSCRIPTS",
+                    "No transcripts submitted — run the audit first.",
+                )
+            data = json.loads(judgment_json) if isinstance(judgment_json, str) else judgment_json
+            judgment = LlmJudgment.model_validate(data)
+            report = judge_audit(session.audit_transcripts, session.connector)
+            combined = merge_llm_judgment(report, judgment)
+
+            results_dir = _audit_results_dir(session)
+            results_dir.mkdir(parents=True, exist_ok=True)
+            stamp = report.run_at.replace(":", "-").replace(".", "-")
+            path = results_dir / f"{combined.connector_slug}-{stamp}-combined.json"
+            path.write_text(combined.model_dump_json(indent=2), encoding="utf-8")
+
+            log.info(
+                "audit.llm_judge.submitted",
+                passed=combined.passed,
+                llm_model=judgment.model,
+                path=str(path),
+            )
+            result = combined.model_dump()
+            result["report_path"] = str(path)
+            return result
+        except json.JSONDecodeError as exc:
+            return to_mcp_error_content(ElliotError("INVALID_JSON", f"Invalid JSON: {exc}"))
+        except ValueError as exc:
+            return to_mcp_error_content(
+                ElliotError("INVALID_JUDGMENT", f"Judgment did not validate: {exc}")
+            )
+        except Exception as exc:
+            log.error("audit.llm_judge.submit_failed", error=str(exc), exc_info=True)
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))

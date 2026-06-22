@@ -9,6 +9,8 @@ from typing import Any
 
 import structlog
 
+from elliot_core.eval.matchers import match_value
+
 from .eval_types import EvalCase, EvalSuite
 from .types import ConnectorConfig
 
@@ -52,12 +54,43 @@ def _check_expectations(
             failures.append(f"Field '{f_name}' missing from results")
 
     if e.all_rows_match:
+        arm = e.all_rows_match
         for i, row in enumerate(rows):
-            if row.get(e.all_rows_match.field) != e.all_rows_match.value:
+            actual = row.get(arm.field)
+            if not match_value(
+                actual,
+                arm.value,
+                arm.match,
+                abs_tol=arm.abs_tol,
+                rel_tol=arm.rel_tol,
+                sig_figs=arm.sig_figs,
+            ):
                 failures.append(
-                    f"Row {i}: expected {e.all_rows_match.field}={e.all_rows_match.value!r}, "
-                    f"got {row.get(e.all_rows_match.field)!r}"
+                    f"Row {i}: expected {arm.field}={arm.value!r} ({arm.match}), got {actual!r}"
                 )
+
+    for fa in e.field_assertions:
+        if not rows:
+            failures.append(f"Field assertion '{fa.field}': no rows returned")
+            continue
+        if fa.row >= len(rows):
+            failures.append(
+                f"Field assertion '{fa.field}': row {fa.row} out of range ({len(rows)} rows)"
+            )
+            continue
+        actual = rows[fa.row].get(fa.field)
+        if not match_value(
+            actual,
+            fa.equals,
+            fa.match,
+            abs_tol=fa.abs_tol,
+            rel_tol=fa.rel_tol,
+            sig_figs=fa.sig_figs,
+        ):
+            failures.append(
+                f"Field '{fa.field}' (row {fa.row}): expected {fa.equals!r} "
+                f"({fa.match}), got {actual!r}"
+            )
 
     if e.max_token_estimate and token_estimate > e.max_token_estimate:
         failures.append(f"Token estimate {token_estimate} exceeds limit {e.max_token_estimate}")

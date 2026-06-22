@@ -8,10 +8,36 @@ from typing import Any
 import yaml
 from pydantic import BaseModel
 
+from elliot_core.eval.matchers import MatchMode
+
 
 class ExpectRowsMatch(BaseModel):
     field: str
     value: Any
+    # How to compare each row's field against `value`. Defaults to exact so
+    # existing suites keep their behaviour; set "numeric"/"normalized" to make
+    # "$11,614.72" match 11614.72, or "scientific" for exponent-form answers.
+    match: MatchMode = "exact"
+    abs_tol: float | None = None
+    rel_tol: float | None = None
+    sig_figs: int | None = None
+
+
+class FieldAssertion(BaseModel):
+    """Assert that one field of one result row matches an expected value.
+
+    Unlike `all_rows_match` (which checks every row), this targets a single row
+    (default: the first) — the shape an answer-style eval needs, e.g. "the
+    `final_amount` field of row 0 equals 11614.72 to 2 decimal places".
+    """
+
+    field: str
+    equals: Any = None
+    match: MatchMode = "exact"
+    abs_tol: float | None = None
+    rel_tol: float | None = None
+    sig_figs: int | None = None
+    row: int = 0
 
 
 class EvalExpect(BaseModel):
@@ -20,6 +46,7 @@ class EvalExpect(BaseModel):
     max_rows: int | None = None
     fields_present: list[str] = []
     all_rows_match: ExpectRowsMatch | None = None
+    field_assertions: list[FieldAssertion] = []
     error_code: str | None = None
     max_token_estimate: int | None = None
 

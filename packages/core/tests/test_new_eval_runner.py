@@ -5,7 +5,13 @@ from __future__ import annotations
 import pytest
 
 from elliot_core.eval_runner import _check_expectations
-from elliot_core.eval_types import EvalCase, EvalExpect, EvalSuite, ExpectRowsMatch
+from elliot_core.eval_types import (
+    EvalCase,
+    EvalExpect,
+    EvalSuite,
+    ExpectRowsMatch,
+    FieldAssertion,
+)
 
 
 def _case(**kwargs) -> EvalCase:  # type: ignore[type-arg]
@@ -67,6 +73,61 @@ def test_max_token_estimate_failure() -> None:
     case = _case(expect=EvalExpect(max_token_estimate=5))
     failures = _check_expectations(case, [], None, None, 100)
     assert any("100" in f for f in failures)
+
+
+def test_all_rows_match_numeric_mode_passes() -> None:
+    # "$2,000" should match an expected 2000 under numeric matching.
+    case = _case(
+        expect=EvalExpect(all_rows_match=ExpectRowsMatch(field="mrr", value=2000, match="numeric"))
+    )
+    rows = [{"mrr": "$2,000"}, {"mrr": "2000.00"}]
+    failures = _check_expectations(case, rows, None, None, 20)
+    assert failures == []
+
+
+def test_field_assertion_numeric_passes() -> None:
+    case = _case(
+        expect=EvalExpect(
+            field_assertions=[
+                FieldAssertion(field="final_amount", equals="11614.72", match="numeric")
+            ]
+        )
+    )
+    rows = [{"final_amount": "$11,614.72"}]
+    failures = _check_expectations(case, rows, None, None, 20)
+    assert failures == []
+
+
+def test_field_assertion_failure_reports_field_and_mode() -> None:
+    case = _case(
+        expect=EvalExpect(
+            field_assertions=[FieldAssertion(field="amount", equals="100", match="numeric")]
+        )
+    )
+    failures = _check_expectations(case, [{"amount": "200"}], None, None, 20)
+    assert len(failures) == 1
+    assert "amount" in failures[0] and "numeric" in failures[0]
+
+
+def test_field_assertion_no_rows() -> None:
+    case = _case(expect=EvalExpect(field_assertions=[FieldAssertion(field="x", equals=1)]))
+    failures = _check_expectations(case, [], None, None, 0)
+    assert any("no rows" in f for f in failures)
+
+
+def test_field_assertion_row_out_of_range() -> None:
+    case = _case(expect=EvalExpect(field_assertions=[FieldAssertion(field="x", equals=1, row=5)]))
+    failures = _check_expectations(case, [{"x": 1}], None, None, 10)
+    assert any("out of range" in f for f in failures)
+
+
+def test_field_assertion_targets_specific_row() -> None:
+    case = _case(
+        expect=EvalExpect(field_assertions=[FieldAssertion(field="plan", equals="pro", row=1)])
+    )
+    rows = [{"plan": "free"}, {"plan": "pro"}]
+    failures = _check_expectations(case, rows, None, None, 20)
+    assert failures == []
 
 
 @pytest.mark.asyncio

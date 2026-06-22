@@ -161,6 +161,17 @@ class ToolExecutor:
         # (pushdown, snapshot SQL, filter_groups, passthrough) consistent.
         arguments = self._apply_param_defaults(tool, arguments)
 
+        # Validate + coerce inputs with the SAME rules the design-time preview
+        # uses (elliot_core.tools.param_validation): reject unknown params,
+        # enforce required, enum membership, declared numeric bounds, and types.
+        # Previously the published runtime skipped this, so an invalid enum or
+        # out-of-range limit that preview rejected was silently accepted in
+        # production (audit H5/H6). Returns a superset so passthrough /
+        # api_mapping keys are carried through untouched.
+        from elliot_core.tools.param_validation import validate_call_params
+
+        arguments = validate_call_params(tool, arguments)
+
         # WRITE / ACTION tools mutate an upstream REST API through their
         # api_mapping (method + path/query/body) rather than querying a snapshot.
         # The design-time preview executor already runs these; without this the

@@ -210,3 +210,10 @@ async def test_execute_skill_multi_step_binding():
     )
     result = await execute_skill(skill, {}, registry, executor)
     assert [{k: v for k, v in r.items() if not k.startswith("_")} for r in result.rows] == rows_b
+    # H7: the primary rows are still the final step's, but every step's output
+    # is now exposed under meta.steps instead of being silently dropped.
+    assert result.meta["primary_step"] == "orders"
+    assert result.meta["step_count"] == 2
+    assert set(result.meta["steps"]) == {"user", "orders"}
+    user_rows = result.meta["steps"]["user"]["rows"]
+    assert [{k: v for k, v in r.items() if not k.startswith("_")} for r in user_rows] == rows_a

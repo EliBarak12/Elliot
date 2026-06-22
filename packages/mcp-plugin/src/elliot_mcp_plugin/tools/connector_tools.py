@@ -10,15 +10,54 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 import structlog
 from mcp.server.fastmcp import FastMCP
 
 from elliot_core.connector.serializer import serialize_connector
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.types.tool import ToolDefinition
 from elliot_mcp_plugin.session import ElliotSession
 
 log = structlog.get_logger(__name__)
+
+
+def _build_table_warnings(
+    session: ElliotSession, tools: list[ToolDefinition]
+) -> list[dict[str, Any]]:
+    """Flag built tools whose SQL references tables not loaded in the session.
+
+    Only checked when the session has data materialized (post-discover) and
+    only for SQL-backed tools — filter_groups / passthrough tools resolve
+    their tables at runtime. Each entry names the tool and its missing tables
+    so the agent can fix or drop it before publishing (audit B3).
+    """
+    from elliot_core.sql import extract_table_names
+
+    available = set(session.engine.get_table_names())
+    if not available:
+        return []
+    warnings: list[dict[str, Any]] = []
+    for tool in tools:
+        sql = session.tool_sql.get(tool.id)
+        if not sql:
+            continue
+        missing = [t for t in extract_table_names(sql) if t not in available]
+        if missing:
+            warnings.append(
+                {
+                    "tool_id": tool.id,
+                    "missing_tables": sorted(missing),
+                    "message": (
+                        f"Tool '{tool.id}' references table(s) "
+                        f"{sorted(missing)} that are not loaded — it will fail at "
+                        "call time. Fix its SQL or drop the tool before publishing."
+                    ),
+                }
+            )
+    return warnings
+
 
 _RUNTIME_LOG_RELATIVE = Path(".elliot/runtime.log")
 _RUNTIME_HEALTH_TIMEOUT_S = 15.0
@@ -171,12 +210,20 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 tools=len(selected_tools),
                 skills=len(selected_skills),
             )
-            return {
+            result = {
                 "status": "built",
                 "tool_count": len(selected_tools),
                 "skill_count": len(selected_skills),
                 "source_count": len(sources),
             }
+            # B3: a SQL tool that references a table the session never
+            # materialized builds clean but errors on every call ("no such
+            # table"). Smoke-check each tool's SQL against the loaded schema and
+            # surface the broken ones at build time instead of shipping them.
+            warnings = _build_table_warnings(session, selected_tools)
+            if warnings:
+                result["warnings"] = warnings
+            return result
         except ElliotError as exc:
             return to_mcp_error_content(exc)
         except Exception as exc:

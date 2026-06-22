@@ -243,3 +243,42 @@ def test_list_sources_list_tools_list_tables_consistent(
 
     tables = _tool(mcp, "elliot_list_tables")()
     assert "customers" in tables["tables"]
+
+
+def test_build_warns_on_tool_referencing_missing_table(
+    mcp: FastMCP, session: ElliotSession, csv_file: Path
+):
+    """B3: a SQL tool referencing a table the session never materialized builds
+    but is flagged so it isn't silently shipped broken."""
+    _tool(mcp, "elliot_discover_source")(
+        source_type="file", config={"path": str(csv_file)}, name="customers"
+    )
+    good = _tool(mcp, "elliot_create_tool")(
+        name="count_customers",
+        description="Returns the total number of customers in the system",
+        category="READ",
+        sql='SELECT COUNT(*) as total FROM "customers"',
+        parameters=[],
+    )
+    bad = _tool(mcp, "elliot_create_tool")(
+        name="list_ghosts",
+        description="References a table that does not exist in the session",
+        category="READ",
+        sql='SELECT id FROM "ghosts"',
+        parameters=[],
+    )
+    r = _tool(mcp, "elliot_build_connector")(
+        name="TestCo Connector",
+        slug="testco",
+        version="1.0.0",
+        tool_ids=[good["tool_id"], bad["tool_id"]],
+        skill_ids=[],
+    )
+    assert r["status"] == "built"
+    warnings = r.get("warnings", [])
+    flagged = {w["tool_id"] for w in warnings}
+    assert "list_ghosts" in flagged
+    assert "count_customers" not in flagged
+    assert "ghosts" in warnings[0]["missing_tables"] or any(
+        "ghosts" in w["missing_tables"] for w in warnings
+    )

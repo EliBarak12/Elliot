@@ -10,8 +10,9 @@ from pydantic import Field
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.naming import is_valid_identifier, slugify_identifier
-from elliot_core.sql import extract_table_names
+from elliot_core.sql import extract_sql_params, extract_table_names, has_select_star
 from elliot_core.sqlite.query_runner import validate_tool_sql
+from elliot_core.tools.param_validation import validate_call_params
 from elliot_core.types.tool import ToolDefinition
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -63,6 +64,16 @@ def preview_tool(
         raise ElliotError("NOT_FOUND", f"Tool not found: {tool_id}")
     sql = session.tool_sql.get(tool_id)
     if not sql:
+        # A pure REST passthrough tool carries no SQL — it can only be previewed
+        # by fetching live (see elliot_preview_tool, which routes those through
+        # preview_tool_live). Point the caller there instead of a bare
+        # "no SQL" dead end (audit H8).
+        if tool.rest_query_params:
+            raise ElliotError(
+                "PASSTHROUGH_PREVIEW",
+                f"Tool '{tool_id}' is a REST passthrough tool — preview it live via "
+                "elliot_preview_tool (it fetches the source on each call).",
+            )
         raise ElliotError("NOT_FOUND", f"No SQL defined for tool: {tool_id}")
 
     supplied = dict(supplied or {})
@@ -75,6 +86,11 @@ def preview_tool(
             detail={"tool_id": tool_id, "missing": missing},
         )
 
+    # Enforce the same unknown-param / enum / numeric-bound / type rules the
+    # published runtime uses, so preview and production agree (audit H5/H6).
+    # Empty strings are treated as "not supplied" to match the binding below.
+    validate_call_params(tool, {k: v for k, v in supplied.items() if v not in (None, "")})
+
     bound: dict[str, object] = {}
     for p in tool.parameters:
         if p.name in supplied and supplied[p.name] not in (None, ""):
@@ -86,6 +102,82 @@ def preview_tool(
 
     rows = session.engine.query(sql, bound)
     return {"rows": rows, "row_count": len(rows)}
+
+
+# Preview rows are a sanity check, not a data export — cap the live passthrough
+# response so a chatty endpoint can't flood the agent's context.
+_PASSTHROUGH_PREVIEW_ROWS = 50
+
+
+async def preview_tool_live(
+    session: ElliotSession,
+    tool_id: str,
+    supplied: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Preview a tool, fetching live for REST passthrough tools (audit H8).
+
+    SQL-backed tools run against the session SQLite snapshot exactly as
+    :func:`preview_tool` does. A pure passthrough tool (no SQL, forwards
+    ``rest_query_params``) is fetched live from its REST source with the
+    supplied params so it can be exercised in-session before publish — closing
+    the gap where ``create_rest_tool`` succeeded but the tool could never be
+    tested.
+    """
+    tool = session.registry.get(tool_id)
+    if tool is None:
+        raise ElliotError("NOT_FOUND", f"Tool not found: {tool_id}")
+    if not session.tool_sql.get(tool_id) and tool.rest_query_params:
+        return await _preview_passthrough(session, tool, dict(supplied or {}))
+    return preview_tool(session, tool_id, supplied)
+
+
+async def _preview_passthrough(
+    session: ElliotSession,
+    tool: ToolDefinition,
+    supplied: dict[str, Any],
+) -> dict[str, Any]:
+    from elliot_core.sources.api_fetcher import fetch_endpoint
+
+    if not tool.source_ids:
+        raise ElliotError("NOT_FOUND", f"Passthrough tool '{tool.id}' has no bound source.")
+    source = session.sources.get(tool.source_ids[0])
+    if source is None:
+        raise ElliotError(
+            "NOT_FOUND", f"Source not found for tool '{tool.id}': {tool.source_ids[0]}"
+        )
+    if source.type != "rest":
+        raise ElliotError(
+            "VALIDATION_ERROR",
+            f"Passthrough tool '{tool.id}' is bound to a '{source.type}' source, not REST.",
+        )
+
+    missing = [p.name for p in tool.parameters if p.required and supplied.get(p.name) in (None, "")]
+    if missing:
+        raise ElliotError(
+            "VALIDATION_REQUIRED",
+            f"Missing required parameter(s) for tool '{tool.id}': {', '.join(missing)}",
+            detail={"tool_id": tool.id, "missing": missing},
+        )
+    validated = validate_call_params(
+        tool, {k: v for k, v in supplied.items() if v not in (None, "")}
+    )
+
+    api_params = {k: validated[k] for k in tool.rest_query_params if k in validated}
+    secrets = session.workspace.load_secrets()
+    result = await fetch_endpoint(source, secrets, extra_params=api_params)
+    rows = list(result.rows)[:_PASSTHROUGH_PREVIEW_ROWS]
+    log.info("tool.preview.passthrough", tool_id=tool.id, source_id=source.id, rows=len(rows))
+    out: dict[str, Any] = {
+        "rows": rows,
+        "row_count": len(rows),
+        "mode": "rest_passthrough",
+        "live": True,
+        "total_fetched": len(result.rows),
+    }
+    warnings = getattr(result, "warnings", None)
+    if warnings:
+        out["warnings"] = list(warnings)
+    return out
 
 
 def _normalize_tool_input(tool: dict[str, Any]) -> dict[str, Any]:
@@ -105,6 +197,34 @@ def _normalize_tool_input(tool: dict[str, Any]) -> dict[str, Any]:
         if mapped is not None:
             out["category"] = mapped
     return out
+
+
+def _tool_sql_warnings(sql: str) -> list[str]:
+    """Non-blocking authoring smells in a tool's SQL (audit B2)."""
+    warnings: list[str] = []
+    if has_select_star(sql):
+        warnings.append(
+            "SQL uses 'SELECT *' — name the specific columns the agent needs so the "
+            "tool returns a typed, context-sized result (principle 2)."
+        )
+    return warnings
+
+
+def _reject_undeclared_params(sql: str, parameters: list[dict[str, Any]]) -> None:
+    """Raise if the SQL binds a ``:param`` that isn't declared (audit B2).
+
+    SQLite would otherwise accept the tool at create time and fail every call
+    with a cryptic "no such parameter" — a broken tool shipped to other agents.
+    """
+    declared = {str(p["name"]) for p in (parameters or []) if isinstance(p, dict) and p.get("name")}
+    undeclared = [n for n in extract_sql_params(sql) if n not in declared]
+    if undeclared:
+        raise ElliotError(
+            "UNDECLARED_PARAM",
+            f"SQL references undeclared parameter(s): {', '.join(undeclared)}. "
+            "Declare each one in `parameters` (or remove the ':' reference).",
+            detail={"undeclared": undeclared, "declared": sorted(declared)},
+        )
 
 
 def _infer_source_ids_from_sql(sql: str, session: ElliotSession) -> list[str]:
@@ -206,6 +326,9 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             sql_ok, sql_reason = validate_tool_sql(sql)
             if not sql_ok:
                 raise ElliotError("INVALID_SQL", sql_reason)
+            # B2: an undeclared ``:param`` would register fine and fail only at
+            # call time with a cryptic SQLite error — reject it at create time.
+            _reject_undeclared_params(sql, parameters)
             source_ids = _infer_source_ids_from_sql(sql, session)
             tool = ToolDefinition.model_validate(
                 {
@@ -221,7 +344,15 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             session.tool_sql[tool.id] = sql
             session.save()
             log.info("tool.created", tool_id=tool.id)
-            return {"tool_id": tool.id, "status": "created"}
+            result: dict[str, Any] = {"tool_id": tool.id, "status": "created"}
+            # SELECT * is a soft smell, not a hard error: legitimate on a small
+            # curated table, but a star projection bloats context and lets the
+            # output schema drift. Flag it so the author can tighten the
+            # contract (principle 2) without blocking creation.
+            warnings = _tool_sql_warnings(sql)
+            if warnings:
+                result["warnings"] = warnings
+            return result
         except ElliotError as exc:
             return to_mcp_error_content(exc)
         except Exception as exc:
@@ -334,6 +465,13 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 sql_ok, sql_reason = validate_tool_sql(sql_patch)
                 if not sql_ok:
                     raise ElliotError("INVALID_SQL", sql_reason)
+                # Re-run the B2 create-time guards against the new SQL. Use the
+                # patched parameters when the same patch redefines them,
+                # otherwise the tool's current parameters.
+                effective_params = patch.get("parameters")
+                if effective_params is None:
+                    effective_params = [p.model_dump() for p in tool.parameters]
+                _reject_undeclared_params(sql_patch, effective_params)
                 session.tool_sql[tool_id] = sql_patch
                 # SQL changed → the tables it references (and therefore the
                 # sources the runtime must materialize) may have changed too.
@@ -412,7 +550,21 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
         try:
             from elliot_core.tools.validator import validate_tool_definition
 
-            validate_tool_definition(_normalize_tool_input(tool))
+            normalized = _normalize_tool_input(tool)
+            # M1: elliot_create_tool infers source_ids from the SQL, but
+            # validate_tool used to demand them explicitly — so the same payload
+            # validated differently depending on which tool you handed it to.
+            # Infer here too: from the SQL when present, else all session
+            # sources, so a READ tool isn't rejected for a missing source_id the
+            # create path would have filled in.
+            if normalized.get("category") == "READ" and not normalized.get("source_ids"):
+                sql = normalized.get("sql")
+                normalized["source_ids"] = (
+                    _infer_source_ids_from_sql(str(sql), session)
+                    if sql
+                    else list(session.sources.keys())
+                )
+            validate_tool_definition(normalized)
             return {"valid": True}
         except ElliotError as exc:
             return {"valid": False, "error": exc.message}
@@ -420,22 +572,26 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return {"valid": False, "error": str(exc)}
 
     @mcp.tool()
-    def elliot_preview_tool(
+    async def elliot_preview_tool(
         tool_id: str,
         params: dict | None = None,  # type: ignore[type-arg]
         arguments: dict | None = None,  # type: ignore[type-arg]
         parameters: dict | None = None,  # type: ignore[type-arg]
     ) -> dict:  # type: ignore[type-arg]
-        """Execute a tool's SQL against current SQLite data and return rows.
+        """Execute a tool against current data and return rows.
 
-        Pass call-time values via 'params' (preferred), 'arguments', or 'parameters'.
+        SQL-backed tools run against the session's SQLite snapshot. REST
+        passthrough tools (created with elliot_create_rest_tool) are fetched
+        LIVE from their source with the supplied params, so they can be tested
+        in-session before publish. Pass call-time values via 'params'
+        (preferred), 'arguments', or 'parameters'.
         """
         try:
             supplied: dict[str, Any] = {}
             for src in (params, arguments, parameters):
                 if src:
                     supplied.update(src)
-            return preview_tool(session, tool_id, supplied)
+            return await preview_tool_live(session, tool_id, supplied)
         except ElliotError as exc:
             return to_mcp_error_content(exc)
         except Exception as exc:

@@ -10,7 +10,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from elliot_core.errors import ElliotError
-from elliot_core.sql import safe_ident
+from elliot_core.sql import extract_table_names, safe_ident
 from elliot_core.sqlite.query_runner import run_tool_query, validate_tool_sql
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -111,10 +111,36 @@ def register_sql_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
     @mcp.tool()
     def elliot_validate_sql(sql: str) -> dict:  # type: ignore[type-arg]
-        """Validate a SQL query without executing it. Returns valid/invalid and reason."""
+        """Validate a SQL query without executing it. Returns valid/invalid and reason.
+
+        Beyond the read-only / single-statement checks, this is schema-AWARE
+        when data is loaded: a query that references a table the session has not
+        materialized is reported invalid, naming the missing table(s) and the
+        ones that exist. That catches the class of tools that pass a syntax-only
+        check yet fail on every call with "no such table" (audit H4/B3).
+        """
         try:
             valid, reason = validate_tool_sql(sql)
-            return {"valid": valid, "reason": reason}
+            if not valid:
+                return {"valid": False, "reason": reason}
+            # Only enforce table existence once the session actually has tables
+            # loaded — pre-ingestion validation can't know the schema yet, so we
+            # don't want to reject a query the author will run after discover.
+            available = set(session.engine.get_table_names())
+            if available:
+                referenced = extract_table_names(sql)
+                missing = [t for t in referenced if t not in available]
+                if missing:
+                    return {
+                        "valid": False,
+                        "reason": (
+                            f"References unknown table(s): {', '.join(sorted(missing))}. "
+                            f"Available: {', '.join(sorted(available)) or '(none)'}."
+                        ),
+                        "missing_tables": sorted(missing),
+                        "available_tables": sorted(available),
+                    }
+            return {"valid": True, "reason": ""}
         except ElliotError:
             raise
         except Exception as exc:

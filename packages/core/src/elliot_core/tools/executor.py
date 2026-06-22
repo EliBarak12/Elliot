@@ -9,6 +9,8 @@ import structlog
 from elliot_core.errors import ElliotError, NotFoundError, SourceFetchError
 from elliot_core.sqlite.engine import SQLiteEngine
 from elliot_core.sqlite.flattener import flatten
+from elliot_core.tools.param_validation import coerce_value as _coerce  # noqa: F401  (re-exported)
+from elliot_core.tools.param_validation import validate_call_params
 from elliot_core.tools.query_builder import build_select_sql
 from elliot_core.types.connector import ConnectorConfig
 from elliot_core.types.source import FetchResult, SourceConfig
@@ -266,84 +268,12 @@ class ToolExecutor:
         return dict(pairs)
 
 
+# Parameter validation/coercion now lives in elliot_core.tools.param_validation
+# so the design-time executor, the plugin preview path, and the published
+# runtime all bind inputs identically (audit H5/H6). These thin aliases keep
+# the long-standing internal names stable for callers and tests.
 def _coerce_and_validate(tool: ToolDefinition, params: dict[str, Any]) -> dict[str, Any]:
-    # Reject parameters the tool doesn't declare. Previously an unknown key
-    # (e.g. wrong-cased "ISO" instead of "iso", or a typo) was silently
-    # dropped, so the SQL bound NULL and the tool returned 200 + empty rows
-    # with no signal to the agent. The allowed set spans every place a param
-    # can legitimately be consumed: declared parameters, passthrough
-    # rest_query_params, and WRITE api_mapping query/body params.
-    allowed = {p.name for p in tool.parameters}
-    allowed.update(tool.rest_query_params)
-    if tool.api_mapping is not None:
-        allowed.update(tool.api_mapping.query_params)
-        allowed.update(tool.api_mapping.body_params)
-    unknown = sorted(k for k in params if k not in allowed)
-    if unknown:
-        raise ElliotError(
-            "UNKNOWN_PARAM",
-            f"Unknown parameter(s) for tool '{tool.id}': {', '.join(unknown)}. "
-            f"Expected: {', '.join(sorted(allowed)) or '(none)'}",
-            detail={"tool_id": tool.id, "unknown": unknown, "allowed": sorted(allowed)},
-        )
-
-    result: dict[str, Any] = {}
-    for p in tool.parameters:
-        val = params.get(p.name, p.default)
-        if val is None and p.required:
-            raise ElliotError("MISSING_PARAM", f"Required parameter missing: '{p.name}'")
-        if val is not None:
-            coerced = _coerce(val, p.type)
-            if p.enum is not None and str(coerced) not in p.enum:
-                raise ElliotError(
-                    "INVALID_PARAM_VALUE",
-                    f"Parameter '{p.name}' must be one of {p.enum}, got: {coerced!r}",
-                )
-            result[p.name] = coerced
-    return result
-
-
-_TRUE_STRINGS = {"true", "1", "yes", "on"}
-_FALSE_STRINGS = {"false", "0", "no", "off"}
-
-
-def _coerce(val: Any, typ: str) -> Any:
-    if typ == "integer":
-        try:
-            return int(val)
-        except (ValueError, TypeError) as exc:
-            raise ElliotError("INVALID_PARAM_TYPE", f"Expected integer, got: {val!r}") from exc
-    if typ == "number":
-        try:
-            return float(val)
-        except (ValueError, TypeError) as exc:
-            raise ElliotError("INVALID_PARAM_TYPE", f"Expected number, got: {val!r}") from exc
-    if typ == "boolean":
-        if isinstance(val, bool):
-            return val
-        if isinstance(val, str):
-            low = val.strip().lower()
-            if low in _TRUE_STRINGS:
-                return True
-            if low in _FALSE_STRINGS:
-                return False
-            raise ElliotError("INVALID_PARAM_TYPE", f"Expected boolean, got: {val!r}")
-        if isinstance(val, (int, float)):
-            return bool(val)
-        raise ElliotError("INVALID_PARAM_TYPE", f"Expected boolean, got: {val!r}")
-    if typ in ("string", "date"):
-        # Reject silent int→str coercion: previously `country_summary({"iso": 99})`
-        # turned 99 into "99", bound it to a string SQL param, matched nothing,
-        # and returned 200 + empty rows. An agent passing the wrong type should
-        # get an actionable error, not a misleading empty result. (bool is an
-        # int subclass, so it's caught here too.)
-        if not isinstance(val, str):
-            raise ElliotError(
-                "INVALID_PARAM_TYPE",
-                f"Expected string, got {type(val).__name__}: {val!r}",
-            )
-        return val
-    return str(val)
+    return validate_call_params(tool, params, declared_only=True)
 
 
 def _apply_rename(rows: list[dict[str, Any]], rename: dict[str, str]) -> list[dict[str, Any]]:

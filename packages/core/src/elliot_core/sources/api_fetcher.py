@@ -170,9 +170,15 @@ async def fetch_endpoint(
     secrets: dict[str, str],
     *,
     auth_token_override: str | None = None,
+    extra_params: dict[str, Any] | None = None,
 ) -> FetchResult:
     headers = _build_auth_headers(config, secrets, auth_token_override)
     base_params: dict[str, Any] = _build_auth_query_params(config, secrets)
+    # Call-time query params (REST passthrough tools forward their declared
+    # rest_query_params here on every call). Applied to every paginated request
+    # below alongside the auth params.
+    if extra_params:
+        base_params.update({k: v for k, v in extra_params.items() if v is not None})
     pagination = config.pagination
     all_rows: list[dict[str, Any]] = []
     warnings: list[str] = []

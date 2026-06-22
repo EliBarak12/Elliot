@@ -457,3 +457,109 @@ def test_create_tool_rejects_non_select_sql(mcp: FastMCP, session: ElliotSession
     )
     assert "INVALID_SQL" in result.get("text", "")
     assert "evil" not in session.registry._tools if hasattr(session.registry, "_tools") else True
+
+
+# ── B2: create_tool registration guards ─────────────────────────────────────
+
+
+def test_create_tool_rejects_undeclared_param(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    """An undeclared :param used to register fine and fail only at call time."""
+    _load_table(session, tmp_path)
+    result = _tool(mcp, "elliot_create_tool")(
+        name="orders_capped",
+        description="Return orders up to a cap",
+        category="READ",
+        sql='SELECT id, amount FROM "orders" LIMIT :max_fast',
+        parameters=[],  # :max_fast is NOT declared
+    )
+    assert "UNDECLARED_PARAM" in result.get("text", "")
+    assert "max_fast" in result.get("text", "")
+    assert session.registry.get("orders_capped") is None
+
+
+def test_create_tool_warns_on_select_star(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    """SELECT * is allowed but flagged as a non-blocking authoring smell."""
+    _load_table(session, tmp_path)
+    result = _tool(mcp, "elliot_create_tool")(
+        name="orders_all_cols",
+        description="Return every order column",
+        category="READ",
+        sql='SELECT * FROM "orders"',
+        parameters=[],
+    )
+    assert result.get("status") == "created", result
+    assert any("SELECT *" in w for w in result.get("warnings", []))
+
+
+# ── M1: validate_tool infers source_ids like create_tool ────────────────────
+
+
+def test_validate_tool_infers_source_ids_from_sql(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    """A READ tool with SQL but no explicit source_ids validates (create infers it)."""
+    _load_table(session, tmp_path)
+    result = _tool(mcp, "elliot_validate_tool")(
+        tool={
+            "name": "orders_listing",
+            "description": "Return all orders for the agent",
+            "category": "read",
+            "sql": 'SELECT id, amount FROM "orders"',
+            "parameters": [],
+        }
+    )
+    assert result == {"valid": True}
+
+
+# ── H8: REST passthrough tools are previewable live ─────────────────────────
+
+
+def test_preview_passthrough_tool_fetches_live(
+    mcp: FastMCP, session: ElliotSession, monkeypatch: pytest.MonkeyPatch
+):
+    from elliot_core.types.source import FetchResult, SourceConfig
+
+    session.sources["api1"] = SourceConfig.model_validate(
+        {"id": "api1", "type": "rest", "name": "api1", "url": "https://api.example.com/search"}
+    )
+    created = _tool(mcp, "elliot_create_rest_tool")(
+        name="Search records",
+        description="Search a resource's records live via the API.",
+        source_id="api1",
+        query_params=[
+            {"name": "q", "type": "string", "required": True, "description": "text filter"},
+        ],
+    )
+    tool_id = created["tool_id"]
+
+    captured: dict = {}
+
+    async def _fake_fetch(config, secrets, *, auth_token_override=None, extra_params=None):
+        captured["extra_params"] = extra_params
+        return FetchResult(rows=[{"id": 1, "name": "widget"}], fetched_at="now")
+
+    monkeypatch.setattr("elliot_core.sources.api_fetcher.fetch_endpoint", _fake_fetch)
+
+    result = _tool(mcp, "elliot_preview_tool")(tool_id=tool_id, params={"q": "widget"})
+    assert result.get("mode") == "rest_passthrough"
+    assert result.get("live") is True
+    assert result["rows"] == [{"id": 1, "name": "widget"}]
+    assert captured["extra_params"] == {"q": "widget"}
+
+
+def test_preview_passthrough_tool_enforces_required(mcp: FastMCP, session: ElliotSession):
+    from elliot_core.types.source import SourceConfig
+
+    session.sources["api1"] = SourceConfig.model_validate(
+        {"id": "api1", "type": "rest", "name": "api1", "url": "https://api.example.com/search"}
+    )
+    created = _tool(mcp, "elliot_create_rest_tool")(
+        name="Search records",
+        description="Search a resource's records live via the API.",
+        source_id="api1",
+        query_params=[
+            {"name": "q", "type": "string", "required": True, "description": "text filter"},
+        ],
+    )
+    result = _tool(mcp, "elliot_preview_tool")(tool_id=created["tool_id"], params={})
+    assert "VALIDATION_REQUIRED" in result.get("text", "")

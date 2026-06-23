@@ -110,3 +110,22 @@ cases:
       max_rows: 10
       fields_present: [id, name, email, plan]
       max_token_estimate: 600
+
+  # ── value matching ─────────────────────────────────────────────────────────
+  # `field_assertions` and `all_rows_match.match` compare values, not strings.
+  # numeric/normalized strip "$" and "," so a stored "$2,000" matches 2000;
+  # scientific matches to the significant figures of the expected literal.
+  - id: total-mrr-numeric-value
+    description: The aggregate MRR equals the expected dollar figure
+    tool_id: mrr_by_plan
+    arguments: { status: active }
+    expect:
+      no_error: true
+      min_rows: 1
+      # Assert a specific computed value, robust to "$" / "," / extra decimals.
+      field_assertions:
+        - field: total_mrr
+          equals: "12500.00"
+          match: numeric        # "$12,500" == 12500.00
+      # all_rows_match also takes a match mode (default: exact).
+      all_rows_match: { field: customer_count, value: 0, match: numeric, abs_tol: 1000 }

@@ -145,6 +145,75 @@ def test_judge_flags_failed_task(mcp: FastMCP, session: ElliotSession) -> None:
     assert result["findings"]
 
 
+# ── LLM-judge tools ──────────────────────────────────────────────────────────
+
+
+def test_request_llm_judgment_returns_brief(mcp: FastMCP, session: ElliotSession) -> None:
+    session.connector = _connector()
+    _tool(mcp, "elliot_submit_audit_transcript")(_transcript())
+    brief = _tool(mcp, "elliot_request_llm_judgment")()
+    assert "dimensions" in brief
+    assert brief["tools"][0]["id"] == "list_customers"
+    assert brief["transcripts"][0]["seed_id"] == "seed-1"
+    assert "submit_shape" in brief
+
+
+def test_request_llm_judgment_no_transcripts(mcp: FastMCP, session: ElliotSession) -> None:
+    session.connector = _connector()
+    result = _tool(mcp, "elliot_request_llm_judgment")()
+    assert "text" in result or "error" in result
+
+
+def test_submit_llm_judgment_combines_and_saves(mcp: FastMCP, session: ElliotSession) -> None:
+    session.connector = _connector()
+    _tool(mcp, "elliot_submit_audit_transcript")(_transcript())
+    judgment = json.dumps(
+        {
+            "model": "claude-test",
+            "ratings": [{"dimension": "description_clarity", "score": 9, "rationale": "clear"}],
+            "findings": [],
+            "summary": "looks good",
+        }
+    )
+    result = _tool(mcp, "elliot_submit_llm_judgment")(judgment)
+    assert result["passed"] is True
+    assert result["llm_model"] == "claude-test"
+    assert result["dimension_sources"]["description_clarity"] == "llm"
+    assert Path(result["report_path"]).exists()
+
+
+def test_submit_llm_judgment_error_finding_fails(mcp: FastMCP, session: ElliotSession) -> None:
+    session.connector = _connector()
+    _tool(mcp, "elliot_submit_audit_transcript")(_transcript())
+    judgment = json.dumps(
+        {
+            "model": "claude-test",
+            "findings": [
+                {
+                    "tool_id": "list_customers",
+                    "severity": "error",
+                    "message": "vague",
+                    "suggestion": "fix",
+                }
+            ],
+        }
+    )
+    result = _tool(mcp, "elliot_submit_llm_judgment")(judgment)
+    assert result["passed"] is False
+
+
+def test_submit_llm_judgment_invalid_json(mcp: FastMCP, session: ElliotSession) -> None:
+    session.connector = _connector()
+    _tool(mcp, "elliot_submit_audit_transcript")(_transcript())
+    result = _tool(mcp, "elliot_submit_llm_judgment")("{bad")
+    assert "text" in result or "error" in result
+
+
+def test_submit_llm_judgment_no_connector(mcp: FastMCP) -> None:
+    result = _tool(mcp, "elliot_submit_llm_judgment")("{}")
+    assert "text" in result or "error" in result
+
+
 def test_audit_results_dir_defaults_under_workspace(tmp_path: Path, monkeypatch):
     """B1/H9: results must land under the session workspace (ELLIOT_WORKSPACE),
     not a cwd-relative '.elliot' that is read-only on the hosted builder."""

@@ -139,23 +139,28 @@ A source's `auth` block has a `type` and a `scope`.
 ## Per-user OAuth — the full pattern
 
 A per-user OAuth2 source declares the **upstream provider's** endpoints plus the
-connector author's (app-level) OAuth client credentials:
+connector author's (app-level) OAuth client credentials.
+
+> **This is a TEMPLATE, not a connector to build.** Replace every value —
+> `id`, `url`, the OAuth endpoints, scopes, and the `{{ env:... }}` names — with
+> your actual provider's (GitHub, Slack, Gmail, …). Never ship the placeholder
+> source as-is; it is only here to show the shape.
 
 ```json
 {
-  "id": "github",
+  "id": "your_source",
   "type": "rest",
-  "url": "https://api.github.com/user/repos",
+  "url": "https://api.your-provider.com/me",
   "auth": {
     "type": "oauth2",
     "scope": "per_user",
-    "secret_key": "{{ user_oauth:github }}",
+    "secret_key": "{{ user_oauth:your_source }}",
     "oauth2": {
-      "authorization_url": "https://github.com/login/oauth/authorize",
-      "token_url": "https://github.com/login/oauth/access_token",
-      "scopes": ["repo"],
-      "client_id_secret": "{{ env:GITHUB_CLIENT_ID }}",
-      "client_secret_secret": "{{ env:GITHUB_CLIENT_SECRET }}"
+      "authorization_url": "https://your-provider.com/login/oauth/authorize",
+      "token_url": "https://your-provider.com/login/oauth/token",
+      "scopes": ["..."],
+      "client_id_secret": "{{ env:YOUR_PROVIDER_CLIENT_ID }}",
+      "client_secret_secret": "{{ env:YOUR_PROVIDER_CLIENT_SECRET }}"
     }
   }
 }

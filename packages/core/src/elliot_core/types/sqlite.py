@@ -19,7 +19,11 @@ class FlattenedTable(BaseModel):
 
 class FlattenWarning(BaseModel):
     type: Literal[
-        "depth_exceeded", "circular_reference", "array_truncated", "wide_object_serialized"
+        "depth_exceeded",
+        "circular_reference",
+        "array_truncated",
+        "wide_object_serialized",
+        "column_renamed",
     ]
     path: str
     message: str

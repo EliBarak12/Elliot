@@ -40,3 +40,22 @@ def test_deduplicate_with_dups():
 def test_deduplicate_triple():
     result = deduplicate_names(["x", "x", "x"])
     assert result == ["x", "x_2", "x_3"]
+
+
+def test_preserves_unicode_letters():
+    # Hebrew header must survive instead of collapsing to "col" (P1).
+    assert safe_name("שם") == "שם"
+    assert safe_name("מספר רישיון") == "מספר_רישיון"
+
+
+def test_unicode_mixed_with_ascii():
+    assert safe_name("City עיר") == "city_עיר"
+
+
+def test_length_is_bounded():
+    assert len(safe_name("x" * 200)) <= 63
+
+
+def test_distinct_unicode_names_do_not_collide():
+    # Two different Hebrew headers must produce two different safe names.
+    assert safe_name("שם") != safe_name("עיר")

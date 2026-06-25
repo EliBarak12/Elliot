@@ -96,3 +96,36 @@ def test_invalid_skill_definition_raises():
     with pytest.raises(ElliotError) as exc_info:
         validate_skill_definition({"id": "x", "name": "X"})  # missing steps/description
     assert exc_info.value.code == "INVALID_SKILL"
+
+
+def test_rejects_undeclared_sql_bind_param():
+    # validate_tool must catch a :param with no matching declared parameter,
+    # not just create_tool (the v2 report hit this via validate_tool).
+    bad = {
+        "id": "list_by_city",
+        "name": "List by city",
+        "description": "Return rows filtered by city.",
+        "category": "READ",
+        "source_ids": ["catalog"],
+        "sql": "SELECT id FROM catalog WHERE city = :foo",
+        "parameters": [],
+    }
+    with pytest.raises(ElliotError) as ei:
+        validate_tool_definition(bad)
+    assert "foo" in ei.value.message
+
+
+def test_accepts_declared_sql_bind_param():
+    good = {
+        "id": "list_by_city",
+        "name": "List by city",
+        "description": "Return rows filtered by city.",
+        "category": "READ",
+        "source_ids": ["catalog"],
+        "sql": "SELECT id FROM catalog WHERE city = :city",
+        "parameters": [
+            {"name": "city", "type": "string", "required": True, "description": "City to filter by"}
+        ],
+    }
+    tool = validate_tool_definition(good)
+    assert tool.id == "list_by_city"

@@ -33,7 +33,7 @@ def _build_table_warnings(
     their tables at runtime. Each entry names the tool and its missing tables
     so the agent can fix or drop it before publishing (audit B3).
     """
-    from elliot_core.sql import extract_table_names
+    from elliot_core.sql import referenced_base_tables
 
     available = set(session.engine.get_table_names())
     if not available:
@@ -43,7 +43,9 @@ def _build_table_warnings(
         sql = session.tool_sql.get(tool.id)
         if not sql:
             continue
-        missing = [t for t in extract_table_names(sql) if t not in available]
+        # ``referenced_base_tables`` strips CTE aliases so a ``WITH x AS (...)``
+        # tool is not false-flagged as referencing a missing table ``x``.
+        missing = [t for t in referenced_base_tables(sql) if t not in available]
         if missing:
             warnings.append(
                 {

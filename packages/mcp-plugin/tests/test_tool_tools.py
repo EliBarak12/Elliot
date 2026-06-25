@@ -563,3 +563,41 @@ def test_preview_passthrough_tool_enforces_required(mcp: FastMCP, session: Ellio
     )
     result = _tool(mcp, "elliot_preview_tool")(tool_id=created["tool_id"], params={})
     assert "VALIDATION_REQUIRED" in result.get("text", "")
+
+
+def test_create_tool_rejects_undeclared_bind_param(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    # B2 regression: a :param with no matching declared parameter must be
+    # rejected at create time, not accepted and then failing at call time.
+    _load_table(session, tmp_path)
+    result = _tool(mcp, "elliot_create_tool")(
+        name="expensive_orders",
+        description="Return orders above a price threshold.",
+        category="READ",
+        sql='SELECT id FROM "orders" WHERE amount > :max_price',
+        parameters=[],
+    )
+    assert "UNDECLARED_PARAM" in result.get("text", ""), result
+    assert session.registry.get("expensive_orders") is None
+
+
+def test_create_tool_accepts_declared_bind_param(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    _load_table(session, tmp_path)
+    result = _tool(mcp, "elliot_create_tool")(
+        name="expensive_orders",
+        description="Return orders above a price threshold.",
+        category="READ",
+        sql='SELECT id FROM "orders" WHERE amount > :max_price',
+        parameters=[
+            {
+                "name": "max_price",
+                "type": "number",
+                "required": True,
+                "description": "Minimum order amount to include.",
+            }
+        ],
+    )
+    assert result.get("status") == "created", result

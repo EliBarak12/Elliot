@@ -32,13 +32,32 @@ SQL_RESERVED = frozenset(
 )
 
 
+# SQLite identifiers are bounded to 63 chars by elliot_core.sql.safe_ident so a
+# connector can't DoS the engine with a giant name; keep safe_name within that.
+_MAX_NAME_LEN = 63
+
+
 def safe_name(raw: str) -> str:
-    """Convert an arbitrary string to a safe SQLite column name."""
+    """Convert an arbitrary string to a safe SQLite column name.
+
+    Unicode letters and digits are preserved (``\\w`` is Unicode-aware), so a
+    Hebrew header like ``שם רופא`` becomes ``שם_רופא`` rather than collapsing to
+    ``col`` and destroying the column's data (P1). Only characters that are
+    unsafe or meaningless in an identifier — whitespace, punctuation, quotes —
+    are replaced with ``_``. The result always satisfies
+    :func:`elliot_core.sql.safe_ident`'s identifier rule.
+    """
     name = raw.lower()
-    name = re.sub(r"[^a-z0-9_]", "_", name)
+    # Replace every non-word character (anything that isn't a Unicode letter,
+    # digit, or underscore) with ``_``. This keeps Hebrew/CJK/accented letters.
+    name = re.sub(r"\W", "_", name, flags=re.UNICODE)
     name = re.sub(r"_+", "_", name).strip("_")
+    # Bound length BEFORE the digit/empty fixups so the final value still fits
+    # safe_ident's 63-char limit even after a ``col_`` prefix.
+    if len(name) > _MAX_NAME_LEN:
+        name = name[:_MAX_NAME_LEN].strip("_")
     if name and name[0].isdigit():
-        name = "col_" + name
+        name = ("col_" + name)[:_MAX_NAME_LEN]
     if not name:
         name = "col"
     if name in SQL_RESERVED:

@@ -10,7 +10,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from elliot_core.errors import ElliotError
-from elliot_core.sql import extract_table_names, safe_ident
+from elliot_core.sql import referenced_base_tables, safe_ident
 from elliot_core.sqlite.query_runner import run_tool_query, validate_tool_sql
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -128,7 +128,9 @@ def register_sql_tools(mcp: FastMCP, session: ElliotSession) -> None:
             # don't want to reject a query the author will run after discover.
             available = set(session.engine.get_table_names())
             if available:
-                referenced = extract_table_names(sql)
+                # CTE aliases are stripped so ``WITH x AS (...) SELECT ... FROM
+                # x`` is not reported as referencing a missing table ``x``.
+                referenced = referenced_base_tables(sql)
                 missing = [t for t in referenced if t not in available]
                 if missing:
                     return {

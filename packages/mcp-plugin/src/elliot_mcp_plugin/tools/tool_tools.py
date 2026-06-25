@@ -10,7 +10,7 @@ from pydantic import Field
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.naming import is_valid_identifier, slugify_identifier
-from elliot_core.sql import extract_sql_params, extract_table_names, has_select_star
+from elliot_core.sql import extract_sql_params, has_select_star, referenced_base_tables
 from elliot_core.sqlite.query_runner import validate_tool_sql
 from elliot_core.tools.param_validation import validate_call_params
 from elliot_core.types.tool import ToolDefinition
@@ -243,7 +243,9 @@ def _infer_source_ids_from_sql(sql: str, session: ElliotSession) -> list[str]:
     known source (or the parse missed everything), fall back to "all
     sources" so the tool isn't silently broken.
     """
-    referenced = extract_table_names(sql)
+    # ``referenced_base_tables`` strips CTE aliases so a WITH-clause tool
+    # doesn't try to bind a query-local alias (``x``) to a source.
+    referenced = referenced_base_tables(sql)
     if not referenced:
         return list(session.sources.keys())
 

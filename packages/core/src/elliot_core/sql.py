@@ -24,10 +24,18 @@ import re
 
 from elliot_core.errors import ElliotError
 
-# An identifier is an unreserved word: starts with letter or underscore,
-# followed by letters / digits / underscores. Bounded length so a connector
-# can't ship a 10MB identifier and DoS the SQL engine via memory pressure.
-_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+# An identifier starts with a letter or underscore, followed by letters,
+# digits, or underscores. ``\w`` is Unicode-aware (Python ``str`` patterns
+# default to Unicode), so a Hebrew/CJK/accented column name like ``שם`` is a
+# valid identifier — without this, ``discover_source`` over a non-ASCII catalog
+# was forced to collapse every such column to ``col`` and silently destroy the
+# data (P1). The guard still rejects the only things that actually matter for
+# safety: ``"`` (quote breakout), ``;`` (statement injection), whitespace, and
+# any other punctuation are all ``\W`` and rejected. ``[^\W\d]`` is "a word
+# character that is not a digit" = a Unicode letter or underscore, so a
+# leading digit is still rejected. Bounded length (<=63) so a connector can't
+# ship a 10MB identifier and DoS the SQL engine via memory pressure.
+_IDENT_RE = re.compile(r"^[^\W\d][\w]{0,62}$")
 
 
 def safe_ident(name: str) -> str:
@@ -60,6 +68,54 @@ _TABLE_REF_RE = re.compile(
     r"(?:FROM|JOIN)\s+(?:\"([^\"]+)\"|`([^`]+)`|([A-Za-z_][A-Za-z0-9_]*))",
     re.IGNORECASE,
 )
+
+# A common-table-expression definition: ``name AS (`` — optionally preceded by
+# ``RECURSIVE`` and optionally carrying an explicit column list ``name (a, b)``.
+# A CTE name is the only place a bare identifier is immediately followed by
+# ``AS (``: a derived-table alias is ``(...) AS name`` (name *after* the paren),
+# a column alias cannot be parenthesised, and ``CAST(x AS INT)`` is ``AS <type>``
+# not ``AS (``. We only treat these as CTE names when a ``WITH`` keyword is
+# actually present, so non-CTE SQL is never affected.
+_CTE_DEF_RE = re.compile(
+    r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:\([^)]*\))?\s+AS\s*\(",
+    re.IGNORECASE,
+)
+_HAS_WITH_RE = re.compile(r"\bWITH\b", re.IGNORECASE)
+
+
+def extract_cte_names(sql: str) -> list[str]:
+    """Pull every CTE alias defined in a ``WITH`` clause of ``sql``.
+
+    Returns an empty list when the query has no ``WITH`` clause. Names are
+    returned in first-occurrence order, deduped. Used so the static table-ref
+    checks (``validate_sql``, ``build_connector``) don't mistake a CTE alias —
+    which exists only for the duration of the query — for a base table that
+    must be materialized. Without this, every ``WITH x AS (...) SELECT ... FROM
+    x`` tool was false-flagged as referencing a missing table ``x`` even though
+    it executes perfectly.
+    """
+    if not sql or not _HAS_WITH_RE.search(sql):
+        return []
+    seen: list[str] = []
+    for match in _CTE_DEF_RE.finditer(sql):
+        name = match.group(1)
+        if name.lower() == "with":
+            continue
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
+def referenced_base_tables(sql: str) -> list[str]:
+    """Table identifiers in ``sql`` that are NOT defined as CTEs.
+
+    This is the set of names that must resolve to a materialized source/table
+    at call time — exactly what the static "missing table" checks should test
+    against. CTE aliases and the names they shadow are excluded. Order is
+    first-occurrence, deduped.
+    """
+    cte = {c.lower() for c in extract_cte_names(sql)}
+    return [t for t in extract_table_names(sql) if t.lower() not in cte]
 
 
 def extract_table_names(sql: str) -> list[str]:

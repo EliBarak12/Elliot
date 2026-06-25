@@ -109,3 +109,33 @@ def test_array_of_mixed_dicts_and_primitives_serializes_primitives_safely():
             assert not isinstance(value, (list, dict)), (
                 f"unbindable list/dict leaked into child row: {value!r}"
             )
+
+
+def test_hebrew_columns_preserved_no_data_loss():
+    # Regression for P1: non-ASCII headers used to all collapse to "col" and
+    # all but one column's data was silently dropped.
+    data = [
+        {"שם": "דנה", "עיר": "תל אביב", "מספר רישיון": 123},
+        {"שם": "יוסי", "עיר": "חיפה", "מספר רישיון": 456},
+    ]
+    result = flatten(data, "doctors")
+    cols = [c.name for c in result.primary_table.columns]
+    assert "שם" in cols and "עיר" in cols and "מספר_רישיון" in cols
+    row = result.primary_table.rows[0]
+    assert row["שם"] == "דנה"
+    assert row["עיר"] == "תל אביב"
+    assert row["מספר_רישיון"] == 123
+    # No collision among distinct Hebrew names -> no rename warning.
+    assert not [w for w in result.warnings if w.type == "column_renamed"]
+
+
+def test_colliding_columns_are_kept_and_warned():
+    # Two keys that normalize to the same safe name must both survive, with a
+    # warning instead of silent overwrite.
+    result = flatten([{"Name": "a", "name ": "b"}], "t")
+    cols = [c.name for c in result.primary_table.columns]
+    assert "name" in cols and "name_2" in cols
+    row = result.primary_table.rows[0]
+    assert row["name"] == "a" and row["name_2"] == "b"
+    renamed = [w for w in result.warnings if w.type == "column_renamed"]
+    assert len(renamed) == 1  # de-duped to one warning, not one per row

@@ -817,23 +817,23 @@ class ToolExecutor:
 
 def _parse_link_next(link_header: str) -> str | None:
     """Return the next URL from an RFC 5988 ``Link: <url>; rel="next"`` header."""
-    import re
 
     m = re.search(r'<([^>]+)>;\s*rel="next"', link_header or "")
     return m.group(1) if m else None
 
 
 def _extract_table_names(sql: str) -> list[str]:
-    """Extract table identifiers after FROM and JOIN keywords.
+    """Extract base-table identifiers after FROM and JOIN keywords.
 
-    Handles both unquoted (FROM items) and double-quoted (FROM "items") forms,
-    since build_select_sql always generates double-quoted table names.
+    Delegates to :func:`elliot_core.sql.referenced_base_tables` so CTE aliases
+    defined by a ``WITH`` clause are excluded — a ``WITH x AS (...) SELECT ...
+    FROM x`` tool must not be reported as referencing a missing table ``x`` when
+    an unrelated runtime error surfaces as INVALID_SQL. Handles unquoted,
+    double-quoted, and backtick-quoted forms.
     """
-    pattern = re.compile(
-        r'\b(?:FROM|JOIN)\s+(?:"([a-zA-Z_][a-zA-Z0-9_]*)"|([a-zA-Z_][a-zA-Z0-9_]*))',
-        re.IGNORECASE,
-    )
-    return list(dict.fromkeys(m.group(1) or m.group(2) for m in pattern.finditer(sql)))
+    from elliot_core.sql import referenced_base_tables
+
+    return referenced_base_tables(sql)
 
 
 def _missing_tables(sql: str, available: list[str]) -> set[str]:

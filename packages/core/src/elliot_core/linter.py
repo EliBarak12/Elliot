@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from .sql import extract_table_names
+from .sql import referenced_base_tables
 from .types import ConnectorConfig
 
 Severity = Literal["ERROR", "WARN", "INFO"]
@@ -206,7 +206,7 @@ def _lint_tool_source_coverage(config: ConnectorConfig) -> list[LintIssue]:
             continue
         tool_sources = set(tool.source_ids or [])
         reported: set[str] = set()
-        for tbl in extract_table_names(tool.sql):
+        for tbl in referenced_base_tables(tool.sql):
             owner: str | None = None
             best_len = -1
             for key, sid in key_to_sid:
@@ -233,6 +233,31 @@ def _lint_tool_source_coverage(config: ConnectorConfig) -> list[LintIssue]:
                 )
             )
     return issues
+
+
+# Placeholders in a path template, e.g. ``/users/{user_id}`` -> ``user_id``.
+_PATH_PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
+
+
+def _forwarded_param_names(tool: object) -> set[str]:
+    """Param names a tool forwards verbatim to the upstream API.
+
+    For a REST passthrough (``rest_query_params``) or a WRITE/ACTION tool
+    (``api_mapping`` query/body/path params), the parameter name MUST equal the
+    upstream API's spelling — ``q`` and ``key`` are CKAN's and BoI's real param
+    names. Renaming them to satisfy a generic/too-short lint rule silently
+    breaks the forwarded call, so these names are exempt from those two rules.
+    """
+    names: set[str] = set()
+    names.update(getattr(tool, "rest_query_params", None) or [])
+    mapping = getattr(tool, "api_mapping", None)
+    if mapping is not None:
+        names.update(getattr(mapping, "query_params", None) or [])
+        names.update(getattr(mapping, "body_params", None) or [])
+        template = getattr(mapping, "path_template", None)
+        if template:
+            names.update(_PATH_PLACEHOLDER_RE.findall(template))
+    return names
 
 
 def _starts_with_verb(description: str) -> bool:
@@ -343,8 +368,11 @@ def lint_connector(
                 )
             )
 
+        # Names forwarded verbatim to the upstream API must keep the API's
+        # spelling — exempt them from the descriptive-name rules below.
+        forwarded = _forwarded_param_names(tool)
         for param in tool.parameters:
-            if len(param.name) <= 2:
+            if len(param.name) <= 2 and param.name not in forwarded:
                 issues.append(
                     LintIssue(
                         severity="WARN",
@@ -366,7 +394,11 @@ def lint_connector(
                     )
                 )
 
-            if len(param.name) > 2 and param.name.lower() in _GENERIC_PARAM_NAMES:
+            if (
+                len(param.name) > 2
+                and param.name.lower() in _GENERIC_PARAM_NAMES
+                and param.name not in forwarded
+            ):
                 issues.append(
                     LintIssue(
                         severity="WARN",

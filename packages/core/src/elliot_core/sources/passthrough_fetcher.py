@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
+import structlog
 
 from elliot_core.errors import SourceFetchError
 from elliot_core.http import SSRFError, safe_client, validate_url
@@ -16,6 +18,27 @@ from elliot_core.sources.api_fetcher import (
     _pinned_hosts,
 )
 from elliot_core.types.source import FetchResult, SourceConfig
+
+log = structlog.get_logger(__name__)
+
+
+def _constructed_url(target_url: str, caller_params: dict[str, Any]) -> str:
+    """The URL actually hit, for error messages and logs.
+
+    Merges the caller-supplied passthrough params over whatever query the base
+    URL already carries, so a 404 names the resource the agent *actually*
+    requested — not the base source's baked-in ``resource_id``/``limit`` (P2).
+
+    Only the caller's forwarded params are shown: injected auth query params
+    (the upstream API key) are deliberately omitted so the secret can never land
+    in an error string. The result is still passed through ``redact_url`` by the
+    caller as a second line of defense.
+    """
+    parts = urlsplit(target_url)
+    merged: dict[str, str] = dict(parse_qsl(parts.query))
+    merged.update({k: str(v) for k, v in caller_params.items() if v is not None})
+    query = urlencode(merged)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
 
 
 async def fetch_passthrough(
@@ -44,6 +67,10 @@ async def fetch_passthrough(
         raise SourceFetchError(f"Refusing to fetch: {exc.message}") from exc
     pinned_hosts = _pinned_hosts(target_url, target_ips)
 
+    # The URL the agent's params actually produced — what the error should name.
+    display_url = redact_url(_constructed_url(target_url, query_params))
+    log.debug("passthrough.request", method=source.method, url=display_url)
+
     try:
         async with safe_client(
             timeout=source.timeout_ms / 1000, pinned_hosts=pinned_hosts
@@ -57,11 +84,11 @@ async def fetch_passthrough(
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
         raise SourceFetchError(
-            f"HTTP {exc.response.status_code} from {redact_url(source.url)} (passthrough)"
+            f"HTTP {exc.response.status_code} from {display_url} (passthrough)"
         ) from exc
     except Exception as exc:
         raise SourceFetchError(
-            f"Network error fetching {redact_url(source.url)}: {type(exc).__name__}"
+            f"Network error fetching {display_url}: {type(exc).__name__}"
         ) from exc
 
     _enforce_response_size(resp, source.url)

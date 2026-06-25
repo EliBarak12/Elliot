@@ -113,11 +113,22 @@ def _flatten_obj(
     if parent_id is not None:
         row["_parent_id"] = parent_id
 
-    for key, value in obj.items():
-        col = safe_name(key)
+    # Resolve this object's column names up front and de-duplicate them BEFORE
+    # writing into ``row``. Two distinct source keys can normalize to the same
+    # safe name (e.g. two Hebrew headers both stripped to ``col`` under the old
+    # ASCII-only rule, or ``"Name"`` and ``"name "``). Assigning them one at a
+    # time silently overwrote the earlier column and destroyed its data (P1).
+    # ``deduplicate_names`` appends ``_2``/``_3`` so every column survives, and
+    # we surface a warning so the rename is never silent.
+    original_keys = list(obj.keys())
+    base_cols = [safe_name(k) for k in original_keys]
+    unique_cols = deduplicate_names(base_cols)
+    for orig_key, base_col, col in zip(original_keys, base_cols, unique_cols, strict=True):
+        if col != base_col:
+            _warn_column_renamed(warnings, warning_path, orig_key, col)
         _process_field(
             col,
-            value,
+            obj[orig_key],
             table_name,
             warning_path,
             depth,
@@ -130,6 +141,29 @@ def _flatten_obj(
         )
 
     return row
+
+
+def _warn_column_renamed(
+    warnings: list[FlattenWarning], path: str, original: str, final: str
+) -> None:
+    """Record a one-off warning that ``original`` was renamed to ``final``.
+
+    ``_flatten_obj`` runs once per row, so the same collision recurs on every
+    row of a table — de-dupe by (path, message) so the result carries a single
+    warning per renamed column, not one per row.
+    """
+    message = (
+        f"Column {original!r} was renamed to {final!r} because another column "
+        "normalized to the same name; both are preserved. Verify the mapping."
+    )
+    for existing in warnings:
+        if (
+            existing.type == "column_renamed"
+            and existing.path == path
+            and existing.message == message
+        ):
+            return
+    warnings.append(FlattenWarning(type="column_renamed", path=path, message=message))
 
 
 def _process_field(

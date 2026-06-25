@@ -463,3 +463,44 @@ def test_sensitive_field_in_passthrough_query_params_is_error() -> None:
     )
     issues = lint_connector(config, sensitive_fields=["ssn"])
     assert any(i.code == "SENSITIVE_FIELD_EXPOSED" and i.severity == "ERROR" for i in issues)
+
+
+def test_forwarded_passthrough_param_names_are_exempt() -> None:
+    # ``q`` and ``key`` are CKAN/BoI's real param names; renaming them breaks
+    # the forwarded call, so the name rules must not flag them (P2).
+    config = ConnectorConfig(
+        name="Test",
+        slug="test",
+        version="1.0.0",
+        sources=[SourceConfig(id="ckan", name="ckan", type="rest", url="https://x/api")],
+        tools=[
+            {  # type: ignore[list-item]
+                "id": "search_datasets",
+                "name": "Search datasets",
+                "description": "Search datasets via the CKAN passthrough.",
+                "category": "READ",
+                "source_ids": ["ckan"],
+                "rest_query_params": ["q", "key"],
+                "parameters": [
+                    {"name": "q", "type": "string", "description": "Full-text search (substring)."},
+                    {"name": "key", "type": "string", "description": "CKAN API key for the call."},
+                ],
+            }
+        ],
+    )
+    codes = {i.code for i in lint_connector(config)}
+    assert "PARAMETER_NAME_TOO_SHORT" not in codes
+    assert "PARAMETER_NAME_GENERIC" not in codes
+
+
+def test_non_forwarded_short_and_generic_names_still_flagged() -> None:
+    config = _make_connector(
+        sql="SELECT id FROM items WHERE id = :q AND k = :key",
+        parameters=[
+            {"name": "q", "type": "string", "description": "Some search value here."},
+            {"name": "key", "type": "string", "description": "Some generic key value."},
+        ],
+    )
+    codes = {i.code for i in lint_connector(config)}
+    assert "PARAMETER_NAME_TOO_SHORT" in codes  # q
+    assert "PARAMETER_NAME_GENERIC" in codes  # key

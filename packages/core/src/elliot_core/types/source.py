@@ -64,11 +64,13 @@ class AuthConfig(BaseModel):
 class PaginationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    strategy: Literal["cursor", "offset", "page", "link_header", "none"] = "none"
+    strategy: Literal["cursor", "offset", "page", "link_header", "odata", "none"] = "none"
     page_size: int = 100
     max_pages: int = 10
     cursor_field: str | None = None  # response field that holds the next cursor
-    next_url_field: str | None = None  # response field that holds the next page URL
+    # Response field that holds the next-page URL. For ``odata`` this defaults to
+    # the standard ``@odata.nextLink`` when left unset.
+    next_url_field: str | None = None
 
 
 class SourceConfig(BaseModel):

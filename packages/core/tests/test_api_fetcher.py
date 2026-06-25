@@ -358,3 +358,46 @@ async def test_fetch_endpoint_total_retry_budget(monkeypatch: pytest.MonkeyPatch
     assert "retry budget" in str(exc.value)
     # Budget 1 => initial request + exactly one retry, then fail fast.
     assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_odata_pagination_follows_next_link() -> None:
+    # P3: OData snapshots used to cap at the server page size because
+    # @odata.nextLink was ignored.
+    respx.get("https://api.example.com/items").mock(
+        side_effect=[
+            Response(
+                200,
+                json={
+                    "value": [{"id": 1}, {"id": 2}],
+                    "@odata.nextLink": "https://api.example.com/items?$skiptoken=2",
+                },
+            ),
+            Response(200, json={"value": [{"id": 3}]}),
+        ]
+    )
+    src = _source(
+        pagination=PaginationConfig(strategy="odata", max_pages=10),
+        data_path="value",
+    )
+    result = await fetch_endpoint(src, {})
+    assert [r["id"] for r in result.rows] == [1, 2, 3]
+    assert result.page_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_odata_next_link_without_strategy_warns() -> None:
+    respx.get("https://api.example.com/items").mock(
+        return_value=Response(
+            200,
+            json={
+                "value": [{"id": 1}],
+                "@odata.nextLink": "https://api.example.com/items?$skiptoken=2",
+            },
+        )
+    )
+    src = _source(pagination=PaginationConfig(strategy="none"), data_path="value")
+    result = await fetch_endpoint(src, {})
+    assert any("@odata.nextLink" in w for w in result.warnings)

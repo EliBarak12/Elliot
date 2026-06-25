@@ -101,3 +101,32 @@ def test_pagination_meta_has_more_surfaced():
     meta = _extract_pagination_meta(data, Headers(), _source(pagination=pg))
     assert meta["has_more"] is True
     assert meta["count"] == 50
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_passthrough_error_reports_constructed_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    # P2: a failed passthrough must name the URL the caller's params produced
+    # (overridden resource_id), not the base source's baked-in one — and must
+    # never leak the injected auth key.
+    from elliot_core.types.source import AuthConfig
+
+    monkeypatch.setenv("CKAN_KEY", "super-secret-123")
+    auth = AuthConfig(type="api_key", query_param="key", secret_key="{{ env:CKAN_KEY }}")
+    src = SourceConfig(
+        id="ckan",
+        name="ckan",
+        type="rest",
+        url="https://api.example.com/search?resource_id=BAKED&limit=5",
+        auth=auth,
+        pagination=PaginationConfig(),
+    )
+    respx.get("https://api.example.com/search").mock(return_value=Response(404))
+
+    with pytest.raises(SourceFetchError) as excinfo:
+        await fetch_passthrough(src, {}, {"resource_id": "REAL-XYZ", "limit": 100})
+
+    msg = str(excinfo.value)
+    assert "REAL-XYZ" in msg
+    assert "BAKED" not in msg
+    assert "super-secret-123" not in msg

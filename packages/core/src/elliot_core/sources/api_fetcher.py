@@ -287,6 +287,21 @@ async def fetch_endpoint(
                     "response as a single row. Set the source 'data_path' to the records array "
                     "(e.g. 'result.results' for CKAN-style APIs)."
                 )
+            # OData snapshots silently truncate at the server page size unless
+            # the next link is followed. If we see one but aren't configured to
+            # follow it, say so instead of shipping a partial snapshot.
+            if (
+                page_count == 0
+                and pagination.strategy != "odata"
+                and isinstance(data, dict)
+                and "@odata.nextLink" in data
+            ):
+                warnings.append(
+                    "Response has an '@odata.nextLink' but the source pagination strategy is "
+                    f"'{pagination.strategy}', so only the first page was fetched. Set the "
+                    "source pagination strategy to 'odata' to follow it and avoid a truncated "
+                    "snapshot."
+                )
             all_rows.extend(rows)
             page_count += 1
 
@@ -324,6 +339,17 @@ async def fetch_endpoint(
                     break
             elif pagination.strategy == "link_header":
                 next_url = _parse_link_next(resp.headers.get("link", ""))
+                if not next_url:
+                    break
+            elif pagination.strategy == "odata":
+                # OData v4 returns the next page as an absolute URL under
+                # ``@odata.nextLink`` (overridable). Without following it the
+                # snapshot silently capped at the server's page size (~100 rows).
+                next_url = (
+                    data.get(pagination.next_url_field or "@odata.nextLink")
+                    if isinstance(data, dict)
+                    else None
+                )
                 if not next_url:
                     break
             else:

@@ -11,11 +11,12 @@ from elliot_core.errors import SourceFetchError
 from elliot_core.http import SSRFError, safe_client, validate_url
 from elliot_core.redaction import redact_url
 from elliot_core.sources.api_fetcher import (
-    _build_auth_headers,
     _build_auth_query_params,
     _enforce_response_size,
     _extract_rows,
     _pinned_hosts,
+    _request_headers,
+    _split_params_and_body,
 )
 from elliot_core.types.source import FetchResult, SourceConfig
 
@@ -53,9 +54,12 @@ async def fetch_passthrough(
     Pagination metadata is extracted using the field names declared in
     source.pagination (cursor_field, next_url_field) so nothing is hardcoded.
     """
-    headers = _build_auth_headers(source, secrets)
-    base_params: dict[str, Any] = dict(_build_auth_query_params(source, secrets))
-    base_params.update({k: v for k, v in query_params.items() if v is not None})
+    headers = _request_headers(source, secrets)
+    # Forwarded params land on the query string by default, or in the JSON body
+    # when the source declares forward_params_in="body" (a body-driven API).
+    base_params, request_body = _split_params_and_body(
+        source, dict(_build_auth_query_params(source, secrets)), query_params
+    )
 
     target_url = source.url or ""
     # SSRF DNS-rebinding defense: validate the URL and pin the client's
@@ -68,7 +72,11 @@ async def fetch_passthrough(
     pinned_hosts = _pinned_hosts(target_url, target_ips)
 
     # The URL the agent's params actually produced — what the error should name.
-    display_url = redact_url(_constructed_url(target_url, query_params))
+    # In body mode the forwarded params are not on the URL, so don't show them
+    # there: only the params that truly went to the query string are displayed.
+    params_went_to_body = source.method != "GET" and source.forward_params_in == "body"
+    display_params = {} if params_went_to_body else query_params
+    display_url = redact_url(_constructed_url(target_url, display_params))
     log.debug("passthrough.request", method=source.method, url=display_url)
 
     try:
@@ -79,6 +87,7 @@ async def fetch_passthrough(
                 method=source.method,
                 url=target_url,
                 params=base_params or None,
+                json=request_body,
                 headers=headers,
             )
         resp.raise_for_status()

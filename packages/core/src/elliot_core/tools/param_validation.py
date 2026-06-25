@@ -65,6 +65,24 @@ def coerce_value(val: Any, typ: str) -> Any:
         if isinstance(val, (int, float)):
             return bool(val)
         raise ElliotError("INVALID_PARAM_TYPE", f"Expected boolean, got: {val!r}")
+    if typ == "object":
+        # A dynamic-key map (e.g. cart items {product_id: qty}). Accept a dict
+        # as-is, or a JSON object string and parse it. Anything else is an error
+        # so a wrong type doesn't silently serialize into the request body.
+        if isinstance(val, dict):
+            return val
+        if isinstance(val, str):
+            import json
+
+            try:
+                parsed = json.loads(val)
+            except (ValueError, TypeError) as exc:
+                raise ElliotError(
+                    "INVALID_PARAM_TYPE", f"Expected a JSON object, got: {val!r}"
+                ) from exc
+            if isinstance(parsed, dict):
+                return parsed
+        raise ElliotError("INVALID_PARAM_TYPE", f"Expected object (map), got: {val!r}")
     if typ in ("string", "date"):
         # Reject silent int→str coercion: previously `country_summary({"iso": 99})`
         # turned 99 into "99", bound it to a string SQL param, matched nothing,

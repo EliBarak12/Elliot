@@ -327,6 +327,46 @@ def test_discover_source_api_success(mcp: FastMCP, session: ElliotSession):
     assert result["table_name"] == "api_items"
 
 
+def test_discover_source_skip_probe_registers_without_fetch(mcp: FastMCP, session: ElliotSession):
+    """skip_probe registers a REST source without a build-time fetch (F5): a
+    body/credential-gated endpoint can be modeled so passthrough/WRITE tools can
+    be built against it. fetch_endpoint must never be called."""
+    from unittest.mock import AsyncMock, patch
+
+    with patch(
+        "elliot_mcp_plugin.tools.source_tools.fetch_endpoint",
+        new=AsyncMock(side_effect=AssertionError("must not fetch when skip_probe=True")),
+    ):
+        result = _tool(mcp, "elliot_discover_source")(
+            source_type="rest",
+            config={
+                "url": "https://www.example.com/api/catalog",
+                "method": "POST",
+                "forward_params_in": "body",
+            },
+            name="rami_catalog",
+            skip_probe=True,
+        )
+    assert "error" not in result, result
+    assert result["registered"] is True
+    assert result["probed"] is False
+    assert result["row_count"] is None
+    sid = result["source_id"]
+    assert sid in session.sources
+    assert session.sources[sid].forward_params_in == "body"
+    assert session.sources[sid].method == "POST"
+
+
+def test_discover_source_skip_probe_rejects_non_rest(mcp: FastMCP, tmp_path: Path):
+    result = _tool(mcp, "elliot_discover_source")(
+        source_type="file",
+        config={"path": str(tmp_path / "x.csv")},
+        name="x",
+        skip_probe=True,
+    )
+    assert _is_error(result)
+
+
 def test_discover_source_db_success(mcp: FastMCP):
     from elliot_core.types.source import FetchResult
 

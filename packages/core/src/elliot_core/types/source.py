@@ -82,11 +82,31 @@ class SourceConfig(BaseModel):
 
     # REST
     url: str | None = None
-    method: Literal["GET", "POST"] = "GET"
+    method: Literal["GET", "POST", "PUT", "PATCH"] = "GET"
     auth: AuthConfig | None = None
     pagination: PaginationConfig = PaginationConfig()
     data_path: str | None = None  # jmespath to extract list from response
     timeout_ms: int = 30_000
+    # Static request headers sent on every call to this source, ON TOP of the
+    # single ``auth`` scheme above. This is what lets a source carry MORE than
+    # one credential at once (e.g. a Bearer token via ``auth`` plus a custom
+    # ``ecomtoken`` header and a session ``cookie`` here) and any non-secret
+    # framing the upstream demands (``locale``, ``content-type``). Each value
+    # may be a ``{{ env:VAR }}`` template so additional credentials never live
+    # in the connector file. A header named here always loses to the ``auth``
+    # header on a name clash, so it can't silently override real auth.
+    headers: dict[str, str] = Field(default_factory=dict)
+    # Static JSON request-body fields merged into every non-GET request. Combined
+    # with ``forward_params_in: "body"`` this expresses a body-driven API — the
+    # search term / store id / dynamic-key map land in the JSON body instead of
+    # the query string. Ignored for GET (a GET carries no body).
+    body: dict[str, Any] = Field(default_factory=dict)
+    # Where a tool's forwarded params (REST passthrough ``rest_query_params`` and
+    # the call-time params of a passthrough fetch) are placed:
+    #   * "query" — appended to the URL query string (the default, GET-style).
+    #   * "body"  — serialized into the JSON request body (POST/PUT/PATCH only),
+    #               for APIs that read their inputs from the body, not the URL.
+    forward_params_in: Literal["query", "body"] = "query"
 
     # DB (postgres / mysql)
     table: str | None = None

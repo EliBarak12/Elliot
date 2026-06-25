@@ -57,6 +57,55 @@ def test_to_mcp_tool_schema():
     assert "category" not in schema["inputSchema"]["required"]
 
 
+def test_object_param_schema_is_open_object():
+    """An object (dynamic-key map) param emits a JSON-Schema object with
+    additionalProperties so arbitrary keys (cart items {id: qty}) are valid."""
+    tool = ToolDefinition(
+        id="write_cart",
+        name="Write cart",
+        description="Add a map of items to the cart.",
+        category="WRITE",
+        source_ids=["src"],
+        api_mapping={"method": "POST", "path_template": "/cart", "body_params": ["items"]},
+        parameters=[
+            ParameterDefinition(name="items", type="object", required=True, description="map")
+        ],
+    )
+    schema = to_mcp_tool_schema(tool)
+    items = schema["inputSchema"]["properties"]["items"]
+    assert items["type"] == "object"
+    assert items["additionalProperties"] is True
+
+
+def test_source_with_headers_and_body_roundtrips():
+    """Custom headers, static body and forward_params_in survive serialize →
+    deserialize so a body-driven, multi-credential source stays intact."""
+    config = ConnectorConfig(
+        name="Catalog",
+        slug="catalog",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="src",
+                name="Source",
+                type="rest",
+                url="https://api.example.com/catalog",
+                method="POST",
+                forward_params_in="body",
+                headers={"ecomtoken": "{{ env:ECOMTOKEN }}"},
+                body={"store": "331"},
+            )
+        ],
+        tools=[],
+    )
+    restored = deserialize_connector(serialize_connector(config))
+    src = restored.sources[0]
+    assert src.method == "POST"
+    assert src.forward_params_in == "body"
+    assert src.headers == {"ecomtoken": "{{ env:ECOMTOKEN }}"}
+    assert src.body == {"store": "331"}
+
+
 def test_to_openai_function_structure():
     tool = _make_config().tools[0]
     fn = to_openai_function(tool)

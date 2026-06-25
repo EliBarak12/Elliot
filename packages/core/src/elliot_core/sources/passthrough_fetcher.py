@@ -22,7 +22,7 @@ from elliot_core.types.source import FetchResult, SourceConfig
 log = structlog.get_logger(__name__)
 
 
-def _constructed_url(target_url: str, caller_params: dict[str, Any]) -> str:
+def constructed_url(target_url: str, caller_params: dict[str, Any]) -> str:
     """The URL actually hit, for error messages and logs.
 
     Merges the caller-supplied passthrough params over whatever query the base
@@ -68,7 +68,7 @@ async def fetch_passthrough(
     pinned_hosts = _pinned_hosts(target_url, target_ips)
 
     # The URL the agent's params actually produced — what the error should name.
-    display_url = redact_url(_constructed_url(target_url, query_params))
+    display_url = redact_url(constructed_url(target_url, query_params))
     log.debug("passthrough.request", method=source.method, url=display_url)
 
     try:

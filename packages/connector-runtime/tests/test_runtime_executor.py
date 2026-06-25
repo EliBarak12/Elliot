@@ -14,6 +14,7 @@ from elliot_connector_runtime.executor import (
 )
 from elliot_core.types import (
     ConnectorConfig,
+    PaginationConfig,
     ParameterDefinition,
     ReturnField,
     SourceConfig,
@@ -1265,3 +1266,100 @@ async def test_executor_write_tool_handles_no_content() -> None:
     executor = ToolExecutor(connector, secrets={})
     result = await executor.execute(tool, {"order_id": "abc"})
     assert result.rows == [{"ok": True, "status_code": 204}]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_passthrough_error_reports_constructed_url_at_runtime() -> None:
+    # P2-c (runtime path): a failed passthrough call must name the resource the
+    # caller actually requested, not the base source's baked-in resource_id.
+    from elliot_core.errors import ElliotError
+
+    connector = ConnectorConfig(
+        name="DataStore",
+        slug="datastore",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="search",
+                name="Search",
+                type="rest",
+                url="https://api.example.com/search?resource_id=BAKED-05d14adb&limit=100",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="datastore_query",
+                name="Datastore query",
+                description="Query a datastore resource live.",
+                category="READ",
+                source_ids=["search"],
+                rest_query_params=["resource_id"],
+                parameters=[
+                    ParameterDefinition(
+                        name="resource_id", type="string", required=True, description="resource id"
+                    )
+                ],
+            )
+        ],
+        skills=[],
+    )
+    respx.get("https://api.example.com/search").mock(return_value=httpx.Response(404))
+    executor = ToolExecutor(connector, secrets={})
+
+    with pytest.raises(ElliotError) as excinfo:
+        await executor.execute(connector.tools[0], {"resource_id": "totally-bogus-id-xyz"})
+
+    exc = excinfo.value
+    assert exc.code == "UPSTREAM_FETCH_FAILED"
+    assert "totally-bogus-id-xyz" in exc.message
+    assert "BAKED-05d14adb" not in exc.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_executor_odata_pagination_follows_next_link() -> None:
+    # Parity with design-time api_fetcher: a published OData connector must
+    # follow @odata.nextLink instead of capping at the first page.
+    connector = ConnectorConfig(
+        name="OData",
+        slug="odata",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="things",
+                name="Things",
+                type="rest",
+                url="https://api.example.com/Things",
+                data_path="value",
+                table_name="things",
+                pagination=PaginationConfig(strategy="odata", max_pages=10),
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="list_things",
+                name="List things",
+                description="List things from the OData feed.",
+                category="READ",
+                source_ids=["things"],
+                sql="SELECT id FROM things",
+            )
+        ],
+        skills=[],
+    )
+    respx.get("https://api.example.com/Things").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json={
+                    "value": [{"id": 1}, {"id": 2}],
+                    "@odata.nextLink": "https://api.example.com/Things?$skiptoken=2",
+                },
+            ),
+            httpx.Response(200, json={"value": [{"id": 3}]}),
+        ]
+    )
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(connector.tools[0], {})
+    assert sorted(r["id"] for r in result.rows) == [1, 2, 3]

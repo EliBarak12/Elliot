@@ -52,6 +52,32 @@ _NO_CONNECTOR = ElliotError(
 )
 
 
+def _transcripts_to_judge(session: ElliotSession, scope: str) -> list[AuditTranscript]:
+    """Pick which transcripts the judge should score.
+
+    ``scope`` is ``"current"`` (default) or ``"all"``. ``"current"`` returns only
+    transcripts stamped with the session's current ``build_id`` — so a re-judge
+    after fixing tools reflects THIS build and isn't dragged down by stale
+    prior-build runs whose failures are already fixed (P2-d). Falls back to the
+    full pool when the session has no ``build_id`` (e.g. a legacy session), so
+    behaviour there is unchanged.
+    """
+    transcripts = session.audit_transcripts
+    if scope == "all" or not session.build_id:
+        return list(transcripts)
+    return [t for t in transcripts if t.build_id == session.build_id]
+
+
+def _no_current_transcripts_error(session: ElliotSession) -> ElliotError:
+    stale = len(session.audit_transcripts)
+    return ElliotError(
+        "NO_CURRENT_BUILD_TRANSCRIPTS",
+        f"No audit transcripts for the current build ({stale} from earlier "
+        "builds). Re-run the audit sub-agents against this build and submit "
+        "their transcripts, or pass scope='all' to judge every transcript.",
+    )
+
+
 def register_audit_tools(mcp: FastMCP, session: ElliotSession) -> None:
     @mcp.tool()
     def elliot_generate_audit_seeds(
@@ -108,18 +134,23 @@ def register_audit_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 json.loads(transcript_json) if isinstance(transcript_json, str) else transcript_json
             )
             transcript = AuditTranscript.model_validate(data)
+            # Stamp with the current build so the judge can score only this
+            # build's transcripts and ignore stale prior-build runs (P2-d).
+            transcript.build_id = session.build_id
             session.audit_transcripts.append(transcript)
             session.save()
             log.info(
                 "audit.transcript.submitted",
                 seed_id=transcript.seed_id,
                 calls=len(transcript.calls),
+                build_id=session.build_id,
                 total=len(session.audit_transcripts),
             )
             return {
                 "status": "submitted",
                 "seed_id": transcript.seed_id,
                 "calls_recorded": len(transcript.calls),
+                "build_id": session.build_id,
                 "transcripts_total": len(session.audit_transcripts),
             }
         except json.JSONDecodeError as exc:
@@ -158,12 +189,17 @@ def register_audit_tools(mcp: FastMCP, session: ElliotSession) -> None:
         return {"status": "cleared", "cleared": cleared}
 
     @mcp.tool()
-    def elliot_judge_audit() -> dict:  # type: ignore[type-arg]
-        """Judge all submitted transcripts and return a scored audit report.
+    def elliot_judge_audit(scope: str = "current") -> dict:  # type: ignore[type-arg]
+        """Judge submitted transcripts and return a scored audit report.
 
         Scores graded 1-10 dimensions and emits findings that cite the exact
         failing call. Fix the error-severity findings, rebuild, then re-run the
         audit until it passes.
+
+        ``scope`` defaults to ``"current"`` — only transcripts recorded against
+        the connector's CURRENT build are scored, so a re-judge after fixing
+        tools isn't dragged down by stale prior-build runs. Pass ``"all"`` to
+        score every submitted transcript regardless of build.
         """
         try:
             if session.connector is None:
@@ -174,9 +210,18 @@ def register_audit_tools(mcp: FastMCP, session: ElliotSession) -> None:
                     "No transcripts submitted — run the audit sub-agents and "
                     "submit their transcripts first.",
                 )
-            report = judge_audit(session.audit_transcripts, session.connector)
+            scoped = _transcripts_to_judge(session, scope)
+            if not scoped:
+                raise _no_current_transcripts_error(session)
+            report = judge_audit(scoped, session.connector)
             saved = save_audit_report(report, _audit_results_dir(session))
-            log.info("audit.judged", passed=report.passed, path=str(saved))
+            log.info(
+                "audit.judged",
+                passed=report.passed,
+                scope=scope,
+                judged=len(scoped),
+                path=str(saved),
+            )
             result = report.model_dump()
             result["report_path"] = str(saved)
             return result
@@ -187,7 +232,7 @@ def register_audit_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
-    def elliot_request_llm_judgment() -> dict:  # type: ignore[type-arg]
+    def elliot_request_llm_judgment(scope: str = "current") -> dict:  # type: ignore[type-arg]
         """Return the LLM-judge brief for YOU, the calling agent, to grade.
 
         Elliot never calls a model — you are the LLM judge. This hands you the
@@ -195,6 +240,9 @@ def register_audit_tools(mcp: FastMCP, session: ElliotSession) -> None:
         rubric dimensions, and the exact JSON shape to send back. Read it, rate
         each dimension 1-10 with a rationale, note any qualitative findings, then
         call elliot_submit_llm_judgment with your judgement.
+
+        ``scope`` defaults to ``"current"`` (only this build's transcripts); pass
+        ``"all"`` to include every submitted transcript.
         """
         try:
             if session.connector is None:
@@ -205,8 +253,11 @@ def register_audit_tools(mcp: FastMCP, session: ElliotSession) -> None:
                     "No transcripts submitted — run the audit sub-agents and "
                     "submit their transcripts first.",
                 )
-            prompt = build_llm_judge_prompt(session.audit_transcripts, session.connector)
-            log.info("audit.llm_judge.requested", transcripts=len(session.audit_transcripts))
+            scoped = _transcripts_to_judge(session, scope)
+            if not scoped:
+                raise _no_current_transcripts_error(session)
+            prompt = build_llm_judge_prompt(scoped, session.connector)
+            log.info("audit.llm_judge.requested", scope=scope, transcripts=len(scoped))
             return prompt
         except ElliotError as exc:
             return to_mcp_error_content(exc)
@@ -217,6 +268,7 @@ def register_audit_tools(mcp: FastMCP, session: ElliotSession) -> None:
     @mcp.tool()
     def elliot_submit_llm_judgment(
         judgment_json: dict | str,  # type: ignore[type-arg]
+        scope: str = "current",
     ) -> dict:  # type: ignore[type-arg]
         """Submit your LLM-judge judgement and get the combined audit report.
 
@@ -226,6 +278,10 @@ def register_audit_tools(mcp: FastMCP, session: ElliotSession) -> None:
         Elliot runs the deterministic judge, folds your judgement in (your
         error-severity findings can fail an otherwise-passing connector), saves
         the combined report, and returns it.
+
+        ``scope`` defaults to ``"current"`` (score only this build's
+        transcripts); pass ``"all"`` to score every submitted transcript. Use
+        the SAME scope you passed to elliot_request_llm_judgment.
         """
         try:
             if session.connector is None:
@@ -235,9 +291,12 @@ def register_audit_tools(mcp: FastMCP, session: ElliotSession) -> None:
                     "NO_TRANSCRIPTS",
                     "No transcripts submitted — run the audit first.",
                 )
+            scoped = _transcripts_to_judge(session, scope)
+            if not scoped:
+                raise _no_current_transcripts_error(session)
             data = json.loads(judgment_json) if isinstance(judgment_json, str) else judgment_json
             judgment = LlmJudgment.model_validate(data)
-            report = judge_audit(session.audit_transcripts, session.connector)
+            report = judge_audit(scoped, session.connector)
             combined = merge_llm_judgment(report, judgment)
 
             results_dir = _audit_results_dir(session)

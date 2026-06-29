@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import subprocess
 import sys
@@ -17,10 +18,24 @@ from mcp.server.fastmcp import FastMCP
 
 from elliot_core.connector.serializer import serialize_connector
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.types.connector import ConnectorConfig
 from elliot_core.types.tool import ToolDefinition
 from elliot_mcp_plugin.session import ElliotSession
 
 log = structlog.get_logger(__name__)
+
+
+def _connector_build_id(config: ConnectorConfig) -> str:
+    """Stable short id for a built connector's content.
+
+    A re-judge should reflect the connector that's loaded NOW, so audit
+    transcripts are tagged with the build they ran against and the judge scopes
+    to the current build. The id is a hash of the serialized spec, so any change
+    to a tool (or its SQL/params) yields a new id and old transcripts fall out
+    of scope; an identical rebuild keeps the same id.
+    """
+    raw = config.model_dump_json().encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:12]
 
 
 def _build_table_warnings(
@@ -206,11 +221,16 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             ).build(sources=sources_named, tools=tools_remapped, skills=selected_skills)
 
             session.connector = config
+            session.build_id = _connector_build_id(config)
+            # Persist so a later turn/session restores the built connector (the
+            # cloud/judge tools otherwise report NO_CONNECTOR until a rebuild).
+            session.save()
             log.info(
                 "connector.built",
                 name=name,
                 tools=len(selected_tools),
                 skills=len(selected_skills),
+                build_id=session.build_id,
             )
             result = {
                 "status": "built",

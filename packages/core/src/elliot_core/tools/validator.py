@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from elliot_core.errors import ElliotError
+from elliot_core.sql import extract_sql_params
 from elliot_core.types.tool import SkillDefinition, ToolDefinition
 
 _SNAKE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -23,6 +24,7 @@ def validate_tool_definition(data: dict[str, Any]) -> ToolDefinition:
     _check_description(tool)
     _check_category_requirements(tool)
     _check_filter_param_refs(tool)
+    _check_sql_bind_params(tool)
     return tool
 
 
@@ -64,6 +66,31 @@ def _check_filter_param_refs(tool: ToolDefinition) -> None:
                     f"Tool '{tool.id}': filter condition references undefined "
                     f"parameter '{cond.parameter_name}'",
                 )
+
+
+def _check_sql_bind_params(tool: ToolDefinition) -> None:
+    """Every ``:name`` the SQL binds must be a declared parameter.
+
+    Without this, a tool whose SQL references ``:foo`` with no matching entry in
+    ``parameters`` validates fine and only fails at call time with SQLite's
+    cryptic "You did not supply a value for binding parameter :foo" — a broken
+    tool that passes validation and breaks in production. ``elliot_create_tool``
+    already guards this in the MCP layer; checking it here means
+    ``elliot_validate_tool`` (and every other caller of the core validator)
+    catches it too.
+    """
+    if not tool.sql:
+        return
+    declared = {p.name for p in tool.parameters}
+    undeclared = [name for name in extract_sql_params(tool.sql) if name not in declared]
+    if undeclared:
+        raise ElliotError(
+            "INVALID_TOOL",
+            f"Tool '{tool.id}': SQL references undeclared bind parameter(s): "
+            f"{', '.join(undeclared)}. Declare each in `parameters` "
+            "(or remove the ':' reference).",
+            detail={"undeclared": undeclared, "declared": sorted(declared)},
+        )
 
 
 def validate_skill_definition(data: dict[str, Any]) -> SkillDefinition:

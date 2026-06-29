@@ -34,6 +34,10 @@ class ElliotSession:
         self.runtime_log_path: Path | None = None
         self.tool_sql: dict[str, str] = {}
         self.connector: ConnectorConfig | None = None
+        # Stable id of the connector the last ``build_connector`` produced. Used
+        # to scope audit transcripts to the build they were recorded against so
+        # a re-judge reflects the CURRENT connector, not stale prior-build runs.
+        self.build_id: str = ""
         # Onboarding interview answers + Petri-style audit transcripts.
         self.product_intent: ProductIntent | None = None
         self.audit_transcripts: list[AuditTranscript] = []
@@ -58,6 +62,11 @@ class ElliotSession:
         for sk in data.get("skills", []):
             self.registry.add_skill(SkillDefinition.model_validate(sk))
         self.tool_sql = data.get("tool_sql", {})
+        # Restore the built connector so cloud / judge tools don't report
+        # NO_CONNECTOR after a reload even though sources+tools persisted.
+        if data.get("connector"):
+            self.connector = ConnectorConfig.model_validate(data["connector"])
+        self.build_id = data.get("build_id", "")
         if data.get("product_intent"):
             self.product_intent = ProductIntent.model_validate(data["product_intent"])
         self.audit_transcripts = [
@@ -76,6 +85,8 @@ class ElliotSession:
                 "tools": [t.model_dump() for t in self.registry.get_all()],
                 "skills": [s.model_dump() for s in self.registry.get_all_skills()],
                 "tool_sql": self.tool_sql,
+                "connector": (self.connector.model_dump(mode="json") if self.connector else None),
+                "build_id": self.build_id,
                 "product_intent": (
                     self.product_intent.model_dump() if self.product_intent else None
                 ),
@@ -149,6 +160,7 @@ class ElliotSession:
         """
         had_connector = self.connector is not None
         self.connector = None
+        self.build_id = ""
         path = self.workspace._dir / "connector.json"
         removed_file = False
         try:
@@ -189,6 +201,7 @@ class ElliotSession:
         self.tool_sql = {}
         self.product_context = None
         self.connector = None
+        self.build_id = ""
         self.product_intent = None
         self.audit_transcripts = []
         self.load()

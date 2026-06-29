@@ -228,3 +228,39 @@ def test_audit_results_dir_defaults_under_workspace(tmp_path: Path, monkeypatch)
     assert _audit_results_dir(session) == expected
     # And the resolved path lives under the workspace, not the process cwd.
     assert str(expected).startswith(str(tmp_path))
+
+
+def test_submit_stamps_current_build_id(mcp: FastMCP, session: ElliotSession) -> None:
+    session.build_id = "build-abc123"
+    _tool(mcp, "elliot_submit_audit_transcript")(_transcript())
+    assert session.audit_transcripts[0].build_id == "build-abc123"
+
+
+def test_judge_scopes_to_current_build(mcp: FastMCP, session: ElliotSession) -> None:
+    from elliot_core.audit.models import AuditTranscript
+
+    session.connector = _connector()
+    session.build_id = "build-new"
+    # A stale transcript from a previous build must not count by default.
+    session.audit_transcripts.append(
+        AuditTranscript(seed_id="stale", task="old", build_id="build-old")
+    )
+    _tool(mcp, "elliot_submit_audit_transcript")(_transcript("fresh"))
+
+    current = _tool(mcp, "elliot_judge_audit")()  # default scope="current"
+    assert current["transcript_count"] == 1
+
+    every = _tool(mcp, "elliot_judge_audit")(scope="all")
+    assert every["transcript_count"] == 2
+
+
+def test_judge_errors_when_only_stale_transcripts(mcp: FastMCP, session: ElliotSession) -> None:
+    from elliot_core.audit.models import AuditTranscript
+
+    session.connector = _connector()
+    session.build_id = "build-new"
+    session.audit_transcripts.append(
+        AuditTranscript(seed_id="stale", task="old", build_id="build-old")
+    )
+    res = _tool(mcp, "elliot_judge_audit")()
+    assert "NO_CURRENT_BUILD_TRANSCRIPTS" in res.get("text", "")

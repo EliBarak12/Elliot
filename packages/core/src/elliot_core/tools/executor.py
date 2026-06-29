@@ -211,13 +211,18 @@ class ToolExecutor:
 
         url = base_url + path
         query = {k: params[k] for k in mapping.query_params if k in params}
-        body = {k: params[k] for k in mapping.body_params if k in params}
+        # The source's static `body` is the base (carries fixed fields the
+        # endpoint always wants, e.g. {"store": "331"}); the tool's mapped
+        # body_params override it per call.
+        body = {**(source.body or {}), **{k: params[k] for k in mapping.body_params if k in params}}
 
         import httpx
 
-        from elliot_core.sources.api_fetcher import _build_auth_headers
+        from elliot_core.sources.api_fetcher import _request_headers
 
-        headers = _build_auth_headers(source, self._secrets)
+        # Full header set: the source's custom headers (extra credentials like
+        # `ecomtoken` / `cookie`, content framing) with the auth header on top.
+        headers = _request_headers(source, self._secrets)
 
         try:
             async with httpx.AsyncClient(timeout=source.timeout_ms / 1000) as client:

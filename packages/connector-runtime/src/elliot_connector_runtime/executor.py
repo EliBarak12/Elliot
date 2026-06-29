@@ -480,7 +480,7 @@ class ToolExecutor:
         from elliot_core.sources.passthrough_fetcher import constructed_url
 
         url = _interpolate(source.url or "", arguments)
-        headers = _build_auth_headers(source.auth, self._secrets) if source.auth else {}
+        headers = _request_headers(source, self._secrets)
         pagination = source.pagination
         all_rows: list[dict[str, Any]] = []
         page = 1
@@ -515,9 +515,12 @@ class ToolExecutor:
                 except SSRFError as exc:
                     raise ExecutorError(f"Refusing to fetch REST source: {exc.message}") from exc
 
-                # Passthrough query params (forwarded from the tool call) are the
-                # base; pagination params are layered on top.
-                params: dict[str, Any] = dict(extra_params or {})
+                # Passthrough params (forwarded from the tool call) go to the
+                # query string by default, or into the JSON body when the source
+                # declares forward_params_in="body" (a body-driven API). The
+                # source's static `body` rides along on every non-GET request.
+                # Pagination params are always layered on the query string.
+                params, request_body = _split_params_and_body(source, {}, extra_params or {})
                 if pagination.strategy == "offset":
                     params["offset"] = offset
                     params["limit"] = pagination.page_size
@@ -526,7 +529,15 @@ class ToolExecutor:
                 elif pagination.strategy == "cursor" and cursor:
                     params["cursor"] = cursor
 
-                resp = await client.get(request_url, headers=headers, params=params or None)
+                # Honor the source's HTTP method (a POST search source was
+                # previously always sent as GET, dropping its body entirely).
+                resp = await client.request(
+                    source.method,
+                    request_url,
+                    headers=headers,
+                    params=params or None,
+                    json=request_body,
+                )
                 try:
                     resp.raise_for_status()
                 except httpx.HTTPStatusError as exc:
@@ -781,8 +792,12 @@ class ToolExecutor:
         path = _interpolate(mapping.path_template or "", arguments)
         url = base_url + path
         query = {k: arguments[k] for k in mapping.query_params if arguments.get(k) is not None}
-        body = {k: arguments[k] for k in mapping.body_params if arguments.get(k) is not None}
-        headers = _build_auth_headers(source.auth, self._secrets) if source.auth else {}
+        # Static source `body` is the base; mapped body_params override per call.
+        body = {
+            **(source.body or {}),
+            **{k: arguments[k] for k in mapping.body_params if arguments.get(k) is not None},
+        }
+        headers = _request_headers(source, self._secrets)
 
         try:
             initial_ips = validate_url(url)
@@ -967,19 +982,75 @@ def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
     return secrets.get(key) or secrets.get(key.lower()) or key
 
 
+def _sanitize_header_value(value: str) -> str:
+    """Strip CR/LF and surrounding whitespace from an outbound header value.
+
+    A credential with a stray newline makes httpx/h11 reject the request with
+    ``LocalProtocolError`` before it leaves the worker (report finding F6) and
+    is a header-injection vector; stripping it lets the request reach upstream.
+    """
+    return value.strip().replace("\r", "").replace("\n", "")
+
+
 def _build_auth_headers(auth: AuthConfig, secrets: dict[str, str]) -> dict[str, str]:
     secret_val = _resolve_secret(auth.secret_key, secrets)
     if auth.type == "api_key":
         header = auth.header_name or "X-Api-Key"
-        return {header: secret_val}
+        return {header: _sanitize_header_value(secret_val)}
     if auth.type in ("bearer", "oauth2"):
         # oauth2: the per-user access token has been injected into `secrets`
         # under auth.secret_key by the credential resolver; carry it as a
         # standard bearer token on every upstream request.
-        return {"Authorization": f"Bearer {secret_val}"}
+        return {"Authorization": f"Bearer {_sanitize_header_value(secret_val)}"}
     if auth.type == "basic":
         import base64
 
         encoded = base64.b64encode(secret_val.encode()).decode()
         return {"Authorization": f"Basic {encoded}"}
     return {}
+
+
+def _build_custom_headers(source: SourceConfig, secrets: dict[str, str]) -> dict[str, str]:
+    """Resolve a source's static custom headers (extra credentials / framing).
+
+    Values may be ``{{ env:VAR }}`` templates resolved through the runtime's own
+    ``_resolve_secret`` — so the cloud host-env gating
+    (``ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS``) still applies and a tenant connector
+    cannot pull the server's environment into a header.
+    """
+    out: dict[str, str] = {}
+    for name, raw in (source.headers or {}).items():
+        clean_name = name.strip().replace("\r", "").replace("\n", "")
+        if clean_name:
+            out[clean_name] = _sanitize_header_value(_resolve_secret(raw, secrets))
+    return out
+
+
+def _request_headers(source: SourceConfig, secrets: dict[str, str]) -> dict[str, str]:
+    """Static custom headers with the auth header layered on top (auth wins)."""
+    headers = _build_custom_headers(source, secrets)
+    if source.auth:
+        headers.update(_build_auth_headers(source.auth, secrets))
+    return headers
+
+
+def _split_params_and_body(
+    source: SourceConfig,
+    base_query: dict[str, Any],
+    forwarded: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Route forwarded params to the query string or the JSON body per the
+    source's ``forward_params_in``, attaching the static ``body`` on non-GET.
+
+    Mirrors :func:`elliot_core.sources.api_fetcher._split_params_and_body` so
+    the published runtime frames body-driven requests exactly as design-time
+    preview does."""
+    clean_forwarded = {k: v for k, v in forwarded.items() if v is not None}
+    query = dict(base_query)
+    has_body_method = source.method != "GET"
+    body: dict[str, Any] = dict(source.body or {}) if has_body_method else {}
+    if has_body_method and source.forward_params_in == "body":
+        body.update(clean_forwarded)
+    else:
+        query.update(clean_forwarded)
+    return query, (body or None)

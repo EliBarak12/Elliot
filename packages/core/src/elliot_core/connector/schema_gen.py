@@ -10,6 +10,7 @@ _TYPE_MAP: dict[str, str] = {
     "number": "number",
     "boolean": "boolean",
     "date": "string",
+    "object": "object",
 }
 
 
@@ -20,6 +21,9 @@ def _param_schema(p: Any) -> dict[str, Any]:
     }
     if p.type == "date":
         schema["format"] = "date"
+    if p.type == "object":
+        # Dynamic-key map: arbitrary string keys, any JSON value.
+        schema["additionalProperties"] = True
     if p.enum is not None:
         schema["enum"] = p.enum
     if p.default is not None:

@@ -123,6 +123,19 @@ def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
     return secrets.get(key, key)
 
 
+def _sanitize_header_value(value: str) -> str:
+    """Strip CR/LF and surrounding whitespace from an outbound header value.
+
+    A credential pasted with a trailing newline (or any embedded CR/LF) makes
+    httpx/h11 reject the request with ``LocalProtocolError`` before it leaves
+    the client — the exact symptom report finding F6 describes for
+    ``auth: bearer`` + ``method: POST``. Stripping it here turns a cryptic
+    client-side crash into a request that actually reaches the upstream (and
+    closes a header-injection vector for templated header values).
+    """
+    return value.strip().replace("\r", "").replace("\n", "")
+
+
 def _build_auth_headers(
     config: SourceConfig,
     secrets: dict[str, str],
@@ -136,16 +149,71 @@ def _build_auth_headers(
     # access token to fetch sample rows. It only applies to bearer/oauth2 and is
     # never persisted into the connector file.
     if auth_token_override and auth.type in ("bearer", "oauth2"):
-        return {"Authorization": f"Bearer {auth_token_override}"}
+        return {"Authorization": f"Bearer {_sanitize_header_value(auth_token_override)}"}
     secret = _resolve_secret(auth.secret_key, secrets)
     if auth.type in ("bearer", "oauth2"):
-        return {"Authorization": f"Bearer {secret}"}
+        return {"Authorization": f"Bearer {_sanitize_header_value(secret)}"}
     if auth.type == "api_key" and auth.header_name:
-        return {auth.header_name: secret}
+        return {auth.header_name: _sanitize_header_value(secret)}
     if auth.type == "basic":
         encoded = base64.b64encode(secret.encode()).decode()
         return {"Authorization": f"Basic {encoded}"}
     return {}
+
+
+def _build_custom_headers(config: SourceConfig, secrets: dict[str, str]) -> dict[str, str]:
+    """Resolve a source's static custom headers into concrete request headers.
+
+    Each value may be a ``{{ env:VAR }}`` template so an extra credential
+    (``ecomtoken``, a session ``cookie``) is resolved from secrets at call time,
+    never stored in the connector file. Values are sanitized (CR/LF stripped) so
+    a credential with a stray newline can't crash the request or inject headers.
+    """
+    out: dict[str, str] = {}
+    for name, raw in (config.headers or {}).items():
+        clean_name = name.strip().replace("\r", "").replace("\n", "")
+        if clean_name:
+            out[clean_name] = _sanitize_header_value(_resolve_secret(raw, secrets))
+    return out
+
+
+def _request_headers(
+    config: SourceConfig,
+    secrets: dict[str, str],
+    auth_token_override: str | None = None,
+) -> dict[str, str]:
+    """Full outbound header set: static custom headers with the ``auth`` header
+    layered on top, so the configured auth scheme always wins a name clash."""
+    headers = _build_custom_headers(config, secrets)
+    headers.update(_build_auth_headers(config, secrets, auth_token_override))
+    return headers
+
+
+def _split_params_and_body(
+    config: SourceConfig,
+    base_query: dict[str, Any],
+    forwarded: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Decide where a source's forwarded params and static body go on the wire.
+
+    Returns ``(query_params, json_body)``. ``forwarded`` are a tool's call-time
+    params; ``base_query`` is whatever already belongs on the query string
+    (e.g. injected auth query params). When the source declares
+    ``forward_params_in == "body"`` (and the method carries a body) the
+    forwarded params are serialized into the JSON body alongside the source's
+    static ``body``; otherwise they stay on the query string and only the
+    static ``body`` (if any) is sent. ``json_body`` is ``None`` for GET and
+    when there's nothing to send.
+    """
+    clean_forwarded = {k: v for k, v in forwarded.items() if v is not None}
+    query = dict(base_query)
+    has_body_method = config.method != "GET"
+    body: dict[str, Any] = dict(config.body or {}) if has_body_method else {}
+    if has_body_method and config.forward_params_in == "body":
+        body.update(clean_forwarded)
+    else:
+        query.update(clean_forwarded)
+    return query, (body or None)
 
 
 def _build_auth_query_params(config: SourceConfig, secrets: dict[str, str]) -> dict[str, str]:
@@ -172,13 +240,14 @@ async def fetch_endpoint(
     auth_token_override: str | None = None,
     extra_params: dict[str, Any] | None = None,
 ) -> FetchResult:
-    headers = _build_auth_headers(config, secrets, auth_token_override)
-    base_params: dict[str, Any] = _build_auth_query_params(config, secrets)
-    # Call-time query params (REST passthrough tools forward their declared
-    # rest_query_params here on every call). Applied to every paginated request
-    # below alongside the auth params.
-    if extra_params:
-        base_params.update({k: v for k, v in extra_params.items() if v is not None})
+    headers = _request_headers(config, secrets, auth_token_override)
+    # Forwarded call-time params (REST passthrough tools send their declared
+    # rest_query_params here every call) go to the query string by default, or
+    # into the JSON body when the source declares forward_params_in="body". The
+    # source's static `body` (if any) rides along on every non-GET request.
+    base_params, request_body = _split_params_and_body(
+        config, _build_auth_query_params(config, secrets), extra_params or {}
+    )
     pagination = config.pagination
     all_rows: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -234,6 +303,7 @@ async def fetch_endpoint(
                         method=config.method,
                         url=request_url,
                         params=request_params or None,
+                        json=request_body,
                         headers=headers,
                     )
                 except httpx.TransportError as exc:

@@ -10,9 +10,13 @@ from elliot_core.errors import SourceFetchError
 from elliot_core.sources.api_fetcher import (
     _build_auth_headers,
     _build_auth_query_params,
+    _build_custom_headers,
     _extract_rows,
     _parse_link_next,
+    _request_headers,
     _resolve_secret,
+    _sanitize_header_value,
+    _split_params_and_body,
     fetch_endpoint,
 )
 from elliot_core.types.source import AuthConfig, PaginationConfig, SourceConfig
@@ -108,6 +112,96 @@ async def test_fetch_endpoint_uses_auth_token_override():
     auth = AuthConfig(type="oauth2", secret_key="{{ user_oauth:acme }}")
     await fetch_endpoint(_source(auth=auth), {}, auth_token_override="live-token")
     assert route.calls.last.request.headers["Authorization"] == "Bearer live-token"
+
+
+# ── header sanitization (F6) + custom headers + body framing ──────────────────
+
+
+def test_sanitize_header_value_strips_crlf_and_whitespace():
+    assert _sanitize_header_value("  tok123\n") == "tok123"
+    assert _sanitize_header_value("a\r\nb") == "ab"
+
+
+def test_bearer_secret_with_trailing_newline_is_sanitized():
+    # F6: a token resolved with a stray newline previously made httpx/h11 raise
+    # LocalProtocolError before the request left the client. Sanitizing the
+    # header value turns that crash into a well-formed Authorization header.
+    auth = AuthConfig(type="bearer", secret_key="tok")
+    headers = _build_auth_headers(_source(auth=auth), {"tok": "my-token\n"})
+    assert headers["Authorization"] == "Bearer my-token"
+
+
+def _src_with(**kw: object) -> SourceConfig:
+    base: dict[str, object] = {
+        "id": "src",
+        "name": "Source",
+        "type": "rest",
+        "url": "https://api.example.com/items",
+    }
+    base.update(kw)
+    return SourceConfig.model_validate(base)
+
+
+def test_build_custom_headers_resolves_secret(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ECOMTOKEN", "ecom-123")
+    src = _src_with(headers={"ecomtoken": "{{ env:ECOMTOKEN }}", "locale": "he"})
+    headers = _build_custom_headers(src, {})
+    assert headers == {"ecomtoken": "ecom-123", "locale": "he"}
+
+
+def test_build_custom_headers_skips_blank_name():
+    src = _src_with(headers={"  ": "x", "ok": "y"})
+    assert _build_custom_headers(src, {}) == {"ok": "y"}
+
+
+def test_request_headers_auth_wins_over_custom():
+    # A custom header named Authorization must not override the real auth scheme.
+    auth = AuthConfig(type="bearer", secret_key="tok")
+    src = _src_with(auth=auth, headers={"Authorization": "Bearer spoof", "x-extra": "1"})
+    headers = _request_headers(src, {"tok": "real"})
+    assert headers["Authorization"] == "Bearer real"
+    assert headers["x-extra"] == "1"
+
+
+def test_split_params_query_mode_default():
+    src = _src_with(method="POST")
+    query, body = _split_params_and_body(src, {"key": "k"}, {"q": "x", "skip": None})
+    assert query == {"key": "k", "q": "x"}
+    assert body is None
+
+
+def test_split_params_body_mode_merges_static_body():
+    src = _src_with(method="POST", forward_params_in="body", body={"aggs": 1})
+    query, body = _split_params_and_body(src, {"key": "k"}, {"q": "x", "skip": None})
+    assert query == {"key": "k"}
+    assert body == {"aggs": 1, "q": "x"}
+
+
+def test_split_params_get_never_sends_body():
+    # forward_params_in="body" on a GET is meaningless — params stay on query.
+    src = _src_with(method="GET", forward_params_in="body", body={"aggs": 1})
+    query, body = _split_params_and_body(src, {}, {"q": "x"})
+    assert query == {"q": "x"}
+    assert body is None
+
+
+@respx.mock
+async def test_fetch_endpoint_forwards_params_to_body():
+    import json
+
+    route = respx.post("https://api.example.com/items").mock(
+        return_value=Response(200, json=[{"id": 1}])
+    )
+    src = _src_with(
+        method="POST",
+        forward_params_in="body",
+        body={"store": "331"},
+        pagination=PaginationConfig(strategy="none"),
+    )
+    await fetch_endpoint(src, {}, extra_params={"q": "cottage"})
+    req = route.calls.last.request
+    assert json.loads(req.content) == {"store": "331", "q": "cottage"}
+    assert req.url.query == b""
 
 
 # ── _build_auth_query_params ──────────────────────────────────────────────────

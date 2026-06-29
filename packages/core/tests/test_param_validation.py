@@ -39,6 +39,29 @@ def test_enforces_enum():
     assert exc.value.code == "INVALID_PARAM_VALUE"
 
 
+def test_object_param_accepts_dict():
+    # F7: a dynamic-key map (e.g. cart items {product_id: qty}) is a valid param.
+    tool = _tool(a={"name": "items", "type": "object", "required": True})
+    out = validate_call_params(tool, {"items": {"123": "2", "456": "1"}})
+    assert out["items"] == {"123": "2", "456": "1"}
+
+
+def test_object_param_parses_json_string():
+    tool = _tool(a={"name": "items", "type": "object", "required": True})
+    out = validate_call_params(tool, {"items": '{"123": 2}'})
+    assert out["items"] == {"123": 2}
+
+
+def test_object_param_rejects_non_object():
+    tool = _tool(a={"name": "items", "type": "object", "required": True})
+    with pytest.raises(ElliotError) as exc:
+        validate_call_params(tool, {"items": "not-json"})
+    assert exc.value.code == "INVALID_PARAM_TYPE"
+    with pytest.raises(ElliotError) as exc2:
+        validate_call_params(tool, {"items": 5})
+    assert exc2.value.code == "INVALID_PARAM_TYPE"
+
+
 def test_enforces_declared_maximum():
     tool = _tool(
         a={"name": "limit", "type": "integer", "required": False, "minimum": 1, "maximum": 50}

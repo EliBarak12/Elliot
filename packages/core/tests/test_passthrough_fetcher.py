@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 import respx
 from httpx import Headers, Response
@@ -62,6 +64,57 @@ async def test_fetch_passthrough_network_error_raises():
     with pytest.raises(SourceFetchError) as exc_info:
         await fetch_passthrough(_source(), {}, {})
     assert "Network error" in str(exc_info.value)
+
+
+# ── body-driven (forward_params_in="body") ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_passthrough_forwards_params_to_body():
+    """A POST source with forward_params_in='body' sends the caller's params in
+    the JSON body, not the query string (report finding F4)."""
+    route = respx.post("https://api.example.com/catalog").mock(
+        return_value=Response(200, json={"data": [{"id": 1}]})
+    )
+    src = SourceConfig(
+        id="src",
+        name="catalog",
+        type="rest",
+        url="https://api.example.com/catalog",
+        method="POST",
+        forward_params_in="body",
+        body={"aggs": 1},
+        data_path="data",
+    )
+    result = await fetch_passthrough(src, {}, {"q": "cottage", "store": "331"})
+    assert result.rows == [{"id": 1}]
+    req = route.calls.last.request
+    # Params landed in the JSON body, merged over the static body...
+    assert json.loads(req.content) == {"aggs": 1, "q": "cottage", "store": "331"}
+    # ...and NOT on the query string.
+    assert req.url.query == b""
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_passthrough_custom_headers_resolve_secrets(monkeypatch: pytest.MonkeyPatch):
+    """Static custom headers carry extra credentials (resolved from secrets)
+    alongside the single auth scheme — the multi-credential case (F2/F3)."""
+    monkeypatch.setenv("ECOMTOKEN", "ecom-xyz")
+    route = respx.post("https://api.example.com/cart").mock(return_value=Response(200, json=[]))
+    src = SourceConfig(
+        id="src",
+        name="cart",
+        type="rest",
+        url="https://api.example.com/cart",
+        method="POST",
+        headers={"ecomtoken": "{{ env:ECOMTOKEN }}", "locale": "he"},
+    )
+    await fetch_passthrough(src, {}, {})
+    sent = route.calls.last.request.headers
+    assert sent["ecomtoken"] == "ecom-xyz"
+    assert sent["locale"] == "he"
 
 
 # ── _extract_pagination_meta ──────────────────────────────────────────────────

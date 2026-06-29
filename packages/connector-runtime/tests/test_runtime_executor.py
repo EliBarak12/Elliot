@@ -252,6 +252,61 @@ async def test_executor_rest_passthrough_forwards_query_params() -> None:
 
 
 @respx.mock
+async def test_executor_passthrough_post_sends_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A passthrough source with method=POST and forward_params_in='body' issues
+    a real POST with the params in the JSON body. Previously the runtime sent
+    every passthrough fetch as GET, dropping the body entirely."""
+    import json
+
+    monkeypatch.setenv("ECOMTOKEN", "ecom-xyz")
+    connector = ConnectorConfig(
+        name="Catalog",
+        slug="catalog",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="catalog",
+                name="Catalog",
+                type="rest",
+                url="https://api.example.com/catalog",
+                method="POST",
+                forward_params_in="body",
+                body={"aggs": 1},
+                headers={"ecomtoken": "{{ env:ECOMTOKEN }}"},
+                data_path="data",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="search_catalog",
+                name="Search catalog",
+                description="Search the catalog live by a body-driven query.",
+                category="READ",
+                source_ids=["catalog"],
+                rest_query_params=["q", "store"],
+                parameters=[
+                    ParameterDefinition(name="q", type="string", description="term"),
+                    ParameterDefinition(name="store", type="string", description="store id"),
+                ],
+            )
+        ],
+        skills=[],
+    )
+    route = respx.post("https://api.example.com/catalog").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": 1, "name": "Cottage"}]})
+    )
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(connector.tools[0], {"q": "cottage", "store": "331"})
+
+    assert result.rows[0]["name"] == "Cottage"
+    req = route.calls.last.request
+    assert req.method == "POST"
+    assert json.loads(req.content) == {"aggs": 1, "q": "cottage", "store": "331"}
+    assert req.url.query == b""
+    assert req.headers["ecomtoken"] == "ecom-xyz"
+
+
+@respx.mock
 async def test_executor_empty_result() -> None:
     respx.get("https://api.example.com/animals").mock(
         return_value=httpx.Response(200, json={"items": []})
@@ -1199,6 +1254,64 @@ async def test_executor_write_tool_posts_via_api_mapping() -> None:
     import json as _json
 
     assert _json.loads(req.content) == {"item": "widget"}
+
+
+@respx.mock
+async def test_executor_write_tool_multi_credential_headers_and_static_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A WRITE tool against a session API: the bearer auth header, the source's
+    extra credential headers (ecomtoken/cookie), and its static body all reach
+    the upstream alongside the mapped body params (the cart-write case)."""
+    import json as _json
+
+    from elliot_core.types import ApiRequestMapping, AuthConfig
+
+    monkeypatch.setenv("BEARER", "btok")
+    monkeypatch.setenv("ECOMTOKEN", "etok")
+    tool = ToolDefinition(
+        id="write_cart",
+        name="Write cart",
+        description="Add items to the user's cart.",
+        category="WRITE",
+        source_ids=["api"],
+        api_mapping=ApiRequestMapping(
+            method="POST", path_template="/cart", body_params=["items"], body_format="json"
+        ),
+        parameters=[
+            ParameterDefinition(name="items", type="object", required=True, description="map"),
+        ],
+    )
+    connector = ConnectorConfig(
+        name="Cart",
+        slug="cart",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="api",
+                name="API",
+                type="rest",
+                url="https://api.example.com",
+                auth=AuthConfig(type="bearer", secret_key="{{ env:BEARER }}"),
+                headers={"ecomtoken": "{{ env:ECOMTOKEN }}", "cookie": "sid=1"},
+                body={"store": "331", "isClub": 0},
+            )
+        ],
+        tools=[tool],
+        skills=[],
+    )
+    route = respx.post("https://api.example.com/cart").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    executor = ToolExecutor(connector, secrets={})
+    await executor.execute(tool, {"items": {"123": "2"}})
+
+    req = route.calls.last.request
+    assert req.headers["Authorization"] == "Bearer btok"
+    assert req.headers["ecomtoken"] == "etok"
+    assert req.headers["cookie"] == "sid=1"
+    # Static source body merged under the mapped dynamic-key items map.
+    assert _json.loads(req.content) == {"store": "331", "isClub": 0, "items": {"123": "2"}}
 
 
 @respx.mock

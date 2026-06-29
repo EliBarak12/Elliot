@@ -14,7 +14,10 @@ class ParameterDefinition(BaseModel):
     model_config = _strict
 
     name: str
-    type: Literal["string", "integer", "number", "boolean", "date"]
+    # "object" is a dynamic-key map (e.g. a cart's {product_id: qty}); it is
+    # forwarded as a nested JSON object into a request body (api_mapping
+    # body_params, or a forward_params_in="body" source), never bound into SQL.
+    type: Literal["string", "integer", "number", "boolean", "date", "object"]
     required: bool = True
     description: str = ""
     default: Any | None = None

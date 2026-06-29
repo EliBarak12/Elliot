@@ -594,11 +594,21 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
         source_type: _SourceType,
         config: dict,  # type: ignore[type-arg]
         name: str,
+        skip_probe: bool = False,
     ) -> dict:  # type: ignore[type-arg]
         """Fetch a data source (API / file / DB) and load it into in-memory SQLite.
 
         source_type: 'api'|'rest'|'http' for REST APIs, 'file'|'csv'|'json' for files,
                      'db'|'postgres'|'postgresql'|'mysql' for databases.
+
+        skip_probe (REST only): register the source WITHOUT a build-time fetch.
+        Use this for an endpoint that can't return 200 until it gets call-time
+        params or credentials it doesn't have at design time — e.g. a POST search
+        whose query lives in the request body, or a cart write needing a session
+        cookie. The source is stored so you can build passthrough / WRITE tools
+        against it (they fetch live per call); there is no sampled schema, so no
+        `columns`/`tables` come back. Ignored for file/DB sources, which always
+        read their data to load it.
 
         FILE sources: pass the data inline so it is saved WITH the source and
         works after publish (the published runtime has no access to your disk):
@@ -616,6 +626,17 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
               e.g. "products" for {"total":..,"products":[...]}. Usually
               auto-detected; pass it explicitly when the rows are nested under
               a non-obvious key or there are several arrays.
+            - method — "GET" (default), "POST", "PUT" or "PATCH".
+            - headers — static request headers sent on every call, e.g.
+              {"locale": "he", "ecomtoken": "{{ env:ECOMTOKEN }}"}. This is how
+              you attach a SECOND credential beyond `auth` (a custom header, a
+              session cookie); each value may be a {{ env:VAR }} secret.
+            - body — static JSON body fields merged into every non-GET request,
+              e.g. {"store": "331"}.
+            - forward_params_in — "query" (default) or "body". Set "body" for a
+              POST/PUT/PATCH API that reads its inputs from the JSON request
+              body instead of the URL query string; a tool's forwarded params
+              then land in the body.
         name: logical name used as the SQLite table prefix
         """
         try:
@@ -631,6 +652,44 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             source_id = str(uuid.uuid4())
             cfg = _build_source_config(key, config, source_id, name)
             secrets = session.workspace.load_secrets()
+
+            # Register-only path (REST): no build-time fetch. Decouples source
+            # registration from a successful 200 probe so a body/credential-gated
+            # endpoint can still be modeled and have passthrough/WRITE tools built
+            # against it (report finding F5).
+            if skip_probe:
+                if cfg.type != "rest":
+                    raise ElliotError(
+                        "VALIDATION_ERROR",
+                        "skip_probe is only valid for REST sources; file/DB sources must "
+                        "read their data to load it.",
+                        detail={"type": cfg.type},
+                    )
+                cfg.table_name = None
+                cfg.row_count = None
+                cfg.config_snapshot = {
+                    k: v for k, v in config.items() if k not in ("content", "content_encoding")
+                }
+                session.sources[source_id] = cfg
+                session.save()
+                log.info("source.registered.unprobed", source_id=source_id, name=name)
+                return {
+                    "source_id": source_id,
+                    "table_name": None,
+                    "row_count": None,
+                    "columns": [],
+                    "tables": [],
+                    "schema_hint": None,
+                    "registered": True,
+                    "probed": False,
+                    "warnings": [
+                        "Source registered without a build-time fetch (skip_probe=true). No "
+                        "schema was sampled. Build passthrough tools (elliot_create_rest_tool) "
+                        "or WRITE tools against it — they fetch live on each call. Use "
+                        "elliot_preview_tool to exercise a tool once real params/credentials "
+                        "are available."
+                    ],
+                }
 
             rows: list[dict[str, Any]]
             if cfg.type == "file":

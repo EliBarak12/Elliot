@@ -207,3 +207,21 @@ def test_save_then_refresh_does_not_re_read(session: ElliotSession):
     # Should be a no-op — we just wrote it.
     assert session.refresh_from_disk() is False
     assert [t.id for t in session.registry.get_all()] == ["local_tool"]
+
+
+def test_save_and_load_built_connector(tmp_path: Path):
+    from elliot_core.types.connector import ConnectorConfig
+
+    s = ElliotSession(cwd=str(tmp_path))
+    s.connector = ConnectorConfig(name="Acme", slug="acme", version="1.0.0", sources=[], tools=[])
+    s.build_id = "build-xyz789"
+    s.save()
+
+    # A fresh session over the same workspace restores the built connector and
+    # its build id — so cloud/judge tools don't report NO_CONNECTOR after a
+    # reload even though only sources/tools used to persist.
+    reloaded = ElliotSession(cwd=str(tmp_path))
+    reloaded.load()
+    assert reloaded.connector is not None
+    assert reloaded.connector.slug == "acme"
+    assert reloaded.build_id == "build-xyz789"

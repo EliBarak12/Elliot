@@ -472,7 +472,12 @@ class ToolExecutor:
     ) -> list[dict[str, Any]]:
         from urllib.parse import urlsplit
 
+        import httpx
+
+        from elliot_core.errors import SourceFetchError
         from elliot_core.http import SSRFError, safe_client, validate_url
+        from elliot_core.redaction import redact_url
+        from elliot_core.sources.passthrough_fetcher import constructed_url
 
         url = _interpolate(source.url or "", arguments)
         headers = _request_headers(source, self._secrets)
@@ -533,7 +538,18 @@ class ToolExecutor:
                     params=params or None,
                     json=request_body,
                 )
-                resp.raise_for_status()
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    # Name the URL the caller's params actually produced (the
+                    # overridden resource_id/limit), not the base source URL — a
+                    # 404 must point at the resource that really failed, not the
+                    # source's baked-in default (P2-c). Auth lives in headers, not
+                    # params, so no secret is exposed; redact defensively anyway.
+                    display_url = redact_url(constructed_url(request_url, params))
+                    raise SourceFetchError(
+                        f"HTTP {exc.response.status_code} from {display_url}"
+                    ) from exc
                 pages_fetched += 1
 
                 # Keep the raw response envelope: cursor pagination reads
@@ -587,6 +603,18 @@ class ToolExecutor:
                         break
                 elif pagination.strategy == "link_header":
                     next_url = _parse_link_next(resp.headers.get("link", ""))
+                    if not next_url:
+                        break
+                elif pagination.strategy == "odata":
+                    # Follow OData's @odata.nextLink so a published OData connector
+                    # paginates at runtime exactly as it does in design-time
+                    # preview (api_fetcher) — otherwise it silently caps at the
+                    # server page size.
+                    next_url = (
+                        envelope.get(pagination.next_url_field or "@odata.nextLink")
+                        if isinstance(envelope, dict)
+                        else None
+                    )
                     if not next_url:
                         break
                 else:

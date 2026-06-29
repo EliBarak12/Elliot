@@ -23,7 +23,7 @@ from elliot_core.types.source import FetchResult, SourceConfig
 log = structlog.get_logger(__name__)
 
 
-def _constructed_url(target_url: str, caller_params: dict[str, Any]) -> str:
+def constructed_url(target_url: str, caller_params: dict[str, Any]) -> str:
     """The URL actually hit, for error messages and logs.
 
     Merges the caller-supplied passthrough params over whatever query the base
@@ -76,7 +76,7 @@ async def fetch_passthrough(
     # there: only the params that truly went to the query string are displayed.
     params_went_to_body = source.method != "GET" and source.forward_params_in == "body"
     display_params = {} if params_went_to_body else query_params
-    display_url = redact_url(_constructed_url(target_url, display_params))
+    display_url = redact_url(constructed_url(target_url, display_params))
     log.debug("passthrough.request", method=source.method, url=display_url)
 
     try:

@@ -70,6 +70,13 @@ class AuditTranscript(BaseModel):
     calls: list[AuditToolCall] = []
     task_completed: bool = False
     summary: str = ""
+    build_id: str = ""
+    """Id of the connector build this transcript was recorded against.
+
+    Stamped at submit time so the judge can score only the transcripts for the
+    CURRENT build — a re-judge after fixing tools must not be dragged down by
+    stale prior-build runs whose failures are already fixed. Empty for
+    transcripts submitted before build-scoping existed."""
 
 
 class DimensionScore(BaseModel):

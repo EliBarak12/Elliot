@@ -1,6 +1,6 @@
 # Elliot — Task List
 
-79 ordered tasks across 9 epics. The **Folder Structure** table is for navigation. The **Build Order** is the sequence to implement them.
+81 ordered tasks across 10 epics. The **Folder Structure** table is for navigation. The **Build Order** is the sequence to implement them.
 
 **Backend**: Python 3.13 + uv workspaces 
 **Frontend**: TypeScript + React 19 + Vite + shadcn/ui + TanStack
@@ -20,6 +20,7 @@
 | [07-dx-and-observability](07-dx-and-observability/) | 057–059 | Logging, error middleware, test plan |
 | [08-agent-observability](08-agent-observability/) | 060–067 | Session tracking, linter, eval, agent console, token metrics, secrets, local DB |
 | [09-platform-and-builder](09-platform-and-builder/) | 068–079 | Auth, deployment, agentic builder, editor, multi-connector, rate limiting, templates, status CLI, schema introspection, health check |
+| [10-ax-legibility](10-ax-legibility/) | 080–081 | Before/after AX benchmark, preloaded demo connector + `/welcome` (per `dev/docs/AX_STRATEGY.md`) |
 
 **Total**: ~230–285 hours
 

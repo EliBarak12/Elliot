@@ -170,9 +170,10 @@ fills those gates; it does not replace them.
 
 Ordered; each firing takes the next unchecked item, or deepens the last:
 
-1. Draft the AX report-card spec (what the score is composed of, how it is
-   rendered, where Cloud serves it) — `Elliot-cloud-/docs/`.
-2. Write the `naive-vs-elliot` benchmark plan + task list.
+1. ~~Draft the AX report-card spec~~ — first draft in
+   `Elliot-cloud-/docs/POSITIONING.md` §5; deepen after the benchmark runs.
+2. ~~Write the `naive-vs-elliot` benchmark plan + task list~~ — done, see
+   `benchmarks/naive-vs-elliot.md`. Next: implement the runner script.
 3. Rewrite the README hero + "Why Elliot" section AX-first (the loop diagram
    from §4 belongs there).
 4. Draft the Connectors-directory submission from

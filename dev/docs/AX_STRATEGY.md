@@ -56,21 +56,40 @@ under 60 seconds**. Three legibility instruments, in priority order:
 
 ### 3.1 The AX Score — the number that creates the category
 
+> **Status check (2026-07): this largely exists — the gap is naming and
+> surfacing, not construction.** Elliot Cloud ships the **MCP Server
+> Grader**: paste any remote MCP URL on the landing page, Elliot connects
+> as a real MCP client, runs 21 contract checks + live probes + an
+> optional Claude agent judge, and produces a public, shareable A–F grade
+> page with percentile and a copyable README badge
+> (`Elliot-cloud-/docs/mcp-grading-rubric.md`, `grader-flow.md`,
+> implemented in `apps/api/src/elliot_cloud/grader.py`). OSS Studio's
+> Evaluation page renders the same `BEST_PRACTICES` quality scan from
+> `elliot_core.eval.quality`.
+
 One score, 0–100, per connector. Composed from things Elliot already
 computes or stores:
 
 | Component | Source (exists today) |
 |---|---|
-| Contract quality | linter findings (`elliot lint`) |
+| Contract quality | linter + grader deterministic checks (shared with `elliot_core.linter`) |
+| Live probe quality | grader live probes: error quality + response token cost/shape |
+| Agent-judged capability | grader agent judge (Claude drives the server; 40% when run) |
 | Eval pass rate | eval harness (`elliot eval`) |
 | Live tool-call success rate | observation store / audit log |
-| Token efficiency | token estimates per call (needs real tokenization — see §7) |
-| Error recoverability | structured-error coverage + retry-loop detection in traces |
+| Token efficiency | tokenizer-based per-call estimates (tiktoken `cl100k_base`) |
 
-Why a single number: it is quotable, trackable, gateable in CI, and
-comparable across teams. "Our connector is at 91" is a sentence a team lead
-says in standup. FICO for agent-readiness. The lint/eval/observe machinery
-is Elliot's moat; the score is its marketing surface.
+What remains to make it *the category number*:
+
+1. **One name.** "Grade", "quality scan", and "eval score" must all read
+   **AX Score** across Studio, Cloud, README, and the grader page.
+2. **Everywhere the connector is, the score is.** Connector list, publish
+   flow, report page, badge — one number, same formula provenance.
+3. **CI-gateable.** `elliot lint`/`eval` exit codes + a score threshold —
+   the pytest-style lock-in.
+
+Why a single number: quotable, trackable, gateable, comparable. "Our
+connector is at 91" is a sentence a team lead says in standup.
 
 ### 3.2 The before/after demo — the money demo
 
@@ -86,6 +105,12 @@ landing-page hero. It converts "agent-ready" from adjective to arithmetic.
 (Petri-style audit transcripts already give us the raw material.)
 
 ### 3.3 The public badge — the viral loop
+
+> **Status check (2026-07): built.** The grader's public report page
+> already offers "Copy README badge". The remaining work is *adoption*:
+> put the badge in Elliot's own READMEs, grade well-known public MCP
+> servers and (respectfully) publish the results, and make the badge the
+> default close of every grader run.
 
 `![AX Score: 91](…)` — a README/registry badge, like coverage badges, backed
 by a public per-connector report page on Elliot Cloud (score, tool list,
@@ -184,10 +209,11 @@ loop, ten safe tenants). This section adds the go-to-market on top.
    Anthropic connector-directory submission (`docs/claude-connector-directory.md`
    is already written — execute it), PulseMCP/Smithery listings. Meet
    agents (and their humans) where they already shop.
-2. **The free linter as top-of-funnel.** "Score any OpenAPI spec's
-   agent-readiness" — a web form on elliot-cloud.com and a `uvx elliot lint`
-   one-liner. Cheap to run, produces a shareable number, ends with
-   "publish the fixed version on Elliot Cloud."
+2. **The grader as top-of-funnel (built — market it).** "Grade any MCP
+   server" already runs on the Cloud landing page: public shareable A–F
+   report, sign-in gate on the full audit, "build it better with Elliot"
+   CTA. The funnel exists end-to-end; the work is driving traffic into it
+   and adding a `uvx elliot lint` one-liner for the local-first crowd.
 3. **AX content with receipts.** We hold real cross-connector data
    (token profiles, failure taxonomies, retry loops). Publish "State of
    agent tool quality" findings the way Speakeasy publishes AX think
@@ -218,20 +244,29 @@ loop, ten safe tenants). This section adds the go-to-market on top.
 
 ## 7. Product backlog implied by this strategy
 
-Priority-ordered; items marked ⚠ are prerequisites for honest marketing —
-we cannot sell measurement while the measurement is fake.
+> **Correction (2026-07 audit of this doc against the code):** two claims
+> below were stale, inherited from LAUNCH_READINESS.md. (1) Token counting
+> is already tokenizer-based — `_estimate_tokens` in the runtime's
+> session tracker uses tiktoken `cl100k_base` with a chars/4 fallback, and
+> the executor sizes results against a real token budget. (2) The "free
+> hosted linter" and "public report page + badge" already exist as Cloud's
+> MCP Server Grader (§3.1, §3.3). The backlog below reflects what is
+> actually missing. Lesson kept in writing: **re-verify LAUNCH_READINESS
+> claims against code before building anything from that doc.**
+
+Priority-ordered:
 
 | P | Item | Why / source |
 |---|---|---|
-| P0 ⚠ | **Real token counting** (tokenizer-based, per call, per field) | Today's estimate is `rows × 10` (LAUNCH_READINESS §2). Every pitch above quotes tokens; the number must be real. |
-| P0 | **AX Score v1** (lint + eval + live success + tokens, per connector, in Studio & Cloud) | §3.1. The category-defining number. |
-| P0 | **Demo connector preloaded + first-60-seconds fix** | LAUNCH_READINESS §1: new users land on an empty dashboard. No legibility instrument survives an empty screen. |
-| P1 | **Before/after benchmark harness** (naive OpenAPI-gen vs Elliot connector, same task, scored) | §3.2. Produces the hero GIF and the content engine. Builds on audit transcripts + judge. |
-| P1 | **Public report page + AX badge on Cloud** | §3.3. Needs Cloud publish + a public read-only route. |
-| P1 | **Connector-directory + registry submissions** | Channel #1; the doc exists, execute it. |
-| P2 | **Session drill-down in Studio** ("why did session X fail on tool Y") | LAUNCH_READINESS §3.4; the observability story's missing click. |
-| P2 | **Eval-in-CI recipe** (GitHub Action: lint + eval + AX threshold) | §5.2 — the pytest-style lock-in. |
-| P2 | **Free hosted linter** (paste an OpenAPI spec → score) | Channel #2 top-of-funnel. |
+| P0 | **Say what exists.** README + website must lead with the grader, the score, and the measurable-AX positioning | The category feature is built and the public surface never mentions it. Pure legibility, zero engineering. |
+| P0 | **Demo connector preloaded + first-60-seconds fix** | Verified still open: `connectors/` ships only data files, no `/welcome` flow. No legibility instrument survives an empty screen. |
+| P0 | **"AX Score" naming unification** across grader grade / quality scan / eval score | §3.1 — three names for one number dilutes the category claim. |
+| P1 | **Before/after benchmark harness** (naive OpenAPI-gen vs Elliot connector, same task, scored) | §3.2. The one missing instrument. Produces the hero GIF and the content engine; builds on audit transcripts + judge. |
+| P1 | **Badge adoption loop** — badge in our READMEs, grade prominent public MCP servers, publish findings | §3.3 status: built, unadopted. |
+| P1 | **Connector-directory + registry submissions** | Channel #1; `docs/claude-connector-directory.md` exists, execute it. |
+| P2 | **Eval-in-CI recipe** (GitHub Action: lint + eval + AX-score threshold) | §5.2 — the pytest-style lock-in. |
+| P2 | **Session drill-down in Studio** ("why did session X fail on tool Y") | LAUNCH_READINESS §3.4 — re-verify against current Studio before building. |
+| P2 | **Per-field token attribution** (which columns cost the context) | Refines already-real token counting into design guidance. |
 
 ## 8. Messaging kit (for reuse in README, website, launch posts)
 
@@ -264,8 +299,10 @@ Objection handling:
 Owned by the product-value loop. Each revision must keep §7 in sync with
 LAUNCH_READINESS.md and SCOPE.md evidence gates. Next planned passes:
 
-1. Rewrite README hero + website copy from §8 (make the public surface say
-   what this doc says).
-2. Spec AX Score v1 (formula, weights, API, Studio/Cloud UI) as a task file.
+1. ~~Rewrite README hero + website copy from §8~~ (done — pass 2, same
+   branch; grader surfaced on both).
+2. ~~Spec AX Score v1~~ → replaced by the naming-unification item in §7:
+   the score exists; unify and surface it.
 3. Design the before/after benchmark harness on top of the audit judge.
 4. Draft the registry/directory submission checklist and execute.
+5. First-60-seconds: spec the preloaded demo connector + `/welcome` flow.

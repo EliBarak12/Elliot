@@ -5,8 +5,8 @@ titleTemplate: false
 
 hero:
   name: Elliot
-  text: Build your connector. Make your product agent-ready.
-  tagline: Elliot turns any API or database into a connector your AI agents can call natively — with minimum tokens, clean error recovery, and full session observability. One file, one command, every agent.
+  text: Make your product agent-ready. Provably.
+  tagline: Most MCP tools have defects their owners never see — agents just fail quietly in someone else's chat. Elliot turns any API or database into MCP tools agents measurably succeed with — designed, linted, evaluated, graded, and observed in one loop. One file, one command, every agent.
   image:
     src: /hero-glow.svg
     alt: Elliot
@@ -26,8 +26,8 @@ features:
       src: /icons/agent-ready.svg
       width: 30
       height: 30
-    title: Agent-ready, by design
-    details: Every connector is linted against the five AX principles before it ships — verb-first descriptions, typed parameters, context-sized results.
+    title: Agent-ready, and graded
+    details: Every connector is linted against the five AX principles before it ships — and the MCP Server Grader scores any server's tool surface with contract checks, live probes, and an agent judge.
   - icon:
       src: /icons/safe.svg
       width: 30

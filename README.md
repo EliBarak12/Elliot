@@ -4,7 +4,7 @@
 
 # Elliot
 
-**Turn any API or database into MCP tools for Claude Code, Cursor, OpenClaw, and Codex — with built-in observability.**
+**Turn any API or database into MCP tools agents measurably succeed with — for Claude Code, Cursor, OpenClaw, and Codex, with grading and observability built in.**
 
 [![CI](https://github.com/EliBarak12/Elliot/actions/workflows/ci.yml/badge.svg)](https://github.com/EliBarak12/Elliot/actions/workflows/ci.yml)
 [![Docs](https://github.com/EliBarak12/Elliot/actions/workflows/docs.yml/badge.svg)](https://github.com/EliBarak12/Elliot/actions/workflows/docs.yml)
@@ -50,9 +50,11 @@ Connecting an API to an agent is easy. Making it work *well* is not. Agents fail
 
 Elliot makes each of these visible and fixable. Every tool ships with a structured schema, a token estimate, an actionable error shape, and a session trace — every call, every agent, attributed to a client and model.
 
+Independent audits keep finding that the overwhelming majority of public MCP tools carry at least one description defect their owners can't see. Generators get you an MCP server; Elliot makes agents succeed with it — and proves it with a grade. Paste any remote MCP server URL into the [Elliot Cloud grader](https://elliot-cloud.com) and get a public, shareable report: contract checks, live probes, an agent judge, and a README badge.
+
 ## Features
 
-- **Agent-ready by design** — every tool is linted against five concrete principles before it ships: verb-first descriptions, typed parameters, context-sized results.
+- **Agent-ready by design, and graded** — every tool is linted against five concrete principles before it ships, and the MCP Server Grader scores any server's tool surface: contract checks, live probes, agent judge, shareable A–F report.
 - **Safe by default** — parameterised SQL, read-only database transactions, env-var secrets, no keys in connector files. Connector files are safe to commit.
 - **Every call observable** — tokens, latency, arguments, and errors for every agent call, streamed to an audit log and visible in Studio.
 - **One command to run** — start the whole stack with Docker. No Python, Node, or toolchain to install.

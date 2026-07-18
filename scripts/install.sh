@@ -50,6 +50,23 @@ cd "$INSTALL_DIR"
 say "Downloading $COMPOSE_FILE ..."
 curl -LsSf "$REPO_RAW/$COMPOSE_FILE" -o "$COMPOSE_FILE"
 
+# 3b. Demo connector ---------------------------------------------------------
+# A fresh install should open on working tools, not an empty dashboard: the
+# runtime preloads this connector when no other is configured (opt out with
+# ELLIOT_PRELOAD_DEMO=false in .env). Best-effort — Elliot runs without it.
+if [ ! -f connectors/my-saas.connector.json ]; then
+  say "Downloading the demo connector ..."
+  mkdir -p connectors/data
+  if curl -LsSf "$REPO_RAW/connectors/my-saas.connector.json" -o connectors/my-saas.connector.json \
+     && curl -LsSf "$REPO_RAW/connectors/data/customers.json" -o connectors/data/customers.json \
+     && curl -LsSf "$REPO_RAW/connectors/data/events.json" -o connectors/data/events.json; then
+    curl -LsSf "$REPO_RAW/connectors/my-saas.eval.yaml" -o connectors/my-saas.eval.yaml || true
+  else
+    err "Demo connector download failed — continuing without it."
+    rm -f connectors/my-saas.connector.json connectors/data/customers.json connectors/data/events.json
+  fi
+fi
+
 # 4. .env with a generated secret key (never overwrite an existing one) -----
 if [ -f .env ]; then
   say "Keeping existing .env"

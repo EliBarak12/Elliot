@@ -34,6 +34,7 @@ import PlaygroundPage from "./pages/PlaygroundPage";
 import MetricsPage from "./pages/MetricsPage";
 import EvaluationPage from "./pages/EvaluationPage";
 import AgentConsole from "./pages/AgentConsole";
+import WelcomePage from "./pages/WelcomePage";
 
 const rootRoute = createRootRoute({ component: AppShell });
 
@@ -82,9 +83,15 @@ const consoleRoute = createRoute({
   path: "/console",
   component: AgentConsole,
 });
+const welcomeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/welcome",
+  component: WelcomePage,
+});
 
 const routeTree = rootRoute.addChildren([
   dashboardRoute,
+  welcomeRoute,
   sourcesRoute,
   toolsRoute,
   skillsRoute,

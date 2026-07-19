@@ -3,16 +3,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import Dashboard from "@/pages/Dashboard";
 
+const navigateFn = vi.fn();
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
     <a href={to}>{children}</a>
   ),
+  useNavigate: () => navigateFn,
 }));
 
+let sessionData = { source_count: 1, tool_count: 2, skill_count: 0, connector_built: false };
 vi.mock("@/hooks/useSessionState", () => ({
-  useSessionState: () => ({
-    data: { source_count: 1, tool_count: 2, skill_count: 0, connector_built: false },
-  }),
+  useSessionState: () => ({ data: sessionData }),
 }));
 
 function renderDashboard() {
@@ -26,6 +27,41 @@ function renderDashboard() {
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  navigateFn.mockClear();
+  localStorage.clear();
+  sessionData = { source_count: 1, tool_count: 2, skill_count: 0, connector_built: false };
+});
+
+describe("Dashboard first-run redirect", () => {
+  it("sends a fresh workspace to the welcome tour", () => {
+    sessionData = { source_count: 0, tool_count: 0, skill_count: 0, connector_built: false };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, status: 200, text: () => Promise.resolve("[]") })
+    );
+    renderDashboard();
+    expect(navigateFn).toHaveBeenCalledWith({ to: "/welcome" });
+  });
+
+  it("respects a persisted dismissal", () => {
+    sessionData = { source_count: 0, tool_count: 0, skill_count: 0, connector_built: false };
+    localStorage.setItem("elliot.welcome.dismissed", "true");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, status: 200, text: () => Promise.resolve("[]") })
+    );
+    renderDashboard();
+    expect(navigateFn).not.toHaveBeenCalled();
+  });
+
+  it("does not redirect a workspace with tools", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, status: 200, text: () => Promise.resolve("[]") })
+    );
+    renderDashboard();
+    expect(navigateFn).not.toHaveBeenCalled();
+  });
 });
 
 describe("Dashboard recent activity", () => {

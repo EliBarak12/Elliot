@@ -123,9 +123,11 @@ cases:
       no_error: true
       min_rows: 1
       # Assert a specific computed value, robust to "$" / "," / extra decimals.
+      # Row 0 is the enterprise plan (highest total_mrr): two active customers
+      # at $499 each.
       field_assertions:
         - field: total_mrr
-          equals: "12500.00"
-          match: numeric        # "$12,500" == 12500.00
-      # all_rows_match also takes a match mode (default: exact).
-      all_rows_match: { field: customer_count, value: 0, match: numeric, abs_tol: 1000 }
+          equals: "998.00"
+          match: numeric        # "$998" == 998.00
+      # all_rows_match also takes a match mode (default: exact) and tolerances.
+      all_rows_match: { field: customer_count, value: 2, match: numeric, abs_tol: 1 }

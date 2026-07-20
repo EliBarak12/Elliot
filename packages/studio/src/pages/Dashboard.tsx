@@ -1,4 +1,5 @@
-import { Link } from "@tanstack/react-router";
+import { useEffect } from "react";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -18,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
 import { AgentOnboarding } from "@/components/dashboard/AgentOnboarding";
+import { isWelcomeDismissed } from "@/pages/WelcomePage";
 import { useSessionState } from "@/hooks/useSessionState";
 import { httpJson } from "@/lib/http";
 import { cn } from "@/lib/utils";
@@ -40,6 +42,18 @@ interface AuditEntry {
 export default function Dashboard() {
   const { data: sessionRaw } = useSessionState();
   const session = sessionRaw as SessionState | undefined;
+  const navigate = useNavigate();
+
+  // First run (task 081): an untouched workspace — nothing built yet — sends
+  // the user to the /welcome tour instead of a dashboard of zeros. The demo
+  // connector the runtime preloads gives the tour a live tool to call. A
+  // dismissal (from the tour itself) is persisted and always respected.
+  useEffect(() => {
+    if (!session || session.connector_built || session.tool_count > 0) return;
+    if (isWelcomeDismissed()) return;
+    console.info("[dashboard] fresh workspace — starting the welcome tour");
+    void navigate({ to: "/welcome" });
+  }, [session, navigate]);
 
   // Recent activity is *tool invocations*, which execute on the runtime — so
   // read the runtime's audit log, not the plugin's build-action log. Let the

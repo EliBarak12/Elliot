@@ -1,0 +1,135 @@
+{
+  "name": "My SaaS Analytics",
+  "slug": "my-saas",
+  "version": "1.0.0",
+  "description": "Demo connector over a small SaaS customer base: accounts, revenue, and product-usage events. Ships with Elliot so a fresh install has working tools, data, and an eval suite from the first minute.",
+  "instructions": "Start with get_customer_overview when a question names a specific customer — it joins account and usage data into one compact result. Use list_customers to find accounts by plan or status, mrr_by_plan for revenue questions, and feature_adoption for usage questions. All results are bounded and sized for a context window; pass a smaller limit when you only need a few rows.",
+  "sources": [
+    {
+      "id": "customers",
+      "name": "Customers",
+      "type": "file",
+      "path": "connectors/data/customers.json",
+      "format": "json"
+    },
+    {
+      "id": "events",
+      "name": "Product Events",
+      "type": "file",
+      "path": "connectors/data/events.json",
+      "format": "json"
+    }
+  ],
+  "tools": [
+    {
+      "id": "get_customer_overview",
+      "name": "Get Customer Overview",
+      "description": "Return one customer's full picture in a single call: account details, plan, monthly revenue, status, plus their total product-usage events and the time of their most recent activity.",
+      "category": "READ",
+      "source_ids": ["customers", "events"],
+      "sql": "SELECT c.id, c.name, c.email, c.plan, c.mrr, c.status, c.last_active_at, COUNT(e.id) AS total_events, MAX(e.ts) AS last_event_at FROM customers c LEFT JOIN events e ON e.customer_id = c.id WHERE c.id = :customer_id GROUP BY c.id, c.name, c.email, c.plan, c.mrr, c.status, c.last_active_at",
+      "parameters": [
+        {
+          "name": "customer_id",
+          "type": "integer",
+          "required": true,
+          "description": "Numeric id of the customer to look up (exact match). Find ids with list_customers."
+        }
+      ]
+    },
+    {
+      "id": "list_customers",
+      "name": "List Customers",
+      "description": "List customers with their plan, monthly revenue, status, and last activity date, optionally narrowed to one plan or one lifecycle status. Most recently active first.",
+      "category": "READ",
+      "source_ids": ["customers"],
+      "sql": "SELECT id, name, email, plan, mrr, status, last_active_at FROM customers WHERE (:plan IS NULL OR plan = :plan) AND (:status IS NULL OR status = :status) ORDER BY last_active_at DESC LIMIT :limit",
+      "parameters": [
+        {
+          "name": "plan",
+          "type": "string",
+          "required": false,
+          "description": "Keep only customers on this pricing plan (exact match).",
+          "enum": ["starter", "pro", "enterprise"]
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "required": false,
+          "description": "Keep only customers in this lifecycle state (exact match).",
+          "enum": ["active", "churned"]
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "required": false,
+          "description": "Maximum number of customers to return.",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 100
+        }
+      ]
+    },
+    {
+      "id": "mrr_by_plan",
+      "name": "MRR by Plan",
+      "description": "Aggregate monthly recurring revenue and customer count per pricing plan, highest revenue first, optionally restricted to one lifecycle status.",
+      "category": "READ",
+      "source_ids": ["customers"],
+      "sql": "SELECT plan, SUM(mrr) AS total_mrr, COUNT(*) AS customer_count FROM customers WHERE (:status IS NULL OR status = :status) GROUP BY plan ORDER BY total_mrr DESC",
+      "parameters": [
+        {
+          "name": "status",
+          "type": "string",
+          "required": false,
+          "description": "Restrict the revenue rollup to customers in this lifecycle state (exact match).",
+          "enum": ["active", "churned"]
+        }
+      ]
+    },
+    {
+      "id": "churned_customers",
+      "name": "Churned Customers",
+      "description": "Return customers who have churned, with the plan and revenue that was lost and when they were last active. Most recently active first.",
+      "category": "READ",
+      "source_ids": ["customers"],
+      "sql": "SELECT id, name, plan, mrr, last_active_at FROM customers WHERE status = 'churned' ORDER BY last_active_at DESC LIMIT 20",
+      "parameters": []
+    },
+    {
+      "id": "feature_adoption",
+      "name": "Feature Adoption",
+      "description": "Count product-usage events per feature, most used first, optionally narrowed to a single event kind such as logins only.",
+      "category": "READ",
+      "source_ids": ["events"],
+      "sql": "SELECT feature, COUNT(*) AS usage_count FROM events WHERE (:event_type IS NULL OR event = :event_type) GROUP BY feature ORDER BY usage_count DESC",
+      "parameters": [
+        {
+          "name": "event_type",
+          "type": "string",
+          "required": false,
+          "description": "Count only events of this kind (exact match).",
+          "enum": ["login", "feature_used", "signup"]
+        }
+      ]
+    },
+    {
+      "id": "new_signups",
+      "name": "New Signups",
+      "description": "Return the ten most recent customer signups with their contact details and chosen plan, newest first.",
+      "category": "READ",
+      "source_ids": ["customers"],
+      "sql": "SELECT id, name, email, plan, signups_at FROM customers ORDER BY signups_at DESC LIMIT 10",
+      "parameters": []
+    }
+  ],
+  "skills": [
+    {
+      "id": "weekly_account_review",
+      "name": "Weekly Account Review",
+      "description": "Compose a weekly health summary of the customer base: revenue by plan, recent churn, and which features are actually being used.",
+      "instructions": "Run the review in three passes and keep each result compact.\n\n1. Call mrr_by_plan with status \"active\" for the current revenue picture, then once more with no status to spot revenue sitting in churned accounts.\n2. Call churned_customers and, for each account worth saving, call get_customer_overview with its customer_id to see whether usage dropped before the churn.\n3. Call feature_adoption with event_type \"feature_used\" to rank features by real usage; call it again with no filter when login volume matters.\n\nFinish with a short summary: total active MRR, plans trending up or down, at-risk accounts, and the top three features by usage.",
+      "when_to_use": "Use when asked for an account health check, churn review, or a weekly business summary of customers and usage."
+    }
+  ]
+}

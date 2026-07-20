@@ -1271,6 +1271,15 @@ def test_read_tool_does_not_require_confirmation_even_when_enabled(
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _no_demo_preload(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The no-connector tests exercise the degraded 503 app, which since task
+    081 only appears when the bundled demo can't be preloaded — so switch the
+    preload off for them (test_demo_preload.py covers the preload itself)."""
+    if request.node.name.startswith("test_no_connector_app"):
+        monkeypatch.setenv("ELLIOT_PRELOAD_DEMO", "false")
+
+
 def test_no_connector_app_health_reports_missing(tmp_path: Path) -> None:
     """When the connector path does not exist, /health says no_connector."""
     missing = tmp_path / "absent" / "connector.json"

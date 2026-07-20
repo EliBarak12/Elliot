@@ -1301,6 +1301,38 @@ def _register_skill_prompt(mcp: FastMCP, skill: Any) -> None:
     mcp.prompt(name=skill_id, description=skill_description)(prompt_fn)
 
 
+# The bundled demo connector (task 081): served when the runtime starts with
+# no connector at the configured path, so a fresh install greets its first
+# agent with working tools instead of an empty dashboard. Opt out with
+# ELLIOT_PRELOAD_DEMO=false; point ELLIOT_DEMO_CONNECTOR elsewhere to swap
+# the demo. The configured ELLIOT_CONNECTOR path always wins when it loads,
+# so the user's first real export replaces the demo on the next start.
+_DEMO_OFF_VALUES = frozenset({"false", "0", "no", "off"})
+_DEMO_CONNECTOR_DEFAULT = "connectors/my-saas.connector.json"
+
+
+def _load_demo_connector() -> tuple[Any, str] | None:
+    """Locate and load the bundled demo connector.
+
+    Returns ``(ConnectorConfig, path)``, or None when preloading is disabled,
+    the demo file is absent (e.g. an empty connectors/ mount), or it fails to
+    load — the caller then degrades to the no-connector 503 app as before.
+    """
+    flag = (os.environ.get("ELLIOT_PRELOAD_DEMO") or "true").strip().lower()
+    if flag in _DEMO_OFF_VALUES:
+        return None
+    path = os.environ.get("ELLIOT_DEMO_CONNECTOR") or _DEMO_CONNECTOR_DEFAULT
+    if not os.path.isfile(path):
+        return None
+    try:
+        config = _cache.get(path)
+    except ConnectorLoadError as exc:
+        log.warning("runtime.demo.load_failed", path=path, error=str(exc))
+        return None
+    log.info("runtime.demo.preloaded", path=path, slug=config.slug)
+    return config, path
+
+
 def create_app(
     connector_path: str | None = None,
     secrets: dict[str, str] | None = None,
@@ -1317,6 +1349,12 @@ def create_app(
     try:
         config = _cache.get(connector_path)
     except ConnectorLoadError:
+        demo = _load_demo_connector()
+        if demo is not None:
+            config, connector_path = demo
+            return _build_connector_app(
+                config, connector_path, secrets, audit_path, sessions_path, db_url
+            )
         # No connector at this path yet. Return a minimal app so the module
         # still imports — but mount /mcp so clients get an actionable 503
         # instead of a bare 404, and re-check the connector on every /health
@@ -1367,6 +1405,22 @@ def create_app(
 
         return _app
 
+    return _build_connector_app(config, connector_path, secrets, audit_path, sessions_path, db_url)
+
+
+def _build_connector_app(
+    config: Any,
+    connector_path: str | None,
+    secrets: dict[str, str],
+    audit_path: str,
+    sessions_path: str,
+    db_url: str,
+) -> FastAPI:
+    """Assemble the full runtime app for a loaded connector.
+
+    Shared by the configured-connector path and the demo preload so both are
+    the same runtime in every respect (MCP, observability, auth, limits).
+    """
     executor = ToolExecutor(config, secrets)
     audit = AuditLog(audit_path)
     tracker = SessionTracker(sessions_path)

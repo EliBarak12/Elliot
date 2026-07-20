@@ -37,6 +37,9 @@ packages/studio/.vite/
 # Connector files contain user secrets — opt-in via connectors/
 *.connector.json
 !templates/**/*.connector.json
+# The bundled demo connector is secret-free by design and must ship
+# (guarded by packages/core/tests/test_demo_connector.py).
+!connectors/my-saas.connector.json
 
 # Logs
 *.ndjson

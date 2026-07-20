@@ -12,17 +12,11 @@ vi.mock("@tanstack/react-router", () => ({
 
 const callToolFn = vi.fn();
 let toolsData: unknown = [
-  {
-    id: "get_customer_overview",
-    name: "Get Customer Overview",
-    description: "Return one customer's full picture",
-    category: "READ",
-    parameters: [],
-  },
+  { id: "get_customer_overview", description: "Return one customer's full picture" },
 ];
-vi.mock("@/hooks/useTools", () => ({
-  useTools: () => ({ data: toolsData }),
-  useCallTool: () => ({
+vi.mock("@/hooks/useRuntimeTools", () => ({
+  useRuntimeTools: () => ({ data: toolsData }),
+  useCallRuntimeTool: () => ({
     mutateAsync: (input: unknown) => callToolFn(input),
     isPending: false,
   }),
@@ -92,13 +86,7 @@ describe("WelcomePage", () => {
       "/connector",
     );
     toolsData = [
-      {
-        id: "get_customer_overview",
-        name: "Get Customer Overview",
-        description: "Return one customer's full picture",
-        category: "READ",
-        parameters: [],
-      },
+      { id: "get_customer_overview", description: "Return one customer's full picture" },
     ];
   });
 });

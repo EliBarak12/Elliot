@@ -12,8 +12,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/ui/page-header";
 import { AgentOnboarding } from "@/components/dashboard/AgentOnboarding";
-import { useCallTool, useTools } from "@/hooks/useTools";
-import type { ToolDefinition } from "@/types/api";
+import { useCallRuntimeTool, useRuntimeTools } from "@/hooks/useRuntimeTools";
+import type { RuntimeTool } from "@/lib/runtime-mcp";
 import { cn } from "@/lib/utils";
 
 export const WELCOME_DISMISSED_KEY = "elliot.welcome.dismissed";
@@ -68,15 +68,13 @@ function StepBadge({ number, done }: { number: number; done: boolean }) {
 
 export default function WelcomePage() {
   const navigate = useNavigate();
-  const { data: toolsRaw } = useTools();
-  const tools = Array.isArray(toolsRaw) ? (toolsRaw as ToolDefinition[]) : [];
-  const demoTool =
-    tools.find((t) => t.id === PREFERRED_TOOL_ID) ??
-    tools.find((t) => t.category === "READ") ??
-    tools[0] ??
-    null;
+  // The tour calls the RUNTIME (where the preloaded demo connector lives),
+  // not the builder session — which is legitimately empty on a fresh install.
+  const { data: toolsRaw } = useRuntimeTools();
+  const tools = Array.isArray(toolsRaw) ? (toolsRaw as RuntimeTool[]) : [];
+  const demoTool = tools.find((t) => t.id === PREFERRED_TOOL_ID) ?? tools[0] ?? null;
 
-  const { mutateAsync: callTool, isPending } = useCallTool();
+  const { mutateAsync: callTool, isPending } = useCallRuntimeTool();
   const [outcome, setOutcome] = useState<RunOutcome | null>(null);
   const [error, setError] = useState<string | null>(null);
 

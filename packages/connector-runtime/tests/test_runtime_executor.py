@@ -394,6 +394,85 @@ def test_payload_includes_token_estimate_and_token_budget_note() -> None:
     assert "1 of 50" in capped["truncation_note"]
 
 
+def test_empty_read_result_notes_the_supplied_filters() -> None:
+    from elliot_connector_runtime.server import _payload_for
+    from elliot_core.types import QueryResult, ToolDefinition
+
+    tool = ToolDefinition.model_validate(
+        {
+            "id": "search_people",
+            "name": "Search people",
+            "description": "Search people by name.",
+            "category": "READ",
+            "source_ids": ["people"],
+            "parameters": [{"name": "q", "type": "string", "required": False}],
+        }
+    )
+    out = _payload_for(QueryResult(rows=[], tool_id="search_people"), tool, {"q": "zzz"})
+    assert out["count"] == 0
+    assert out["empty"] is True
+    assert "q" in out["empty_note"]
+    assert "genuinely empty" in out["empty_note"]
+
+
+def test_empty_read_with_no_args_says_the_source_is_empty() -> None:
+    from elliot_connector_runtime.server import _payload_for
+    from elliot_core.types import QueryResult, ToolDefinition
+
+    tool = ToolDefinition.model_validate(
+        {
+            "id": "list_people",
+            "name": "List people",
+            "description": "List all people.",
+            "category": "READ",
+            "source_ids": ["people"],
+            "parameters": [{"name": "q", "type": "string", "required": False}],
+        }
+    )
+    out = _payload_for(QueryResult(rows=[], tool_id="list_people"), tool, {})
+    assert out["empty"] is True
+    assert "no arguments" in out["empty_note"]
+
+
+def test_empty_write_result_has_no_empty_note() -> None:
+    # An empty mutation result is normal — no "widen your filter" note.
+    from elliot_connector_runtime.server import _payload_for
+    from elliot_core.types import QueryResult, ToolDefinition
+
+    tool = ToolDefinition.model_validate(
+        {
+            "id": "create_person",
+            "name": "Create person",
+            "description": "Create a person.",
+            "category": "WRITE",
+            "source_ids": ["people"],
+            "api_mapping": {"method": "POST", "body_params": ["name"]},
+            "parameters": [{"name": "name", "type": "string", "required": True}],
+        }
+    )
+    out = _payload_for(QueryResult(rows=[], tool_id="create_person"), tool, {"name": "Ada"})
+    assert "empty" not in out
+    assert "empty_note" not in out
+
+
+def test_non_empty_read_result_has_no_empty_note() -> None:
+    from elliot_connector_runtime.server import _payload_for
+    from elliot_core.types import QueryResult, ToolDefinition
+
+    tool = ToolDefinition.model_validate(
+        {
+            "id": "list_people",
+            "name": "List people",
+            "description": "List people.",
+            "category": "READ",
+            "source_ids": ["people"],
+            "parameters": [],
+        }
+    )
+    out = _payload_for(QueryResult(rows=[{"id": 1}], tool_id="list_people"), tool, {})
+    assert "empty" not in out
+
+
 @respx.mock
 async def test_executor_token_budget_truncates(monkeypatch: pytest.MonkeyPatch) -> None:
     """Rows that fit the row cap but are individually large are trimmed to the

@@ -9,7 +9,7 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
@@ -671,6 +671,8 @@ def create_runtime_server(
         cfg,
         executor,
         audit=audit,
+        tracker=tracker,
+        store=store,
         connector_slug=connector_slug,
         executor_pool=executor_pool,
     )
@@ -797,38 +799,36 @@ def _register_logging(mcp: FastMCP) -> None:
         return None
 
 
-def _register_tool(
-    mcp: FastMCP,
-    executor: ToolExecutor,
-    tool_def: Any,
-    task_store: TaskStore,
-    audit: AuditLog | None = None,
-    tracker: SessionTracker | None = None,
-    store: ObservationStore | None = None,
-    connector_slug: str | None = None,
-    executor_pool: ExecutorPool | None = None,
-    task_tool_name: str = "elliot_get_task",
-) -> None:
-    from elliot_core.errors import ElliotError, to_mcp_error_content
-    from elliot_core.types import ToolDefinition
+def _resolve_stable_session_id(ctx: Any) -> str | None:
+    """The id that groups a client's calls into one session/trace: prefer the MCP
+    protocol ``mcp-session-id`` header (stable for the whole connection), falling
+    back to the per-call ``request_id``. Shared by tool and skill handlers so a
+    skill call lands in the same session as the tool calls around it."""
+    if ctx is None:
+        return None
+    session_id: str | None = None
+    with contextlib.suppress(Exception):
+        session_id = ctx.request_id
+    with contextlib.suppress(Exception):
+        request = ctx.request_context.request
+        if request is not None:
+            header_sid = request.headers.get("mcp-session-id")
+            if header_sid:
+                session_id = header_sid
+    return session_id
 
-    td: ToolDefinition = tool_def
-    read_only = td.category == "READ"
-    # A write is the "danger zone" when its verb is irreversibly destructive
-    # (delete/remove/…) OR the author explicitly flagged it destructive (for the
-    # business-critical actions the verbs miss). Additive creates/updates carry
-    # destructiveHint=False so clients don't gate them — agents operate the
-    # product freely, and only genuinely destructive calls prompt for approval.
-    is_destructive = _is_destructive(td.category, td.id, getattr(td, "destructive", None))
-    annotations = ToolAnnotations(
-        title=td.name,
-        readOnlyHint=read_only,
-        destructiveHint=is_destructive,
-        idempotentHint=read_only,
-        openWorldHint=True,
-    )
-    run_async: bool = getattr(td, "run_async", False)
-    require_confirmation = is_destructive and _require_destructive_confirmation()
+
+def _make_observe(
+    audit: AuditLog | None,
+    tracker: SessionTracker | None,
+    store: ObservationStore | None,
+    connector_slug: str | None,
+) -> Callable[[str, dict[str, Any], list[dict[str, Any]], float, str | None, str | None], Awaitable[None]]:
+    """Build the per-call observer shared by the tool and skill handlers: record
+    one call to the audit log, session tracker, and observation store so every
+    call — tool or skill — is equally observable (principle 4). Blocking I/O runs
+    in a worker thread; every write is best-effort so observability never breaks a
+    call."""
 
     def _observe_blocking(
         tool_id: str,
@@ -839,9 +839,6 @@ def _register_tool(
         session_id: str | None,
         identity: Any,
     ) -> None:
-        """Record one tool call to audit log, session tracker, and observation
-        store. All three do blocking I/O (file appends, synchronous SQLAlchemy
-        writes), so this runs in a worker thread — never on the event loop."""
         row_count = len(result_rows)
         # Estimate tokens up-front so the audit row, the observation store, and
         # /v1/sessions all report the same per-call figure.
@@ -925,6 +922,44 @@ def _register_tool(
             session_id,
             identity,
         )
+
+    return _observe
+
+
+def _register_tool(
+    mcp: FastMCP,
+    executor: ToolExecutor,
+    tool_def: Any,
+    task_store: TaskStore,
+    audit: AuditLog | None = None,
+    tracker: SessionTracker | None = None,
+    store: ObservationStore | None = None,
+    connector_slug: str | None = None,
+    executor_pool: ExecutorPool | None = None,
+    task_tool_name: str = "elliot_get_task",
+) -> None:
+    from elliot_core.errors import ElliotError, to_mcp_error_content
+    from elliot_core.types import ToolDefinition
+
+    td: ToolDefinition = tool_def
+    read_only = td.category == "READ"
+    # A write is the "danger zone" when its verb is irreversibly destructive
+    # (delete/remove/…) OR the author explicitly flagged it destructive (for the
+    # business-critical actions the verbs miss). Additive creates/updates carry
+    # destructiveHint=False so clients don't gate them — agents operate the
+    # product freely, and only genuinely destructive calls prompt for approval.
+    is_destructive = _is_destructive(td.category, td.id, getattr(td, "destructive", None))
+    annotations = ToolAnnotations(
+        title=td.name,
+        readOnlyHint=read_only,
+        destructiveHint=is_destructive,
+        idempotentHint=read_only,
+        openWorldHint=True,
+    )
+    run_async: bool = getattr(td, "run_async", False)
+    require_confirmation = is_destructive and _require_destructive_confirmation()
+
+    _observe = _make_observe(audit, tracker, store, connector_slug)
 
     async def _handler(**kwargs: Any) -> dict[str, Any]:
         import time
@@ -1504,6 +1539,8 @@ def _register_skill_tools(
     executor: ToolExecutor,
     *,
     audit: AuditLog | None = None,
+    tracker: SessionTracker | None = None,
+    store: ObservationStore | None = None,
     connector_slug: str | None = None,
     executor_pool: ExecutorPool | None = None,
 ) -> None:
@@ -1528,6 +1565,9 @@ def _register_skill_tools(
                 tools_by_id,
                 executor,
                 audit=audit,
+                tracker=tracker,
+                store=store,
+                connector_slug=connector_slug,
                 executor_pool=executor_pool,
             )
         except Exception:
@@ -1545,6 +1585,9 @@ def _register_one_skill_tool(
     executor: ToolExecutor,
     *,
     audit: AuditLog | None = None,
+    tracker: SessionTracker | None = None,
+    store: ObservationStore | None = None,
+    connector_slug: str | None = None,
     executor_pool: ExecutorPool | None = None,
 ) -> None:
     from elliot_core.errors import ElliotError, to_mcp_error_content
@@ -1582,34 +1625,18 @@ def _register_one_skill_tool(
         openWorldHint=True,
     )
 
-    async def _observe_skill(
-        arguments: dict[str, Any],
-        rows: list[dict[str, Any]],
-        duration_ms: float,
-        error: str | None,
-    ) -> None:
-        """Best-effort audit record for the skill call as one logical operation.
-        Never raises — observability must not break execution."""
-        if audit is None:
-            return
-        from .session_tracker import _estimate_tokens
-
-        def _write() -> None:
-            with contextlib.suppress(Exception):
-                audit.record(
-                    skill_id,
-                    arguments,
-                    len(rows),
-                    duration_ms,
-                    error=error,
-                    tokens_estimate=_estimate_tokens(rows),
-                )
-
-        with contextlib.suppress(Exception):
-            await run_in_threadpool(_write)
+    # Skill calls are observed through the SAME per-call observer as tools — audit
+    # log, session tracker, and observation store — so a skill call is as visible
+    # in the Agent Console as any tool call (principle 4), recorded under skill_id.
+    _observe = _make_observe(audit, tracker, store, connector_slug)
 
     async def _skill_handler(**kwargs: Any) -> dict[str, Any]:
         import time
+
+        ctx: Any = None
+        with contextlib.suppress(Exception):
+            ctx = mcp.get_context()
+        session_id = _resolve_stable_session_id(ctx)
 
         if require_confirmation:
             if not bool(kwargs.pop("confirm", False)):
@@ -1647,7 +1674,9 @@ def _register_one_skill_tool(
         try:
             result = await run_skill_steps(skill, kwargs, _run_step)
             duration_ms = round((time.monotonic() - t0) * 1000, 1)
-            await _observe_skill(kwargs, getattr(result, "rows", []) or [], duration_ms, None)
+            await _observe(
+                skill_id, kwargs, getattr(result, "rows", []) or [], duration_ms, None, session_id
+            )
             return _skill_payload(result)
         except Exception as exc:
             duration_ms = round((time.monotonic() - t0) * 1000, 1)
@@ -1656,7 +1685,7 @@ def _register_one_skill_tool(
                 if isinstance(exc, ElliotError)
                 else ElliotError("TOOL_EXECUTION_ERROR", str(exc))
             )
-            await _observe_skill(kwargs, [], duration_ms, str(elliot_exc))
+            await _observe(skill_id, kwargs, [], duration_ms, str(elliot_exc), session_id)
             raise ValueError(to_mcp_error_content(elliot_exc)["text"]) from exc
 
     _skill_handler.__name__ = skill_id

@@ -1675,3 +1675,64 @@ async def test_skill_with_a_destructive_step_is_flagged_destructive() -> None:
     mcp = create_runtime_server(cfg, ToolExecutor(cfg, secrets={}))
     tool = next(t for t in await mcp.list_tools() if t.name == "purge_stale")
     assert tool.annotations is not None and tool.annotations.destructiveHint is True
+
+
+async def test_skill_call_is_recorded_in_the_observation_store() -> None:
+    """A skill call is as observable as a tool call: it lands in the observation
+    store under the skill id (via the shared observer), so the Agent Console
+    reflects skill activity, not just individual tool calls (principle 4)."""
+    import tempfile
+
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.observation_store import ObservationStore
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import (
+        ConnectorConfig,
+        SkillDefinition,
+        SkillStep,
+        SourceConfig,
+        ToolDefinition,
+    )
+
+    class _Eng:
+        def query(self, sql, params):  # type: ignore[no-untyped-def]
+            return [{"id": 7}]
+
+    step_tool = ToolDefinition(
+        id="find_thing",
+        name="Find thing",
+        description="Find a thing.",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT id FROM t",
+    )
+    skill = SkillDefinition(
+        id="do_it",
+        name="Do it",
+        description="Find the thing.",
+        steps=[SkillStep(alias="f", tool_id="find_thing", params={})],
+    )
+    cfg = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        sources=[SourceConfig(id="s", name="s", type="file", url="x")],
+        tools=[step_tool],
+        skills=[skill],
+    )
+    d = tempfile.mkdtemp()
+    store = ObservationStore(f"sqlite:///{d}/obs.db")
+    mcp = create_runtime_server(
+        cfg,
+        ToolExecutor(cfg, secrets={}, engine=_Eng()),  # type: ignore[arg-type]
+        store=store,
+    )
+
+    async with create_connected_server_and_client_session(mcp._mcp_server) as client:
+        await client.initialize()
+        res = await client.call_tool("do_it", {})
+        assert not res.isError
+
+    assert any(c.get("tool_id") == "do_it" for c in store.recent_tool_calls(50))

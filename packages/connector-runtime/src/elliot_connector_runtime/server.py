@@ -282,7 +282,7 @@ def _is_destructive(category: str, tool_id: str, explicit: bool | None = None) -
     return not _name_tokens(tool_id).isdisjoint(_DESTRUCTIVE_VERBS)
 
 
-def _derive_instructions(cfg: Any) -> str:
+def derive_agent_briefing(cfg: Any) -> str:
     """Compose the default MCP ``instructions`` briefing a consuming agent reads
     on connect. Unlike a bare "call list_tools" note, it orients the agent to the
     *product*: what it is, which tools give read context versus which operate it,
@@ -574,7 +574,7 @@ def create_runtime_server(
     feedback_tool_name = _feedback_tool_name(prefix)
     task_tool_name = _task_tool_name(prefix)
 
-    instructions = cfg.instructions if cfg.instructions else _derive_instructions(cfg)
+    instructions = cfg.instructions if cfg.instructions else derive_agent_briefing(cfg)
     # Tell the agent the connector ships a feedback tool and to use it — the
     # tool only exists when there's an observation store to persist to, so the
     # instruction is conditional on the same thing the registration is.

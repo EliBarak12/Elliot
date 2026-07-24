@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any
 
 import structlog
@@ -73,6 +74,17 @@ def preview_tool(
                 "PASSTHROUGH_PREVIEW",
                 f"Tool '{tool_id}' is a REST passthrough tool — preview it live via "
                 "elliot_preview_tool (it fetches the source on each call).",
+            )
+        # A WRITE/ACTION mutation tool has nothing safe to preview: executing
+        # it would fire a real request at the upstream API. Say that instead
+        # of a misleading "no SQL" error.
+        if tool.api_mapping is not None:
+            raise ElliotError(
+                "ACTION_PREVIEW_UNAVAILABLE",
+                f"Tool '{tool_id}' is a {tool.category} mutation tool — preview would "
+                "execute a real request against the upstream API, so it is not run "
+                "at design time. Point the source at a staging endpoint to test it, "
+                "or verify after publish.",
             )
         raise ElliotError("NOT_FOUND", f"No SQL defined for tool: {tool_id}")
 
@@ -453,6 +465,156 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(exc)
         except Exception as exc:
             log.error("tool.create_rest.failed", error=str(exc))
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+
+    @mcp.tool()
+    def elliot_create_action_tool(
+        name: str,
+        description: str,
+        source_id: str,
+        method: str,
+        parameters: _ParamList,
+        path_template: str = "",
+        query_params: list[str] | None = None,
+        body_params: list[str] | None = None,
+        body_format: str = "json",
+        category: str = "ACTION",
+    ) -> dict:  # type: ignore[type-arg]
+        """Define a WRITE/ACTION tool — a real HTTP mutation against a REST source.
+
+        This is how a connector lets agents ACT on the product (create an
+        order, update a ticket, cancel a job) instead of only reading from it.
+        On every call the runtime sends ``method`` to the source's URL +
+        ``path_template``, routing the declared parameters into the request:
+
+            <source url> + path_template   e.g. "/orders/{order_id}/cancel"
+
+        Args:
+            source_id: id of a REST source (from elliot_discover_source; use
+                skip_probe=true for endpoints that only answer to mutations).
+            method: "POST" | "PUT" | "PATCH" | "DELETE". For GET reads use
+                elliot_create_tool / elliot_create_rest_tool instead.
+            parameters: EVERY agent-facing input, same shape as
+                elliot_create_tool ({"name", "type", "required",
+                "description", "enum"}). Describe each one — the description
+                is the agent's contract.
+            path_template: optional path appended to the source URL; ``{param}``
+                placeholders are filled (URL-encoded) from same-named
+                parameters.
+            query_params: parameter names sent as URL query string values.
+            body_params: parameter names sent in the request body ("json" or
+                "form" per body_format). The source's static ``body`` fields
+                ride along and per-call values override them.
+            category: "ACTION" (default) or "WRITE" — both mark the tool
+                destructive to agents; pick WRITE for plain data mutations and
+                ACTION for operations with side effects beyond data.
+
+        Every parameter must be routed somewhere (path placeholder, query, or
+        body) — unrouted parameters are rejected so the tool cannot silently
+        drop an agent's input.
+        """
+        try:
+            source = session.sources.get(source_id)
+            if source is None:
+                return {
+                    "error": (
+                        f"Source not found: {source_id}. Discover a REST source first with "
+                        "elliot_discover_source (skip_probe=true for mutation-only endpoints)."
+                    )
+                }
+            if source.type != "rest":
+                return {
+                    "error": (
+                        f"Source '{source_id}' is type '{source.type}', not 'rest'. "
+                        "WRITE/ACTION tools mutate a REST API."
+                    )
+                }
+            mapped_category = _CATEGORY_MAP.get(category.lower())
+            if mapped_category not in ("WRITE", "ACTION"):
+                return {"error": f"category must be WRITE or ACTION, got {category!r}."}
+            normalized_method = method.strip().upper()
+            if normalized_method not in ("POST", "PUT", "PATCH", "DELETE"):
+                return {
+                    "error": (
+                        f"method must be POST, PUT, PATCH or DELETE, got {method!r}. "
+                        "For reads use elliot_create_tool or elliot_create_rest_tool."
+                    )
+                }
+
+            tool_id = slugify_identifier(name)
+            if not is_valid_identifier(tool_id):
+                raise ElliotError(
+                    "INVALID_TOOL_NAME",
+                    f"Could not derive a valid tool id from name {name!r}.",
+                )
+
+            declared = {
+                str(p["name"]) for p in (parameters or []) if isinstance(p, dict) and p.get("name")
+            }
+            if not declared:
+                return {"error": "parameters must declare at least one agent-facing input."}
+            placeholders = set(re.findall(r"\{([a-zA-Z0-9_]+)\}", path_template or ""))
+            query_names = list(query_params or [])
+            body_names = list(body_params or [])
+            undeclared = sorted((placeholders | set(query_names) | set(body_names)) - declared)
+            if undeclared:
+                raise ElliotError(
+                    "UNDECLARED_PARAM",
+                    "path_template/query_params/body_params reference undeclared "
+                    f"parameter(s): {', '.join(undeclared)}. Declare each in `parameters`.",
+                    detail={"undeclared": undeclared, "declared": sorted(declared)},
+                )
+            unrouted = sorted(declared - placeholders - set(query_names) - set(body_names))
+            if unrouted:
+                raise ElliotError(
+                    "UNROUTED_PARAM",
+                    f"Parameter(s) {', '.join(unrouted)} are declared but not routed to the "
+                    "path, query_params, or body_params — the runtime would silently drop "
+                    "them. Route each one (or remove it).",
+                    detail={"unrouted": unrouted},
+                )
+
+            tool = ToolDefinition.model_validate(
+                {
+                    "id": tool_id,
+                    "name": name,
+                    "description": description,
+                    "category": mapped_category,
+                    "source_ids": [source_id],
+                    "parameters": parameters,
+                    "api_mapping": {
+                        "method": normalized_method,
+                        "path_template": path_template or None,
+                        "query_params": query_names,
+                        "body_params": body_names,
+                        "body_format": body_format,
+                    },
+                }
+            )
+            session.registry.add(tool)
+            # Mutation tools carry no SQL; drop any stale entry under this id.
+            session.tool_sql.pop(tool.id, None)
+            session.save()
+            log.info(
+                "tool.created.action",
+                tool_id=tool.id,
+                source_id=source_id,
+                method=normalized_method,
+            )
+            return {
+                "tool_id": tool.id,
+                "status": "created",
+                "mode": "api_mutation",
+                "note": (
+                    "Mutation tools are not executed by preview or the publish smoke "
+                    "test — verify against a staging endpoint or after publish. Agents "
+                    "see it flagged destructive."
+                ),
+            }
+        except ElliotError as exc:
+            return to_mcp_error_content(exc)
+        except Exception as exc:
+            log.error("tool.create_action.failed", error=str(exc))
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()

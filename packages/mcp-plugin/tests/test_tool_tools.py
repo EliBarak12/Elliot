@@ -601,3 +601,203 @@ def test_create_tool_accepts_declared_bind_param(
         ],
     )
     assert result.get("status") == "created", result
+
+
+# ── elliot_create_action_tool ─────────────────────────────────────────────────
+
+
+def _rest_source(session: ElliotSession, source_id: str = "shop") -> None:
+    from elliot_core.types.source import SourceConfig
+
+    session.sources[source_id] = SourceConfig.model_validate(
+        {"id": source_id, "type": "rest", "name": source_id, "url": "https://api.example.com/shop"}
+    )
+
+
+def test_create_action_tool_registers_api_mapping(mcp: FastMCP, session: ElliotSession):
+    _rest_source(session)
+    out = _tool(mcp, "elliot_create_action_tool")(
+        name="cancel_order",
+        description="Cancel an order by id, notifying the customer.",
+        source_id="shop",
+        method="post",
+        path_template="/orders/{order_id}/cancel",
+        body_params=["reason"],
+        parameters=[
+            {
+                "name": "order_id",
+                "type": "string",
+                "required": True,
+                "description": "Order to cancel.",
+            },
+            {
+                "name": "reason",
+                "type": "string",
+                "required": False,
+                "description": "Optional cancellation reason shown to the customer.",
+            },
+        ],
+    )
+    assert out.get("status") == "created", out
+    assert out.get("mode") == "api_mutation"
+    tool = session.registry.get("cancel_order")
+    assert tool is not None
+    assert tool.category == "ACTION"
+    assert tool.api_mapping is not None
+    assert tool.api_mapping.method == "POST"
+    assert tool.api_mapping.path_template == "/orders/{order_id}/cancel"
+    assert tool.api_mapping.body_params == ["reason"]
+    assert tool.source_ids == ["shop"]
+    assert "cancel_order" not in session.tool_sql
+
+
+def test_create_action_tool_rejects_unknown_and_non_rest_source(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    out = _tool(mcp, "elliot_create_action_tool")(
+        name="x",
+        description="d",
+        source_id="ghost",
+        method="POST",
+        parameters=[{"name": "a", "type": "string", "required": True, "description": "a"}],
+        body_params=["a"],
+    )
+    assert "Source not found" in out.get("error", "")
+
+    _load_table(session, tmp_path)  # registers a file source named "orders"
+    file_source_id = next(iter(session.sources))
+    out = _tool(mcp, "elliot_create_action_tool")(
+        name="x",
+        description="d",
+        source_id=file_source_id,
+        method="POST",
+        parameters=[{"name": "a", "type": "string", "required": True, "description": "a"}],
+        body_params=["a"],
+    )
+    assert "not 'rest'" in out.get("error", "")
+
+
+def test_create_action_tool_rejects_get_method(mcp: FastMCP, session: ElliotSession):
+    _rest_source(session)
+    out = _tool(mcp, "elliot_create_action_tool")(
+        name="fetch_things",
+        description="d",
+        source_id="shop",
+        method="GET",
+        parameters=[{"name": "a", "type": "string", "required": True, "description": "a"}],
+        query_params=["a"],
+    )
+    assert "POST, PUT, PATCH or DELETE" in out.get("error", "")
+
+
+def test_create_action_tool_rejects_undeclared_placeholder(mcp: FastMCP, session: ElliotSession):
+    _rest_source(session)
+    out = _tool(mcp, "elliot_create_action_tool")(
+        name="cancel_order",
+        description="Cancel an order.",
+        source_id="shop",
+        method="POST",
+        path_template="/orders/{order_id}/cancel",
+        parameters=[{"name": "reason", "type": "string", "required": False, "description": "why"}],
+        body_params=["reason"],
+    )
+    text = str(out)
+    assert "UNDECLARED_PARAM" in text and "order_id" in text
+
+
+def test_create_action_tool_rejects_unrouted_param(mcp: FastMCP, session: ElliotSession):
+    _rest_source(session)
+    out = _tool(mcp, "elliot_create_action_tool")(
+        name="update_note",
+        description="Update a note.",
+        source_id="shop",
+        method="PATCH",
+        parameters=[
+            {"name": "note_id", "type": "string", "required": True, "description": "id"},
+            {"name": "text", "type": "string", "required": True, "description": "body"},
+        ],
+        body_params=["text"],
+    )
+    out_text = str(out)
+    assert "UNROUTED_PARAM" in out_text and "note_id" in out_text
+
+
+def test_preview_action_tool_says_why_not(mcp: FastMCP, session: ElliotSession):
+    _rest_source(session)
+    _tool(mcp, "elliot_create_action_tool")(
+        name="cancel_order",
+        description="Cancel an order by id.",
+        source_id="shop",
+        method="POST",
+        path_template="/orders/{order_id}/cancel",
+        parameters=[{"name": "order_id", "type": "string", "required": True, "description": "id"}],
+    )
+    out = _tool(mcp, "elliot_preview_tool")(tool_id="cancel_order", params={"order_id": "9"})
+    assert "ACTION_PREVIEW_UNAVAILABLE" in str(out)
+
+
+def test_authored_action_tool_executes_in_runtime():
+    """The whole point: a tool authored via elliot_create_action_tool must be
+    executable by the published runtime as a real HTTP mutation."""
+    import asyncio as _asyncio
+    import json as _json
+
+    import respx
+    from httpx import Response
+
+    from elliot_connector_runtime.executor import ToolExecutor as RuntimeExecutor
+    from elliot_core.types import ConnectorConfig
+
+    spec = {
+        "name": "Shop",
+        "slug": "shop",
+        "version": "1.0.0",
+        "sources": [
+            {"id": "shop", "name": "shop", "type": "rest", "url": "https://api.example.com/shop"}
+        ],
+        "tools": [
+            {
+                "id": "cancel_order",
+                "name": "cancel_order",
+                "description": "Cancel an order by id.",
+                "category": "ACTION",
+                "source_ids": ["shop"],
+                "parameters": [
+                    {
+                        "name": "order_id",
+                        "type": "string",
+                        "required": True,
+                        "description": "id",
+                    },
+                    {
+                        "name": "reason",
+                        "type": "string",
+                        "required": False,
+                        "description": "why",
+                    },
+                ],
+                "api_mapping": {
+                    "method": "POST",
+                    "path_template": "/orders/{order_id}/cancel",
+                    "query_params": [],
+                    "body_params": ["reason"],
+                    "body_format": "json",
+                },
+            }
+        ],
+        "skills": [],
+    }
+    config = ConnectorConfig.model_validate(spec)
+    executor = RuntimeExecutor(config, {})
+
+    with respx.mock:
+        route = respx.post("https://api.example.com/shop/orders/o-42/cancel").mock(
+            return_value=Response(200, json={"ok": True, "order_id": "o-42"})
+        )
+        result = _asyncio.run(
+            executor.execute(config.tools[0], {"order_id": "o-42", "reason": "customer ask"})
+        )
+    assert route.called
+    sent_body = _json.loads(route.calls[0].request.content)
+    assert sent_body == {"reason": "customer ask"}
+    assert result.rows and result.rows[0]["ok"] is True

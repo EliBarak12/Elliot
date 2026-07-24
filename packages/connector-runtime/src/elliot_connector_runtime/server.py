@@ -1578,6 +1578,28 @@ def _register_skill_tools(
             )
 
 
+def _skill_tool_description(skill: Any) -> str:
+    """The agent-facing description of a deterministic skill registered as a
+    callable tool. Enriches the author's one-liner with the trigger
+    (``when_to_use``) and the fact that one call runs the whole chain — so an
+    agent listing tools can tell WHEN to reach for the skill instead of
+    orchestrating the individual tools itself. Without this the skill was a bare
+    one-liner and its one-call value (and the ``when_to_use`` the author wrote)
+    were invisible at the moment the agent chooses a tool."""
+    name = getattr(skill, "name", "") or "workflow"
+    base = (getattr(skill, "description", "") or f"Run the {name} workflow.").strip().rstrip(".")
+    parts = [f"{base}."]
+    when = (getattr(skill, "when_to_use", "") or "").strip()
+    if when:
+        parts.append(f"Use this when: {when.rstrip('.')}.")
+    step_count = len(getattr(skill, "steps", None) or [])
+    if step_count > 1:
+        parts.append(
+            f"One call runs the whole {step_count}-step workflow — you don't orchestrate the steps."
+        )
+    return " ".join(parts)
+
+
 def _register_one_skill_tool(
     mcp: FastMCP,
     skill: Any,
@@ -1595,7 +1617,7 @@ def _register_one_skill_tool(
 
     skill_id = skill.id
     skill_name = skill.name
-    skill_desc = (skill.description or f"Run the {skill_name} workflow.").strip()
+    skill_desc = _skill_tool_description(skill)
     steps = skill.steps
     input_params = skill.input_parameters
 

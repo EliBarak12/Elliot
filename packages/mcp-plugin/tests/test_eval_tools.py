@@ -220,3 +220,56 @@ def test_quality_scan_with_previous_eval(
     result = _tool(mcp, "elliot_quality_scan")()
     assert "last_eval_score" in result
     assert result["last_eval_score"] == pytest.approx(0.8, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# elliot_run_eval — inline cases (the Cloud path: no file, no shared dir)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_eval_inline_cases_pass(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path, monkeypatch
+):
+    monkeypatch.setattr(
+        "elliot_mcp_plugin.tools.eval_tools.EVAL_RESULTS_DIR",
+        str(tmp_path / ".elliot" / "eval-results"),
+    )
+    await _load_table_and_build_connector(session, tmp_path)
+
+    result = await _tool(mcp, "elliot_run_eval")(
+        cases=[
+            {
+                "id": "c1",
+                "tool_id": "list_items",
+                "arguments": {},
+                "expect": {"no_error": True, "min_rows": 1, "fields_present": ["id"]},
+            }
+        ]
+    )
+    assert result["format"] == "inline"
+    assert result["passed"] == 1
+    assert result["failed"] == 0
+    assert result["score"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_run_eval_inline_unknown_tool_fails_gracefully(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    await _load_table_and_build_connector(session, tmp_path)
+    result = await _tool(mcp, "elliot_run_eval")(
+        cases=[{"id": "c1", "tool_id": "does_not_exist", "arguments": {}}]
+    )
+    assert result["format"] == "inline"
+    assert result["passed"] == 0
+    assert result["failed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_eval_inline_empty_cases_errors(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    await _load_table_and_build_connector(session, tmp_path)
+    result = await _tool(mcp, "elliot_run_eval")(cases=[])
+    assert "text" in result or "error" in result

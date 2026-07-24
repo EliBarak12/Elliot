@@ -11,12 +11,15 @@ from typing import Any
 
 import structlog
 from mcp.server.fastmcp import FastMCP
+from pydantic import ValidationError
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.eval.models import EvalCase, EvalSuite
 from elliot_core.eval.quality import BEST_PRACTICES, analyze_connector_quality
 from elliot_core.eval.runner import load_results, run_eval_suite, save_result
 from elliot_core.eval_runner import EvalRunner
+from elliot_core.eval_types import EvalCase as YamlEvalCase
+from elliot_core.eval_types import EvalSuite as YamlEvalSuite
 from elliot_core.eval_types import load_eval_suite as load_yaml_eval_suite
 from elliot_core.tools.executor import ToolExecutor
 from elliot_mcp_plugin.session import ElliotSession
@@ -57,25 +60,58 @@ def _resolve_suite_path(path: str | None, suite_id: str | None, session: ElliotS
     )
 
 
-async def _run_yaml_suite(path: Path, session: ElliotSession) -> dict[str, Any]:
-    """Run a rich .eval.yaml suite via EvalRunner and shape the result for MCP."""
-    suite = load_yaml_eval_suite(path)
-    secrets = session.workspace.load_secrets()
-    runner = EvalRunner(session.connector, secrets)  # type: ignore[arg-type]
-    case_results = await runner.run_suite(suite)
+def _shape_yaml_result(suite: YamlEvalSuite, case_results: list[Any], fmt: str) -> dict[str, Any]:
+    """Score EvalRunner CaseResults into the MCP response shape."""
     passed = sum(1 for r in case_results if r.passed)
     failed = len(case_results) - passed
     score = round(passed / len(case_results) * 100, 1) if case_results else 100.0
     return {
         "suite_id": suite.connector,
         "suite_name": suite.name,
-        "format": "yaml",
+        "format": fmt,
         "run_at": datetime.datetime.now(datetime.UTC).isoformat(),
         "score": score,
         "passed": passed,
         "failed": failed,
         "cases": [dataclasses.asdict(c) for c in case_results],
     }
+
+
+async def _run_yaml_suite(path: Path, session: ElliotSession) -> dict[str, Any]:
+    """Run a rich .eval.yaml suite via EvalRunner and shape the result for MCP."""
+    suite = load_yaml_eval_suite(path)
+    secrets = session.workspace.load_secrets()
+    runner = EvalRunner(session.connector, secrets)  # type: ignore[arg-type]
+    case_results = await runner.run_suite(suite)
+    return _shape_yaml_result(suite, case_results, "yaml")
+
+
+async def _run_inline_suite(
+    cases: list[dict[str, Any]], session: ElliotSession, name: str
+) -> dict[str, Any]:
+    """Run cases the agent passes inline — no file, no shared eval dir.
+
+    This is the cloud path for lint -> eval -> publish: the agent authors test
+    cases and runs them against the built connector in one call, with results
+    scoped to its own session (never a host-shared directory)."""
+    if not cases:
+        raise ElliotError("VALIDATION_ERROR", "`cases` must be a non-empty list of eval cases.")
+    try:
+        suite = YamlEvalSuite(
+            name=name or "inline",
+            connector=session.connector.slug,  # type: ignore[union-attr]
+            cases=[YamlEvalCase.model_validate(c) for c in cases],
+        )
+    except ValidationError as exc:
+        raise ElliotError(
+            "VALIDATION_ERROR",
+            "Invalid eval case. Each case needs `tool_id` and optional `arguments` + "
+            f"`expect` (no_error/min_rows/fields_present/max_token_estimate…). {exc}",
+        ) from exc
+    secrets = session.workspace.load_secrets()
+    runner = EvalRunner(session.connector, secrets)  # type: ignore[arg-type]
+    case_results = await runner.run_suite(suite)
+    return _shape_yaml_result(suite, case_results, "inline")
 
 
 async def _run_json_suite(path: Path, session: ElliotSession) -> dict[str, Any]:
@@ -98,21 +134,35 @@ def register_eval_tools(mcp: FastMCP, session: ElliotSession) -> None:
     async def elliot_run_eval(
         suite_id: str | None = None,
         path: str | None = None,
+        cases: list[dict[str, Any]] | None = None,
     ) -> dict:  # type: ignore[type-arg]
         """Run an eval suite against the built connector and return scored results.
 
-        Pass either ``path`` (a ``.eval.yaml`` / ``.eval.yml`` / ``.json`` file —
-        absolute or relative to the project root) or ``suite_id`` (looked up under
-        ``<EVAL_DIR>/<suite_id>.{yaml,yml,json}``, default ``.elliot/eval``).
+        Three ways to supply the cases:
 
-        YAML suites use the rich ``expect`` shape (no_error, min_rows,
-        fields_present, max_token_estimate, all_rows_match, error_code) — see
-        ``connectors/my-saas.eval.yaml`` for the canonical example. JSON suites
-        use the legacy ``expected_rows`` / ``match_mode`` shape.
+        - ``cases`` — a list of eval cases passed INLINE. This is the path that
+          works on Elliot Cloud (no file needed): the agent authors test cases
+          and runs them in one call, so lint -> eval -> publish completes without
+          touching a host directory. Each case is
+          ``{"id": "...", "tool_id": "...", "arguments": {...},
+          "expect": {"no_error": true, "min_rows": 1, "fields_present": ["id"],
+          "max_token_estimate": 800}}`` — only ``tool_id`` is required.
+        - ``path`` — a ``.eval.yaml`` / ``.eval.yml`` / ``.json`` file (absolute
+          or relative to the project root).
+        - ``suite_id`` — looked up under ``<EVAL_DIR>/<suite_id>.{yaml,yml,json}``
+          (default ``.elliot/eval``); file-based, mainly for local runs.
+
+        The rich ``expect`` shape (no_error, min_rows, fields_present,
+        max_token_estimate, all_rows_match, error_code) is documented in
+        ``connectors/my-saas.eval.yaml``.
         """
         try:
             if session.connector is None:
                 raise ElliotError("NO_CONNECTOR", "No connector loaded in session")
+            if cases is not None:
+                result = await _run_inline_suite(cases, session, name=suite_id or "inline")
+                log.info("eval.run.complete", format="inline", score=result["score"])
+                return result
             suite_path = _resolve_suite_path(path, suite_id, session)
             log.info("eval.run.start", path=str(suite_path))
             if suite_path.suffix.lower() in (".yaml", ".yml"):

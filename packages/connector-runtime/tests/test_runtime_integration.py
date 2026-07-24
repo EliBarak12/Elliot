@@ -1297,6 +1297,9 @@ def test_is_destructive_explicit_flag_overrides_verb() -> None:
     # None → fall back to verb inference (unchanged behaviour).
     assert _is_destructive("WRITE", "delete_order", None) is True
     assert _is_destructive("ACTION", "execute_refund", None) is False
+    # A READ is never the danger zone — the flag can't make a read "destructive"
+    # (that would emit a contradictory readOnly + destructive annotation pair).
+    assert _is_destructive("READ", "get_secret", True) is False
 
 
 def test_explicit_destructive_flag_flows_to_annotations_and_gate(

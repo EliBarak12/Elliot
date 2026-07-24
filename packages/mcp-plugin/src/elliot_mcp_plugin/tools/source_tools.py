@@ -823,7 +823,14 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
     @mcp.tool()
     def elliot_profile_source(table_name: str) -> dict:  # type: ignore[type-arg]
-        """Return column statistics (min, max, nulls, distinct, top values) for a table."""
+        """Return column statistics for a table to inform tool design.
+
+        Per column: min, max, null_count, distinct_count, total_count, and the
+        top values. A column flagged ``enum_candidate: true`` is a small,
+        repeated set of text values (its ``enum_values`` list) — declare a
+        matching tool parameter as a typed ``enum`` of those values, not an open
+        string, so an agent can't pass a value the tool would silently reject.
+        """
         try:
             schema = session.engine.get_table_schema(table_name)
             stats = session.engine.get_table_stats(table_name)

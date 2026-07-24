@@ -10,6 +10,10 @@ from elliot_core.errors import ElliotError
 from elliot_core.sql import safe_ident
 from elliot_core.types.sqlite import FlattenedTable, FlattenResult
 
+# A text column with at most this many distinct values is a candidate for a
+# typed enum parameter rather than an open string (profile_column).
+_ENUM_MAX_DISTINCT = 12
+
 
 def _bindable(value: Any) -> Any:
     """Coerce a Python value to something sqlite3 can bind as a `?` parameter."""
@@ -175,7 +179,8 @@ class SQLiteEngine:
                 MIN({quoted_col}) as min_val,
                 MAX({quoted_col}) as max_val,
                 SUM(CASE WHEN {quoted_col} IS NULL THEN 1 ELSE 0 END) as null_count,
-                COUNT(DISTINCT {quoted_col}) as distinct_count
+                COUNT(DISTINCT {quoted_col}) as distinct_count,
+                COUNT(*) as total_count
             FROM {quoted_table}
         """
         with self._lock:
@@ -185,6 +190,33 @@ class SQLiteEngine:
                 f"GROUP BY {quoted_col} ORDER BY n DESC LIMIT 5"
             ).fetchall()
         row["top_values"] = [r[0] for r in top]
+
+        # Enum candidate: a small, repeated set of text values. The building
+        # agent should declare a typed `enum` param for it instead of an open
+        # string, so an agent can't pass a value the tool silently rejects
+        # (principle 1 — contracts). Gated to TEXT columns (min_val is a str) so
+        # a numeric range (age, year) isn't mistaken for a category, and to
+        # clear repetition (total >= 2*distinct) so a near-unique key or a tiny
+        # sample table isn't either. The exact allowed values ride along so the
+        # agent can drop them straight into the tool's `enum`.
+        row["enum_candidate"] = False
+        distinct = int(row.get("distinct_count") or 0)
+        total = int(row.get("total_count") or 0)
+        max_len = len(str(row.get("max_val") or ""))
+        if (
+            isinstance(row.get("min_val"), str)
+            and 2 <= distinct <= _ENUM_MAX_DISTINCT
+            and total >= 2 * distinct
+            and max_len <= 100
+        ):
+            with self._lock:
+                vals = self._conn.execute(
+                    f"SELECT DISTINCT {quoted_col} FROM {quoted_table} "
+                    f"WHERE {quoted_col} IS NOT NULL "
+                    f"ORDER BY {quoted_col} LIMIT {_ENUM_MAX_DISTINCT}"
+                ).fetchall()
+            row["enum_candidate"] = True
+            row["enum_values"] = [v[0] for v in vals]
         return row
 
     def close(self) -> None:

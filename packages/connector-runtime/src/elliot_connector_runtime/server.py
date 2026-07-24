@@ -282,6 +282,59 @@ def _is_destructive(category: str, tool_id: str, explicit: bool | None = None) -
     return not _name_tokens(tool_id).isdisjoint(_DESTRUCTIVE_VERBS)
 
 
+def _derive_instructions(cfg: Any) -> str:
+    """Compose the default MCP ``instructions`` briefing a consuming agent reads
+    on connect. Unlike a bare "call list_tools" note, it orients the agent to the
+    *product*: what it is, which tools give read context versus which operate it,
+    and which are the danger zone to confirm first. An author-supplied
+    ``cfg.instructions`` always wins; this only fills the common case where the
+    connector shipped none — so every published connector greets an agent with a
+    real briefing instead of an anonymous source/tool count, which is the whole
+    point of a connector: it hands the agent both the context to understand the
+    product and the actions to operate it, with the danger zone flagged."""
+    name = cfg.name or "this connector"
+    desc = (getattr(cfg, "description", "") or "").strip()
+    lead = f"This MCP server exposes '{name}' as agent-ready tools."
+    if desc:
+        lead = f"{lead} {desc.rstrip('.')}."
+
+    read_tools = [t for t in cfg.tools if t.category == "READ"]
+    act_tools = [t for t in cfg.tools if t.category != "READ"]
+    danger = [
+        t for t in act_tools if _is_destructive(t.category, t.id, getattr(t, "destructive", None))
+    ]
+
+    parts: list[str] = []
+    if read_tools:
+        parts.append(
+            f"{len(read_tools)} READ tool(s) give you context about the product — "
+            "read them to understand the data before you act"
+        )
+    if act_tools:
+        parts.append(
+            f"{len(act_tools)} WRITE/ACTION tool(s) operate the product on the user's behalf"
+        )
+
+    lines = [lead]
+    if parts:
+        lines.append(". ".join(parts) + ".")
+    if danger:
+        shown = sorted(t.id for t in danger)
+        names = ", ".join(shown[:6])
+        more = "" if len(shown) <= 6 else f", +{len(shown) - 6} more"
+        lines.append(
+            f"Danger zone: {len(danger)} tool(s) are irreversible ({names}{more}) and require "
+            "confirmation before you call them; every other tool is safe to run directly."
+        )
+    skills = getattr(cfg, "skills", None)
+    if skills:
+        lines.append(
+            f"{len(skills)} multi-step skill(s) are available as MCP prompts for common workflows."
+        )
+    lines.append("Call list_tools for each tool's full parameter contract.")
+    return "\n\n".join(lines)
+
+
 def _identity_payload(identity: AgentIdentity | None) -> dict[str, Any] | None:
     if identity is None:
         return None
@@ -521,15 +574,7 @@ def create_runtime_server(
     feedback_tool_name = _feedback_tool_name(prefix)
     task_tool_name = _task_tool_name(prefix)
 
-    instructions = (
-        cfg.instructions
-        if cfg.instructions
-        else (
-            f"This MCP server exposes tools for the '{cfg.name}' connector. "
-            f"It wraps {len(cfg.sources)} data source(s) across {len(cfg.tools)} tool(s). "
-            "Use list_tools to see available tools, then call them with the required parameters."
-        )
-    )
+    instructions = cfg.instructions if cfg.instructions else _derive_instructions(cfg)
     # Tell the agent the connector ships a feedback tool and to use it — the
     # tool only exists when there's an observation store to persist to, so the
     # instruction is conditional on the same thing the registration is.

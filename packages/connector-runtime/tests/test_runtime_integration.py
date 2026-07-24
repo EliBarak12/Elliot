@@ -1266,6 +1266,108 @@ def test_read_tool_does_not_require_confirmation_even_when_enabled(
     asyncio.run(tool.fn())
 
 
+def test_is_destructive_reflects_verb_not_just_category() -> None:
+    """The danger zone is the verb, not the write category: deletes/removes are
+    destructive; additive creates and updates are not; reads never are."""
+    from elliot_connector_runtime.server import _is_destructive
+
+    assert _is_destructive("WRITE", "delete_order") is True
+    assert _is_destructive("ACTION", "notion-remove-page") is True
+    assert _is_destructive("ACTION", "purgeCache") is True
+    assert _is_destructive("WRITE", "revoke_token") is True
+    # Additive writes are NOT the danger zone — agents run them without a prompt.
+    assert _is_destructive("ACTION", "create_order") is False
+    assert _is_destructive("WRITE", "update_order") is False
+    assert _is_destructive("ACTION", "send_message") is False
+    # Reads are never destructive, whatever the name.
+    assert _is_destructive("READ", "get_order") is False
+
+
+def test_additive_write_is_not_gated_and_hint_tracks_verb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Even with the confirmation gate ON, an additive write (create_*) is not
+    gated and advertises destructiveHint=False, while a delete_* alongside it is
+    gated and flagged destructive — 'operate the product, gate the danger zone'."""
+    import asyncio
+    import inspect as _inspect
+
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+
+    monkeypatch.setenv("ELLIOT_REQUIRE_DESTRUCTIVE_CONFIRMATION", "true")
+
+    connector = {
+        **MINIMAL_CONNECTOR,
+        "tools": [
+            {
+                "id": "create_animal",
+                "name": "Create animal",
+                "description": "Create a new animal record",
+                "category": "WRITE",
+                "sql": "INSERT INTO animals (name) VALUES (:name)",
+                "parameters": [
+                    {"name": "name", "type": "string", "required": True, "description": "Name"}
+                ],
+            },
+            {
+                "id": "delete_animal",
+                "name": "Delete animal",
+                "description": "Delete an animal by id",
+                "category": "WRITE",
+                "sql": "DELETE FROM animals WHERE id = :id",
+                "parameters": [
+                    {"name": "id", "type": "integer", "required": True, "description": "Animal id"}
+                ],
+            },
+        ],
+    }
+    cfg_path = tmp_path / "animals.connector.json"
+    cfg_path.write_text(json.dumps(connector))
+    config = ConnectorCache().get(cfg_path)
+    executor = ToolExecutor(config, secrets={})
+
+    ran: dict[str, dict] = {}
+
+    async def _fake(tool, args):  # type: ignore[no-untyped-def]
+        from elliot_core.types.tool import ToolResult
+
+        ran[tool.id] = args
+        return ToolResult(rows=[{"ok": True}], meta={})
+
+    executor.execute = _fake  # type: ignore[assignment]
+    mcp = create_runtime_server(config, executor)
+
+    class _Ctx:
+        request_id = "verb-req"
+
+        async def info(self, *a, **k):  # type: ignore[no-untyped-def]
+            pass
+
+        async def warning(self, *a, **k):  # type: ignore[no-untyped-def]
+            pass
+
+    mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
+
+    create = mcp._tool_manager.get_tool("create_animal")
+    delete = mcp._tool_manager.get_tool("delete_animal")
+    assert create is not None and delete is not None
+
+    # Additive write: no confirm gate, runs straight through, non-destructive.
+    assert "confirm" not in _inspect.signature(create.fn).parameters
+    assert create.annotations.destructiveHint is False
+    assert create.annotations.readOnlyHint is False
+    asyncio.run(create.fn(name="Ada"))
+    assert ran.get("create_animal") == {"name": "Ada"}
+
+    # Destructive write: gated and flagged, exactly as before.
+    assert "confirm" in _inspect.signature(delete.fn).parameters
+    assert delete.annotations.destructiveHint is True
+    with pytest.raises(ValueError, match="CONFIRMATION_REQUIRED"):
+        asyncio.run(delete.fn(id=1))
+
+
 # ---------------------------------------------------------------------------
 # No-connector fallback app
 # ---------------------------------------------------------------------------

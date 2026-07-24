@@ -93,4 +93,19 @@ def _lookup(
         result = step_results.get(alias)
         if result and result.rows:
             return result.rows[0].get(field)
-    return None
+        return None
+    # Anything else is an authoring mistake, and silently resolving it to None
+    # used to surface later as a baffling MISSING_PARAM on the step's tool.
+    # Fail here instead, with the reference that didn't resolve and the exact
+    # syntax that would (naming the caller's own value when we can see it).
+    hint = (
+        f"Did you mean '{{{{ skill.input.{path} }}}}'?"
+        if len(parts) == 1 and (path in inputs or path.isidentifier())
+        else "Use '{{ skill.input.<name> }}' for a skill input, or "
+        "'{{ steps.<alias>.<field> }}' for a field of an earlier step's first row."
+    )
+    raise ElliotError(
+        "SKILL_TEMPLATE_UNRESOLVED",
+        f"Skill step parameter references '{{{{ {path} }}}}', which is not a valid binding. {hint}",
+        detail={"reference": path, "declared_inputs": sorted(inputs)},
+    )

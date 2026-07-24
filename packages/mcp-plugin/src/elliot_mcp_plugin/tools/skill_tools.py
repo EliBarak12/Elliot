@@ -87,6 +87,20 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
           flat step chain can't express. This is exported as a SKILL.md guide,
           the same way Elliot ships its own skills.
 
+        Step param binding — a step's params are static values, or templates
+        resolved at run time:
+
+        - `"{{ skill.input.NAME }}"` — the caller-supplied input NAME declared
+          in `input_parameters`. Bare `"{{ NAME }}"` does NOT work.
+        - `"{{ steps.ALIAS.FIELD }}"` — FIELD from the first result row of the
+          earlier step ALIAS (chain a lookup step into the next step).
+        - Templates also interpolate inside strings: `"user_{{ skill.input.id }}"`.
+
+        Example: steps=[{alias: "user", tool_id: "find_user",
+        params: {"email": "{{ skill.input.email }}"}}, {alias: "orders",
+        tool_id: "list_orders", params: {"user_id": "{{ steps.user.id }}"}}]
+        with input_parameters=[{name: "email", type: "string", required: true}].
+
         Supply at least one of `steps` or `instructions`.
         """
         try:

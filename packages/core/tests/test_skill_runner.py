@@ -68,9 +68,30 @@ def test_lookup_step_no_rows():
     assert result is None
 
 
-def test_lookup_unknown_path():
-    result = _lookup("unknown.path", {}, {})
-    assert result is None
+def test_lookup_unknown_path_raises_actionable_error():
+    # A reference outside the skill.input / steps namespaces used to resolve to
+    # None and surface later as a baffling MISSING_PARAM on the step's tool;
+    # it now fails at the reference itself, naming the valid syntaxes.
+    with pytest.raises(ElliotError) as exc_info:
+        _lookup("unknown.path", {}, {})
+    assert exc_info.value.code == "SKILL_TEMPLATE_UNRESOLVED"
+    assert "skill.input.<name>" in exc_info.value.message
+    assert "steps.<alias>.<field>" in exc_info.value.message
+
+
+def test_lookup_bare_input_name_suggests_skill_input_syntax():
+    # The exact authoring mistake seen in the field: '{{ userId }}' with a
+    # declared input of the same name. The error must hand back the fix.
+    with pytest.raises(ElliotError) as exc_info:
+        _lookup("userId", {"userId": 3}, {})
+    assert exc_info.value.code == "SKILL_TEMPLATE_UNRESOLVED"
+    assert "{{ skill.input.userId }}" in exc_info.value.message
+
+
+def test_lookup_two_part_steps_reference_raises():
+    with pytest.raises(ElliotError) as exc_info:
+        _lookup("steps.user", {}, {"user": ToolResult(rows=[{"id": 1}], meta={})})
+    assert exc_info.value.code == "SKILL_TEMPLATE_UNRESOLVED"
 
 
 # ── _resolve_value ────────────────────────────────────────────────────────────
@@ -158,6 +179,41 @@ async def test_execute_skill_unknown_tool_raises():
     with pytest.raises(ElliotError) as exc_info:
         await execute_skill(skill, {}, registry, executor)
     assert exc_info.value.code == "TOOL_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_execute_skill_bare_input_reference_fails_actionably():
+    # End-to-end version of the field incident: a step binds '{{ userId }}'
+    # instead of '{{ skill.input.userId }}'. The step must fail with the
+    # corrected syntax in the message, not a generic MISSING_PARAM.
+    tool = ToolDefinition(
+        id="get_posts",
+        name="get_posts",
+        description="desc",
+        category="READ",
+        source_ids=["src"],
+        parameters=[
+            ParameterDefinition(name="userId", type="integer", required=True, description="User id")
+        ],
+    )
+    config = _make_config([tool])
+    registry = ToolRegistry()
+    registry.add(tool)
+    executor = ToolExecutor(config, fetch_source=_fake_fetch([{"id": 1}]))
+
+    skill = SkillDefinition(
+        id="brief",
+        name="Brief",
+        description="desc",
+        steps=[SkillStep(alias="posts", tool_id="get_posts", params={"userId": "{{ userId }}"})],
+        input_parameters=[
+            ParameterDefinition(name="userId", type="integer", required=True, description="")
+        ],
+    )
+    with pytest.raises(ElliotError) as exc_info:
+        await execute_skill(skill, {"userId": 3}, registry, executor)
+    assert exc_info.value.code == "SKILL_TEMPLATE_UNRESOLVED"
+    assert "{{ skill.input.userId }}" in exc_info.value.message
 
 
 @pytest.mark.asyncio

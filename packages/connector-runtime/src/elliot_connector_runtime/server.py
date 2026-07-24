@@ -503,7 +503,10 @@ def create_runtime_server(
         )
     # streamable_http_path="/" so that mounting at /mcp exposes the MCP
     # endpoint at /mcp/ (matching the plugin and the docs), not /mcp/mcp/.
-    mcp = FastMCP("elliot-runtime", instructions=instructions, streamable_http_path="/")
+    # serverInfo.name is the connector's public identity — it is what MCP
+    # clients (Claude, Cursor) and graders display. A hardcoded
+    # "elliot-runtime" made every published connector anonymous.
+    mcp = FastMCP(cfg.name or "elliot-runtime", instructions=instructions, streamable_http_path="/")
 
     task_store = get_task_store()
     for tool_def in cfg.tools:

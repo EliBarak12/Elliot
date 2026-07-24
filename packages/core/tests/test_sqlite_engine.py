@@ -45,6 +45,27 @@ def test_profile_column(engine: SQLiteEngine):
     assert profile["max_val"] == 20
     assert profile["distinct_count"] == 2
     assert 10 in profile["top_values"]
+    # A numeric range is not an enum candidate — only text categories are.
+    assert profile["enum_candidate"] is False
+
+
+def test_profile_column_flags_text_enum_candidate(engine: SQLiteEngine):
+    rows = [{"status": s} for s in ["open", "closed", "open", "pending", "open", "closed"]]
+    engine.load_result(flatten(rows, "orders"))
+    profile = engine.profile_column("orders", "status")
+    assert profile["enum_candidate"] is True
+    # The exact allowed values ride along so the agent can declare the enum.
+    assert sorted(profile["enum_values"]) == ["closed", "open", "pending"]
+
+
+def test_profile_column_unique_text_is_not_an_enum(engine: SQLiteEngine):
+    # Every value distinct (a near-key like an email) — no repetition, so it is
+    # not a category and must not be flagged.
+    rows = [{"email": f"user{i}@x.com"} for i in range(8)]
+    engine.load_result(flatten(rows, "people"))
+    profile = engine.profile_column("people", "email")
+    assert profile["enum_candidate"] is False
+    assert "enum_values" not in profile
 
 
 def test_related_table_loaded(engine: SQLiteEngine):

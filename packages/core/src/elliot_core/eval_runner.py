@@ -118,16 +118,21 @@ class EvalRunner:
 
     async def _run_case(self, case: EvalCase) -> CaseResult:
         tool_map = {t.id: t for t in self._config.tools}
-        tool = tool_map.get(case.tool_id)
-        if tool is None:
+        skill_map = {s.id: s for s in self._config.skills}
+        # A deterministic skill is a first-class call target — the runtime serves
+        # it as one callable tool — so an eval case may name a skill and assert on
+        # its end-to-end output. Without this a skill eval failed with a
+        # misleading "tool not found", leaving the connector's headline workflows
+        # unvalidatable before publish.
+        if case.tool_id not in tool_map and case.tool_id not in skill_map:
             return CaseResult(
                 case_id=case.id,
                 passed=False,
                 result_rows=0,
                 token_estimate=0,
                 duration_ms=0,
-                error=f"Tool '{case.tool_id}' not found in connector",
-                failures=[f"Tool '{case.tool_id}' not found"],
+                error=f"Tool or skill '{case.tool_id}' not found in connector",
+                failures=[f"Tool or skill '{case.tool_id}' not found"],
             )
 
         t0 = time.monotonic()
@@ -136,9 +141,12 @@ class EvalRunner:
         error_code: str | None = None
 
         try:
-            # core's ToolExecutor.execute takes the tool id, not the object.
-            query_result = await self._executor.execute(case.tool_id, case.arguments)
-            rows = query_result.rows
+            if case.tool_id in skill_map:
+                rows = await self._run_skill(skill_map[case.tool_id], case.arguments)
+            else:
+                # core's ToolExecutor.execute takes the tool id, not the object.
+                query_result = await self._executor.execute(case.tool_id, case.arguments)
+                rows = query_result.rows
         except Exception as exc:
             error_str = str(exc)
             error_code = getattr(exc, "code", None)
@@ -165,3 +173,25 @@ class EvalRunner:
             error=error_str,
             failures=failures,
         )
+
+    async def _run_skill(self, skill: Any, inputs: dict[str, Any]) -> list[dict[str, Any]]:
+        """Execute a deterministic skill end-to-end and return its final rows.
+
+        Drives the same executor-agnostic ``run_skill_steps`` the runtime uses,
+        so an eval exercises the skill exactly as a published agent would — one
+        call, each step bound to the last — and the expect DSL (min_rows,
+        fields_present, max_token_estimate, error_code) applies to its output."""
+        from elliot_core.errors import ElliotError
+        from elliot_core.tools.skill_runner import run_skill_steps
+
+        tool_ids = {t.id for t in self._config.tools}
+
+        async def _run_step(tool_id: str, params: dict[str, Any]) -> Any:
+            if tool_id not in tool_ids:
+                raise ElliotError(
+                    "TOOL_NOT_FOUND", f"Skill step references unknown tool: '{tool_id}'"
+                )
+            return await self._executor.execute(tool_id, params)
+
+        result = await run_skill_steps(skill, inputs, _run_step)
+        return result.rows

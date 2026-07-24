@@ -56,6 +56,15 @@ if the tool raises that code, and fails if the call succeeds — so you prove th
 contract rejects what it should. (In a legacy JSON suite the equivalent is
 `"expect_error": "INVALID_PARAM_VALUE"` on the case.)
 
+**Evaluate your skills, not just your tools.** A deterministic skill is served
+as one callable tool, so a case's `tool_id` can name a skill id — the runner
+executes the whole step chain end-to-end (each step bound to the last) and the
+same `expect` block applies to the skill's final output. Add a case for every
+multi-step workflow you ship (`fields_present` on the fields the last step
+should return, `max_token_estimate` on the one-call cost) so a connector's
+headline workflows are validated before publish, not just their individual
+steps.
+
 ### 2. Read results
 
 For each failing case:

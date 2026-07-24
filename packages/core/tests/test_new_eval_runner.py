@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pytest
+import respx
+from httpx import Response
 
 from elliot_core.eval_runner import _check_expectations
 from elliot_core.eval_types import (
@@ -189,3 +191,76 @@ async def test_eval_runner_constructs_without_connector_runtime_import() -> None
     assert len(results) == 1
     assert results[0].passed is False
     assert results[0].case_id == "c1"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_eval_runner_executes_a_skill_end_to_end() -> None:
+    """An eval case may name a deterministic skill; the runner runs the whole
+    step chain (as the runtime would) and the expect DSL applies to its output —
+    so a connector's headline workflows are validatable before publish."""
+    from elliot_core.eval_runner import EvalRunner
+    from elliot_core.types.connector import ConnectorConfig
+    from elliot_core.types.source import SourceConfig
+    from elliot_core.types.tool import SkillDefinition, SkillStep, ToolDefinition
+
+    respx.get("https://api.example.com/items").mock(
+        return_value=Response(200, json=[{"id": 1, "name": "Widget"}])
+    )
+    config = ConnectorConfig(
+        name="T",
+        slug="t",
+        version="1.0.0",
+        sources=[
+            SourceConfig(id="src", name="src", type="rest", url="https://api.example.com/items")
+        ],
+        tools=[
+            ToolDefinition(
+                id="list_items",
+                name="List items",
+                description="Return every item",
+                category="READ",
+                source_ids=["src"],
+            )
+        ],
+        skills=[
+            SkillDefinition(
+                id="get_items",
+                name="Get items",
+                description="List all items in one call",
+                steps=[SkillStep(alias="a", tool_id="list_items", params={})],
+            )
+        ],
+    )
+    runner = EvalRunner(config)
+    suite = EvalSuite(
+        name="S",
+        connector="t",
+        cases=[
+            EvalCase(
+                id="c1",
+                tool_id="get_items",
+                arguments={},
+                expect=EvalExpect(min_rows=1, fields_present=["name"]),
+            )
+        ],
+    )
+    results = await runner.run_suite(suite)
+    assert results[0].passed, results[0].failures
+    assert results[0].result_rows == 1
+    assert results[0].token_estimate >= 1
+
+
+@pytest.mark.asyncio
+async def test_eval_runner_reports_tool_or_skill_not_found() -> None:
+    from elliot_core.eval_runner import EvalRunner
+    from elliot_core.types.connector import ConnectorConfig
+
+    config = ConnectorConfig(name="T", slug="t", version="1.0.0", sources=[], tools=[])
+    runner = EvalRunner(config)
+    suite = EvalSuite(
+        name="S", connector="t", cases=[EvalCase(id="c1", tool_id="ghost", arguments={})]
+    )
+    results = await runner.run_suite(suite)
+    assert results[0].passed is False
+    assert "skill" in results[0].failures[0]  # message now names tools OR skills

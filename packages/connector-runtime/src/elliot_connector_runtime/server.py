@@ -823,7 +823,9 @@ def _make_observe(
     tracker: SessionTracker | None,
     store: ObservationStore | None,
     connector_slug: str | None,
-) -> Callable[[str, dict[str, Any], list[dict[str, Any]], float, str | None, str | None], Awaitable[None]]:
+) -> Callable[
+    [str, dict[str, Any], list[dict[str, Any]], float, str | None, str | None], Awaitable[None]
+]:
     """Build the per-call observer shared by the tool and skill handlers: record
     one call to the audit log, session tracker, and observation store so every
     call — tool or skill — is equally observable (principle 4). Blocking I/O runs

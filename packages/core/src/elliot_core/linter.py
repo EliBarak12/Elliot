@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
+from .danger_zone import DESTRUCTIVE_VERBS, HIGH_IMPACT_VERBS, name_tokens
 from .sql import referenced_base_tables
 from .types import ConnectorConfig
 
@@ -88,41 +89,6 @@ _AGGREGATION_VERBS = frozenset(
     }
 )
 _AGGREGATE_SQL_RE = re.compile(r"\b(COUNT|SUM|AVG|MIN|MAX|GROUP\s+BY)\b")
-
-# WRITE/ACTION tools whose name carries one of these verbs are almost always
-# irreversible or high-stakes — money moves, access is pulled, a commitment
-# ends — yet none are in the runtime's auto-detected destructive set
-# (delete/remove/drop/purge/…). So without an explicit ``destructive: true`` the
-# runtime treats them as safe to auto-run and an agent operates the danger zone
-# with no confirmation — the exact gap the connector-runtime docstring names
-# with ``execute_refund`` / ``cancel_subscription`` / ``send_payout``. The
-# linter asks the author to classify them one way or the other. Kept
-# deliberately tight to avoid nagging on benign toggles (disable/close/expire).
-_HIGH_IMPACT_VERBS = frozenset(
-    {
-        "cancel",
-        "refund",
-        "chargeback",
-        "payout",
-        "deactivate",
-        "suspend",
-        "terminate",
-        "void",
-        "ban",
-        "deprovision",
-        "withdraw",
-        "unpublish",
-        "unsubscribe",
-    }
-)
-# Mirror of the runtime's ``server._DESTRUCTIVE_VERBS`` (core must not import
-# connector-runtime). A tool already carrying one of these is auto-flagged as
-# the danger zone, so ``delete_and_cancel_x`` needs no nudge. Disjoint from
-# ``_HIGH_IMPACT_VERBS`` by construction; if the runtime set ever grows to
-# overlap, the only cost is a redundant nudge, never a missed one.
-_AUTO_DESTRUCTIVE_VERBS = frozenset(
-    {"delete", "remove", "destroy", "drop", "purge", "wipe", "erase", "truncate", "reset", "revoke"}
-)
 
 _FILTER_PARAM_RE = re.compile(r"filter|search", re.IGNORECASE)
 _FILTER_SEMANTICS_RE = re.compile(
@@ -543,16 +509,6 @@ def _starts_with_verb(description: str) -> bool:
     return bool(_VERB_RE.match(description))
 
 
-def _name_tokens(name: str) -> set[str]:
-    """Lowercased word tokens of a tool id, splitting snake_case, kebab-case and
-    camelCase alike (``cancel_subscription`` / ``cancel-subscription`` /
-    ``cancelSubscription`` all yield a ``cancel`` token). Mirrors the runtime's
-    ``server._name_tokens`` so the danger-zone verb check reads a name the same
-    way the runtime does."""
-    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name)
-    return {t.lower() for t in re.split(r"[^a-zA-Z0-9]+", spaced) if t}
-
-
 def _is_list_tool(tool_id: str) -> bool:
     first = tool_id.split("_", 1)[0].lower()
     return first in _LIST_TOOL_PREFIXES
@@ -814,9 +770,9 @@ def lint_connector(
             # the author hasn't decided (destructive is None) and no
             # already-auto-detected verb (delete/…) is present to flag it anyway.
             if tool.destructive is None:
-                tokens = _name_tokens(tool.id)
-                high_impact = tokens & _HIGH_IMPACT_VERBS
-                if high_impact and tokens.isdisjoint(_AUTO_DESTRUCTIVE_VERBS):
+                tokens = name_tokens(tool.id)
+                high_impact = tokens & HIGH_IMPACT_VERBS
+                if high_impact and tokens.isdisjoint(DESTRUCTIVE_VERBS):
                     verb = sorted(high_impact)[0]
                     issues.append(
                         LintIssue(

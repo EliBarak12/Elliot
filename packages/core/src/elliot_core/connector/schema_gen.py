@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from elliot_core.danger_zone import is_destructive
 from elliot_core.types.tool import ToolDefinition
 
 _TYPE_MAP: dict[str, str] = {
@@ -33,10 +34,15 @@ def _param_schema(p: Any) -> dict[str, Any]:
 
 def _tool_annotations(tool: ToolDefinition) -> dict[str, Any]:
     read_only = tool.category == "READ"
+    # destructiveHint follows Elliot's danger-zone model, not a blanket "every
+    # write is destructive": an additive create/update/send is safe to auto-run,
+    # so a spec-respecting client must not gate it. Only a truly destructive verb
+    # (or an explicit ``destructive: true``) flips the hint — matching the
+    # runtime's confirmation gate exactly, since both call ``is_destructive``.
     return {
         "title": tool.name,
         "readOnlyHint": read_only,
-        "destructiveHint": tool.category in ("WRITE", "ACTION"),
+        "destructiveHint": is_destructive(tool.category, tool.id, tool.destructive),
         "idempotentHint": read_only,
         "openWorldHint": True,
     }

@@ -34,6 +34,7 @@ from elliot_core.agent_identity import (
     set_current_agent_identity,
 )
 from elliot_core.auth_middleware import ApiKeyMiddleware, enforce_auth_configured
+from elliot_core.danger_zone import is_destructive
 from elliot_core.error_middleware import register_error_handlers
 from elliot_core.http_middleware import AgentIdentityMiddleware, UserIdentityMiddleware
 from elliot_core.user_identity import get_current_user_id
@@ -243,43 +244,12 @@ def _require_destructive_confirmation() -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-# Verbs that mark a WRITE/ACTION tool as the "danger zone" — an irreversible
-# mutation a client should gate behind human approval rather than auto-run.
-# Kept in sync with the cloud grader's ``_DESTRUCTIVE_VERBS`` so a connector
-# Elliot builds and labels here passes Elliot's own destructive-tool grade.
-# Ordinary additive actions (create/update/send) are deliberately NOT
-# destructive: an agentic connector's whole value is operating them for the
-# user without a confirmation round-trip — only the danger zone is gated.
-_DESTRUCTIVE_VERBS = frozenset(
-    {"delete", "remove", "destroy", "drop", "purge", "wipe", "erase", "truncate", "reset", "revoke"}
-)
-
-
-def _name_tokens(name: str) -> set[str]:
-    """Lowercased word tokens of a tool name, splitting snake_case, kebab-case
-    and camelCase alike (``delete_order`` / ``notion-delete-page`` /
-    ``deleteOrder`` all yield a ``delete`` token)."""
-    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name)
-    return {t.lower() for t in re.split(r"[^a-zA-Z0-9]+", spaced) if t}
-
-
-def _is_destructive(category: str, tool_id: str, explicit: bool | None = None) -> bool:
-    """Whether a tool is the danger zone: an irreversible mutation clients must
-    gate. An explicit ``destructive`` flag on the tool wins when set — so an
-    author can mark a business-critical action the verbs miss (``execute_refund``,
-    ``cancel_subscription``, ``send_payout``) as the danger zone, or clear a false
-    positive. Otherwise: READ tools are never destructive; among WRITE/ACTION
-    tools, only those whose name carries a destructive verb (delete/remove/drop/
-    purge/wipe…) qualify — additive creates and updates run without a prompt."""
-    # READs never mutate, so they are never the danger zone — even if a
-    # hand-authored spec set the flag (a "destructive read" would emit a
-    # contradictory readOnlyHint + destructiveHint pair). The explicit flag then
-    # wins for WRITE/ACTION tools, and the verb heuristic is the fallback.
-    if category == "READ":
-        return False
-    if explicit is not None:
-        return explicit
-    return not _name_tokens(tool_id).isdisjoint(_DESTRUCTIVE_VERBS)
+# The danger-zone classification (which WRITE/ACTION tools are irreversible and
+# must be gated behind confirmation) lives in ``elliot_core.danger_zone`` so the
+# runtime's confirmation gate, the MCP ``destructiveHint`` annotation, the
+# linter, and the agent briefing all classify a tool identically. Imported under
+# the private names the rest of this module already uses.
+_is_destructive = is_destructive
 
 
 def derive_agent_briefing(cfg: Any) -> str:

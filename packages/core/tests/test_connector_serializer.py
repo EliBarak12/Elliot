@@ -57,6 +57,52 @@ def test_to_mcp_tool_schema():
     assert "category" not in schema["inputSchema"]["required"]
 
 
+def _action_tool(tool_id: str, destructive: bool | None = None) -> ToolDefinition:
+    return ToolDefinition(
+        id=tool_id,
+        name=tool_id.replace("_", " ").title(),
+        description=f"Perform the {tool_id} operation.",
+        category="ACTION",
+        source_ids=["src"],
+        api_mapping={"method": "POST", "path_template": f"/{tool_id}"},
+        destructive=destructive,
+    )
+
+
+def test_destructive_hint_follows_danger_zone_model():
+    # READ → read-only, never destructive.
+    read = to_mcp_tool_schema(_make_config().tools[0])["annotations"]
+    assert read["readOnlyHint"] is True
+    assert read["destructiveHint"] is False
+
+    # Additive ACTION → NOT destructive: a spec-respecting client must not gate
+    # create_order, or Elliot's "operate without a confirmation round-trip"
+    # value prop breaks. This is the bug the shared classifier fixed — the old
+    # blanket `category in (WRITE, ACTION)` marked this destructive.
+    additive = to_mcp_tool_schema(_action_tool("create_order"))["annotations"]
+    assert additive["readOnlyHint"] is False
+    assert additive["destructiveHint"] is False
+
+    # Destructive verb → the danger zone.
+    assert (
+        to_mcp_tool_schema(_action_tool("delete_order"))["annotations"]["destructiveHint"] is True
+    )
+
+    # Explicit flag wins both ways.
+    assert (
+        to_mcp_tool_schema(_action_tool("cancel_subscription", destructive=True))["annotations"][
+            "destructiveHint"
+        ]
+        is True
+    )
+    assert (
+        to_mcp_tool_schema(_action_tool("delete_order", destructive=False))["annotations"][
+            "destructiveHint"
+        ]
+        is False
+    )
+
+
 def test_object_param_schema_is_open_object():
     """An object (dynamic-key map) param emits a JSON-Schema object with
     additionalProperties so arbitrary keys (cart items {id: qty}) are valid."""

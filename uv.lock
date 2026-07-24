@@ -410,6 +410,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "sqlalchemy" },
     { name = "structlog" },
+    { name = "tiktoken" },
 ]
 
 [package.metadata]
@@ -425,6 +426,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "structlog", specifier = ">=24.1" },
+    { name = "tiktoken", specifier = ">=0.7" },
 ]
 
 [[package]]

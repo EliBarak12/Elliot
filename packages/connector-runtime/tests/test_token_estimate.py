@@ -6,13 +6,15 @@ import json
 
 import pytest
 
-from elliot_connector_runtime import session_tracker
 from elliot_connector_runtime.session_tracker import _estimate_tokens
+from elliot_core import tokens
 
 
 def test_fallback_is_chars_over_four(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Force the no-tokenizer path and assert the documented heuristic.
-    monkeypatch.setattr(session_tracker, "_encoder", lambda: None)
+    # Force the no-tokenizer path and assert the documented heuristic. The
+    # estimator now lives in elliot_core.tokens (one source of truth); the
+    # runtime's _estimate_tokens is an alias for it.
+    monkeypatch.setattr(tokens, "_encoder", lambda: None)
     data = [{"id": i, "name": "row"} for i in range(20)]
     expected = max(1, len(json.dumps(data, default=str)) // 4)
     assert _estimate_tokens(data) == expected
@@ -36,7 +38,7 @@ def test_unserializable_returns_zero(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_real_tokenizer_used_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
     # If tiktoken loads, the count should match the encoder length exactly.
-    enc = session_tracker._encoder()
+    enc = tokens._encoder()
     if enc is None:
         pytest.skip("tiktoken/vocab not available in this environment")
     data = [{"id": i} for i in range(10)]

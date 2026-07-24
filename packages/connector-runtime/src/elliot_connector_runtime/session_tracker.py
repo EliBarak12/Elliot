@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import functools
 import json
 import time
 import uuid
@@ -15,6 +14,8 @@ from threading import Lock
 from typing import Any, Literal
 
 import structlog
+
+from elliot_core.tokens import estimate_tokens
 
 log = structlog.get_logger(__name__)
 
@@ -232,40 +233,11 @@ class AgentSession:
         }
 
 
-@functools.lru_cache(maxsize=1)
-def _encoder() -> Any | None:
-    """Return a tiktoken encoder if available, else ``None``.
-
-    A token count is only as good as the tokenizer. When ``tiktoken`` is
-    installed we use ``cl100k_base`` (a solid cross-model proxy) for a real
-    count instead of a heuristic. When it isn't installed — or its BPE vocab
-    can't be loaded (e.g. offline) — we fall back to chars/4. Cached so the
-    vocab loads at most once per process.
-    """
-    try:
-        import tiktoken
-
-        return tiktoken.get_encoding("cl100k_base")
-    except Exception:
-        return None
-
-
-def _estimate_tokens(data: Any) -> int:
-    """Estimate the token cost of a result.
-
-    Uses a real tokenizer (tiktoken ``cl100k_base``) when available; otherwise
-    falls back to the chars/4 heuristic. Both paths are model-approximate — the
-    figure powers the token-efficiency dashboard and eval gates, not billing.
-    """
-    try:
-        text = json.dumps(data, default=str)
-    except Exception:
-        return 0
-    enc = _encoder()
-    if enc is not None:
-        with contextlib.suppress(Exception):
-            return max(1, len(enc.encode(text)))
-    return max(1, len(text) // 4)
+# The token estimate lives in elliot_core.tokens so the runtime trace, the
+# observation store, the eval budgets, and the footprint grade all count the
+# signature metric identically. Aliased to the private name this module and
+# server.py already import.
+_estimate_tokens = estimate_tokens
 
 
 _PREVIEW_MAX_CHARS = 800

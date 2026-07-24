@@ -1366,12 +1366,50 @@ def _register_prompts(mcp: FastMCP, cfg: Any) -> None:
         _register_skill_prompt(mcp, skill)
 
 
+def _skill_prompt_text(
+    skill_name: str,
+    description: str,
+    when_to_use: str,
+    steps: Any,
+    instructions: str,
+    kwargs: dict[str, str],
+) -> str:
+    """Compose the workflow briefing an agent receives when it retrieves a skill
+    prompt.
+
+    Includes the description, the when-to-use trigger, the deterministic step
+    chain (when any), and the author's prose ``instructions``. A prose-only skill
+    keeps all its value in ``instructions`` and declares no steps — dropping that
+    prose (as the old step-only template did) rendered it as an empty "Steps:"
+    block, i.e. a useless prompt. A hybrid skill now shows both the chain and the
+    prose."""
+    lead = f"Execute the '{skill_name}' workflow."
+    if description and description.strip():
+        lead = f"Execute the '{skill_name}' workflow — {description.strip().rstrip('.')}."
+    parts = [lead]
+    if when_to_use and when_to_use.strip():
+        parts.append(f"Use this when: {when_to_use.strip()}")
+    if kwargs:
+        parts.append("Inputs: " + ", ".join(f"{k}={v}" for k, v in kwargs.items()))
+    if steps:
+        step_lines = "\n".join(
+            f"  Step {i + 1} ({s.alias}): call {s.tool_id} with {s.params}"
+            for i, s in enumerate(steps)
+        )
+        parts.append(f"Steps:\n{step_lines}")
+    if instructions and instructions.strip():
+        parts.append(instructions.strip())
+    return "\n\n".join(parts)
+
+
 def _register_skill_prompt(mcp: FastMCP, skill: Any) -> None:
     skill_id = skill.id
     skill_name = skill.name
     skill_description = skill.description
     steps = skill.steps
     input_params = skill.input_parameters
+    skill_instructions = getattr(skill, "instructions", "") or ""
+    skill_when = getattr(skill, "when_to_use", "") or ""
 
     param_names = [p.name for p in input_params]
 
@@ -1379,15 +1417,16 @@ def _register_skill_prompt(mcp: FastMCP, skill: Any) -> None:
         if not params:
 
             def prompt_fn() -> list[dict[str, Any]]:
-                step_lines = "\n".join(
-                    f"  Step {i + 1} ({s.alias}): call {s.tool_id} with {s.params}"
-                    for i, s in enumerate(steps)
-                )
                 return [
                     {
                         "role": "user",
-                        "content": (
-                            f"Execute the '{skill_name}' workflow.\n\nSteps:\n{step_lines}"
+                        "content": _skill_prompt_text(
+                            skill_name,
+                            skill_description,
+                            skill_when,
+                            steps,
+                            skill_instructions,
+                            {},
                         ),
                     }
                 ]
@@ -1398,16 +1437,16 @@ def _register_skill_prompt(mcp: FastMCP, skill: Any) -> None:
         else:
 
             def prompt_fn_with_args(**kwargs: str) -> list[dict[str, Any]]:
-                step_lines = "\n".join(
-                    f"  Step {i + 1} ({s.alias}): call {s.tool_id} with {s.params}"
-                    for i, s in enumerate(steps)
-                )
-                args_display = ", ".join(f"{k}={v}" for k, v in kwargs.items())
                 return [
                     {
                         "role": "user",
-                        "content": (
-                            f"Execute '{skill_name}' with inputs: {args_display}\n\nSteps:\n{step_lines}"
+                        "content": _skill_prompt_text(
+                            skill_name,
+                            skill_description,
+                            skill_when,
+                            steps,
+                            skill_instructions,
+                            kwargs,
                         ),
                     }
                 ]

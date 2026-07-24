@@ -1,5 +1,5 @@
 """Tests for the product-aware MCP ``instructions`` briefing a consuming agent
-reads on connect (``_derive_instructions``).
+reads on connect (``derive_agent_briefing``).
 
 The briefing is Elliot's one leveraged place to orient the agent: it must name
 the product, split READ (context) from WRITE/ACTION (operate), and flag only the
@@ -8,7 +8,7 @@ true danger zone — never additive creates/updates.
 
 from __future__ import annotations
 
-from elliot_connector_runtime.server import _derive_instructions
+from elliot_connector_runtime.server import derive_agent_briefing
 from elliot_core.types import (
     ApiRequestMapping,
     ConnectorConfig,
@@ -61,7 +61,7 @@ def _connector(tools: list[ToolDefinition], **kw: object) -> ConnectorConfig:
 
 
 def test_briefing_leads_with_product_name_and_description() -> None:
-    text = _derive_instructions(
+    text = derive_agent_briefing(
         _connector([_read()], description="Order management for online sellers")
     )
     assert "acme-orders" in text
@@ -69,13 +69,13 @@ def test_briefing_leads_with_product_name_and_description() -> None:
 
 
 def test_frames_read_as_context_and_action_as_operate() -> None:
-    text = _derive_instructions(_connector([_read(), _action("create_order")]))
+    text = derive_agent_briefing(_connector([_read(), _action("create_order")]))
     assert "1 READ tool(s) give you context" in text
     assert "1 WRITE/ACTION tool(s) operate the product" in text
 
 
 def test_danger_zone_names_destructive_verb_tools_only() -> None:
-    text = _derive_instructions(_connector([_action("delete_order"), _action("create_order")]))
+    text = derive_agent_briefing(_connector([_action("delete_order"), _action("create_order")]))
     assert "Danger zone: 1 tool(s) are irreversible" in text
     assert "delete_order" in text
     # An additive create is NOT the danger zone — it must not be named there.
@@ -85,7 +85,7 @@ def test_danger_zone_names_destructive_verb_tools_only() -> None:
 
 def test_explicit_destructive_flag_enters_danger_zone_without_a_verb() -> None:
     # execute_refund carries no delete/remove/... verb — only the flag gates it.
-    text = _derive_instructions(
+    text = derive_agent_briefing(
         _connector([_action("execute_refund", category="ACTION", destructive=True)])
     )
     assert "Danger zone: 1 tool(s) are irreversible" in text
@@ -93,12 +93,12 @@ def test_explicit_destructive_flag_enters_danger_zone_without_a_verb() -> None:
 
 
 def test_additive_only_connector_has_no_danger_zone() -> None:
-    text = _derive_instructions(_connector([_read(), _action("create_order")]))
+    text = derive_agent_briefing(_connector([_read(), _action("create_order")]))
     assert "Danger zone" not in text
 
 
 def test_read_only_connector_reads_as_context_only() -> None:
-    text = _derive_instructions(_connector([_read("list_orders"), _read("get_order")]))
+    text = derive_agent_briefing(_connector([_read("list_orders"), _read("get_order")]))
     assert "2 READ tool(s) give you context" in text
     assert "WRITE/ACTION" not in text
     assert "Danger zone" not in text
@@ -113,11 +113,11 @@ def test_skills_surface_as_prompts_when_present() -> None:
         description="Reorder a past order.",
         steps=[SkillStep(alias="place", tool_id="create_order", params={})],
     )
-    text = _derive_instructions(_connector([_read(), _action("create_order")], skills=[skill]))
+    text = derive_agent_briefing(_connector([_read(), _action("create_order")], skills=[skill]))
     assert "1 multi-step skill(s) are available as MCP prompts" in text
 
 
 def test_falls_back_gracefully_with_no_tools() -> None:
-    text = _derive_instructions(_connector([]))
+    text = derive_agent_briefing(_connector([]))
     assert "acme-orders" in text
     assert "Call list_tools" in text

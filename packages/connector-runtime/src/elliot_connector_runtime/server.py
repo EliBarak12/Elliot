@@ -446,6 +446,21 @@ def _payload_for(
     return payload
 
 
+def _skill_payload(result: Any) -> dict[str, Any]:
+    """Agent-facing payload for a skill call. Starts from the base tool payload
+    (the final step's rows + token estimate) and — because a skill runs a chain —
+    also carries every step's output under ``steps`` with the ``primary_step``
+    marker, so a "give me X and Y" skill returns both, not just the last step
+    (the audit-H7 guarantee the runner preserves in ``meta.steps``)."""
+    payload = _payload_for(result)
+    meta = getattr(result, "meta", None) or {}
+    if isinstance(meta, dict) and "steps" in meta:
+        payload["steps"] = meta["steps"]
+        payload["primary_step"] = meta.get("primary_step")
+        payload["step_count"] = meta.get("step_count")
+    return payload
+
+
 def _truncation_note(result: Any) -> str:
     """Actionable guidance for an agent whose result was capped (principle 3).
 
@@ -645,6 +660,14 @@ def create_runtime_server(
 
     _register_resources(mcp, cfg, executor, json)
     _register_prompts(mcp, cfg)
+    _register_skill_tools(
+        mcp,
+        cfg,
+        executor,
+        audit=audit,
+        connector_slug=connector_slug,
+        executor_pool=executor_pool,
+    )
     _register_task_tool(mcp, task_store, task_tool_name)
     if store is not None:
         _register_feedback_tool(mcp, store, connector_slug, feedback_tool_name)
@@ -1467,6 +1490,224 @@ def _register_skill_prompt(mcp: FastMCP, skill: Any) -> None:
 
     prompt_fn = _make_prompt_fn(param_names)
     mcp.prompt(name=skill_id, description=skill_description)(prompt_fn)
+
+
+def _register_skill_tools(
+    mcp: FastMCP,
+    cfg: Any,
+    executor: ToolExecutor,
+    *,
+    audit: AuditLog | None = None,
+    connector_slug: str | None = None,
+    executor_pool: ExecutorPool | None = None,
+) -> None:
+    """Register each DETERMINISTIC skill (one with a step chain) as an executable
+    MCP tool, so an agent runs the whole workflow in a single call instead of
+    orchestrating the chain itself — the "one MCP call" the skill model promises,
+    delivered on the published runtime and not only in design-time preview.
+
+    Prose-only skills carry no steps and stay prompts (nothing to execute).
+    Registration is defensive per skill: a skill that fails to register (e.g. its
+    id collides with a tool name) is logged and skipped, so one bad skill never
+    breaks the connector's tool list. A connector with no deterministic skills is
+    wholly unaffected."""
+    tools_by_id = {t.id: t for t in cfg.tools}
+    for skill in getattr(cfg, "skills", []) or []:
+        if not getattr(skill, "steps", None):
+            continue
+        try:
+            _register_one_skill_tool(
+                mcp,
+                skill,
+                tools_by_id,
+                executor,
+                audit=audit,
+                executor_pool=executor_pool,
+            )
+        except Exception:
+            log.warning(
+                "skill_tool.register_failed",
+                skill_id=getattr(skill, "id", "?"),
+                exc_info=True,
+            )
+
+
+def _register_one_skill_tool(
+    mcp: FastMCP,
+    skill: Any,
+    tools_by_id: dict[str, Any],
+    executor: ToolExecutor,
+    *,
+    audit: AuditLog | None = None,
+    executor_pool: ExecutorPool | None = None,
+) -> None:
+    from elliot_core.errors import ElliotError, to_mcp_error_content
+    from elliot_core.tools.skill_runner import run_skill_steps
+
+    skill_id = skill.id
+    skill_name = skill.name
+    skill_desc = (skill.description or f"Run the {skill_name} workflow.").strip()
+    steps = skill.steps
+    input_params = skill.input_parameters
+
+    # Union of the step tools' source_ids (what a per-user executor must hold
+    # credentials for) and whether any step is the danger zone — a skill is only
+    # gated if a step it runs is genuinely destructive.
+    skill_source_ids: list[str] = []
+    seen: set[str] = set()
+    any_destructive = False
+    for s in steps:
+        std = tools_by_id.get(s.tool_id)
+        if std is None:
+            continue
+        for sid in std.source_ids or []:
+            if sid not in seen:
+                seen.add(sid)
+                skill_source_ids.append(sid)
+        if _is_destructive(std.category, std.id, getattr(std, "destructive", None)):
+            any_destructive = True
+
+    require_confirmation = any_destructive and _require_destructive_confirmation()
+    annotations = ToolAnnotations(
+        title=skill_name,
+        readOnlyHint=False,
+        destructiveHint=any_destructive,
+        idempotentHint=False,
+        openWorldHint=True,
+    )
+
+    async def _observe_skill(
+        arguments: dict[str, Any],
+        rows: list[dict[str, Any]],
+        duration_ms: float,
+        error: str | None,
+    ) -> None:
+        """Best-effort audit record for the skill call as one logical operation.
+        Never raises — observability must not break execution."""
+        if audit is None:
+            return
+        from .session_tracker import _estimate_tokens
+
+        def _write() -> None:
+            with contextlib.suppress(Exception):
+                audit.record(
+                    skill_id,
+                    arguments,
+                    len(rows),
+                    duration_ms,
+                    error=error,
+                    tokens_estimate=_estimate_tokens(rows),
+                )
+
+        with contextlib.suppress(Exception):
+            await run_in_threadpool(_write)
+
+    async def _skill_handler(**kwargs: Any) -> dict[str, Any]:
+        import time
+
+        if require_confirmation:
+            if not bool(kwargs.pop("confirm", False)):
+                exc = ElliotError(
+                    "CONFIRMATION_REQUIRED",
+                    (
+                        f"Skill '{skill_id}' includes a destructive step. Re-call with "
+                        "confirm=true after the user authorises it."
+                    ),
+                    {"skill_id": skill_id},
+                )
+                raise ValueError(to_mcp_error_content(exc)["text"])
+        else:
+            kwargs.pop("confirm", None)
+
+        active_executor = executor
+        if executor_pool is not None:
+            try:
+                active_executor = await executor_pool.get_executor(
+                    get_current_user_id(), skill_source_ids or None
+                )
+            except ElliotError as exc:
+                raise ValueError(to_mcp_error_content(exc)["text"]) from exc
+
+        async def _run_step(tool_id: str, params: dict[str, Any]) -> Any:
+            std = tools_by_id.get(tool_id)
+            if std is None:
+                raise ElliotError(
+                    "TOOL_NOT_FOUND",
+                    f"Skill '{skill_id}' references unknown tool '{tool_id}'.",
+                )
+            return await active_executor.execute(std, params)
+
+        t0 = time.monotonic()
+        try:
+            result = await run_skill_steps(skill, kwargs, _run_step)
+            duration_ms = round((time.monotonic() - t0) * 1000, 1)
+            await _observe_skill(kwargs, getattr(result, "rows", []) or [], duration_ms, None)
+            return _skill_payload(result)
+        except Exception as exc:
+            duration_ms = round((time.monotonic() - t0) * 1000, 1)
+            elliot_exc = (
+                exc
+                if isinstance(exc, ElliotError)
+                else ElliotError("TOOL_EXECUTION_ERROR", str(exc))
+            )
+            await _observe_skill(kwargs, [], duration_ms, str(elliot_exc))
+            raise ValueError(to_mcp_error_content(elliot_exc)["text"]) from exc
+
+    _skill_handler.__name__ = skill_id
+    _skill_handler.__doc__ = skill_desc
+
+    sig_params: list[inspect.Parameter] = []
+    for p in input_params:
+        if p.type == "integer":
+            base: Any = int
+        elif p.type == "number":
+            base = float
+        elif p.type == "boolean":
+            base = bool
+        else:
+            base = str
+        field_kwargs: dict[str, Any] = {}
+        if p.description.strip():
+            field_kwargs["description"] = p.description.strip()
+        if p.enum:
+            field_kwargs["json_schema_extra"] = {"enum": list(p.enum)}
+        annotation: Any = Annotated[base, Field(**field_kwargs)] if field_kwargs else base
+        sig_params.append(
+            inspect.Parameter(
+                p.name,
+                inspect.Parameter.KEYWORD_ONLY,
+                annotation=annotation,
+                default=inspect.Parameter.empty if p.required else None,
+            )
+        )
+    if require_confirmation:
+        sig_params.append(
+            inspect.Parameter(
+                "confirm",
+                inspect.Parameter.KEYWORD_ONLY,
+                annotation=Annotated[
+                    bool,
+                    Field(
+                        description=(
+                            "Safety gate for this skill's destructive step. Leave false to have "
+                            "the call rejected with CONFIRMATION_REQUIRED; set true only after the "
+                            "user has authorised it, then re-call to execute the workflow."
+                        )
+                    ),
+                ],
+                default=False,
+            )
+        )
+    object.__setattr__(
+        _skill_handler,
+        "__signature__",
+        inspect.Signature(sig_params, return_annotation=dict[str, Any]),
+    )
+    _skill_handler.__annotations__["return"] = dict[str, Any]
+
+    mcp.tool(name=skill_id, title=skill_name, description=skill_desc, annotations=annotations)(
+        _skill_handler
+    )
 
 
 def create_app(

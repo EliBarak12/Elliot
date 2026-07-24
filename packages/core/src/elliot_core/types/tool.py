@@ -145,6 +145,12 @@ class ToolDefinition(BaseModel):
     response_shape: ResponseShape = ResponseShape()
     output_schema: dict[str, Any] | None = None
     run_async: bool = False
+    # The "danger zone" override. None → the runtime infers destructiveness from
+    # the tool's verb (delete/remove/…). True/False → the author's explicit call,
+    # for business-critical actions the verbs miss (execute_refund, cancel_…) or
+    # to clear a false positive. Drives the MCP destructiveHint and the
+    # confirm=true gate.
+    destructive: bool | None = None
 
 
 class SkillStep(BaseModel):

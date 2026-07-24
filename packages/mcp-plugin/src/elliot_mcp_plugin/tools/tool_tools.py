@@ -479,6 +479,7 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
         body_params: list[str] | None = None,
         body_format: str = "json",
         category: str = "ACTION",
+        destructive: bool | None = None,
     ) -> dict:  # type: ignore[type-arg]
         """Define a WRITE/ACTION tool — a real HTTP mutation against a REST source.
 
@@ -505,9 +506,14 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             body_params: parameter names sent in the request body ("json" or
                 "form" per body_format). The source's static ``body`` fields
                 ride along and per-call values override them.
-            category: "ACTION" (default) or "WRITE" — both mark the tool
-                destructive to agents; pick WRITE for plain data mutations and
-                ACTION for operations with side effects beyond data.
+            category: "ACTION" (default) or "WRITE" — pick WRITE for plain data
+                mutations and ACTION for operations with side effects beyond
+                data.
+            destructive: the "danger zone" override. Leave unset and the runtime
+                infers it from the verb (delete/remove/… → gated). Set true to
+                mark a business-critical action the verbs miss (execute_refund,
+                cancel_subscription, send_payout) as destructive so clients gate
+                it behind human approval; set false to clear a false positive.
 
         Every parameter must be routed somewhere (path placeholder, query, or
         body) — unrouted parameters are rejected so the tool cannot silently
@@ -589,6 +595,7 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                         "body_params": body_names,
                         "body_format": body_format,
                     },
+                    "destructive": destructive,
                 }
             )
             session.registry.add(tool)

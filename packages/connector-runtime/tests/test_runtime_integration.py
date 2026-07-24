@@ -1283,6 +1283,84 @@ def test_is_destructive_reflects_verb_not_just_category() -> None:
     assert _is_destructive("READ", "get_order") is False
 
 
+def test_is_destructive_explicit_flag_overrides_verb() -> None:
+    """The author's explicit destructive flag wins over verb inference — so a
+    business-critical action the verbs miss can be gated, and a verb false
+    positive can be cleared."""
+    from elliot_connector_runtime.server import _is_destructive
+
+    # Explicit True marks a non-verb action (execute_refund) as the danger zone.
+    assert _is_destructive("ACTION", "execute_refund", True) is True
+    assert _is_destructive("ACTION", "send_payout", True) is True
+    # Explicit False clears a verb false positive.
+    assert _is_destructive("WRITE", "delete_order", False) is False
+    # None → fall back to verb inference (unchanged behaviour).
+    assert _is_destructive("WRITE", "delete_order", None) is True
+    assert _is_destructive("ACTION", "execute_refund", None) is False
+
+
+def test_explicit_destructive_flag_flows_to_annotations_and_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tool the author marks destructive=true is flagged and gated even though
+    its name carries no destructive verb."""
+    import asyncio
+    import inspect as _inspect
+
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+
+    monkeypatch.setenv("ELLIOT_REQUIRE_DESTRUCTIVE_CONFIRMATION", "true")
+
+    connector = {
+        **MINIMAL_CONNECTOR,
+        "tools": [
+            {
+                "id": "issue_refund",  # no destructive verb
+                "name": "Issue refund",
+                "description": "Issue a refund for an order — money leaves the account.",
+                "category": "ACTION",
+                "destructive": True,
+                "sql": "SELECT 1",
+                "parameters": [
+                    {"name": "order_id", "type": "integer", "required": True, "description": "id"}
+                ],
+            }
+        ],
+    }
+    cfg_path = tmp_path / "refunds.connector.json"
+    cfg_path.write_text(json.dumps(connector))
+    config = ConnectorCache().get(cfg_path)
+    executor = ToolExecutor(config, secrets={})
+
+    async def _fake(tool, args):  # type: ignore[no-untyped-def]
+        from elliot_core.types.tool import ToolResult
+
+        return ToolResult(rows=[{"ok": True}], meta={})
+
+    executor.execute = _fake  # type: ignore[assignment]
+    mcp = create_runtime_server(config, executor)
+
+    class _Ctx:
+        request_id = "refund-req"
+
+        async def info(self, *a, **k):  # type: ignore[no-untyped-def]
+            pass
+
+        async def warning(self, *a, **k):  # type: ignore[no-untyped-def]
+            pass
+
+    mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
+
+    tool = mcp._tool_manager.get_tool("issue_refund")
+    assert tool is not None
+    assert tool.annotations.destructiveHint is True
+    assert "confirm" in _inspect.signature(tool.fn).parameters
+    with pytest.raises(ValueError, match="CONFIRMATION_REQUIRED"):
+        asyncio.run(tool.fn(order_id=1))
+
+
 def test_additive_write_is_not_gated_and_hint_tracks_verb(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

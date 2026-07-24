@@ -1427,6 +1427,21 @@ async def test_executor_write_tool_surfaces_http_status() -> None:
         await executor.execute(tool, {"order_id": "abc"})
     assert exc_info.value.code == "API_REQUEST_FAILED"
     assert exc_info.value.detail["status_code"] == 404
+    # The message carries actionable, status-specific recovery guidance (a 404 =
+    # bad id), not just the bare status — and never the upstream body.
+    assert "not found" in exc_info.value.message.lower()
+    assert "not found" not in str(exc_info.value.detail)  # body not echoed
+
+
+def test_http_status_guidance_is_actionable_per_status_class() -> None:
+    from elliot_connector_runtime.executor import _http_status_guidance
+
+    assert "parameter schema" in _http_status_guidance(422)
+    assert "configuration issue" in _http_status_guidance(401)
+    assert "not found" in _http_status_guidance(404)
+    assert "Conflict" in _http_status_guidance(409)
+    assert "rate-limiting" in _http_status_guidance(429)
+    assert "server error" in _http_status_guidance(503)
 
 
 @respx.mock

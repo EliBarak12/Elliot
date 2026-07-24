@@ -547,8 +547,9 @@ class ToolExecutor:
                     # source's baked-in default (P2-c). Auth lives in headers, not
                     # params, so no secret is exposed; redact defensively anyway.
                     display_url = redact_url(constructed_url(request_url, params))
+                    status = exc.response.status_code
                     raise SourceFetchError(
-                        f"HTTP {exc.response.status_code} from {display_url}"
+                        f"HTTP {status} from {display_url}. {_http_status_guidance(status)}"
                     ) from exc
                 pages_fetched += 1
 
@@ -820,9 +821,11 @@ class ToolExecutor:
                 )
                 resp.raise_for_status()
             except httpx.HTTPStatusError as exc:
-                # Surface the status so the agent can recover (principle 3): a 401
-                # means auth, 404 a bad id, 422 bad input. The upstream body is
-                # not echoed — it may carry data the agent shouldn't see.
+                # Surface the status AND a concrete recovery step so the agent can
+                # act (principle 3): a 401 means auth, 404 a bad id, 422 bad input,
+                # 429 back off. The upstream body is not echoed — it may carry data
+                # the agent shouldn't see — but the status class carries the
+                # actionable signal.
                 status = exc.response.status_code
                 from elliot_core.errors import ElliotError
 
@@ -830,7 +833,7 @@ class ToolExecutor:
                 raise ElliotError(
                     "API_REQUEST_FAILED",
                     f"The {tool.category} tool's upstream API returned HTTP {status}. "
-                    "Check the parameters you sent and the source's credentials.",
+                    + _http_status_guidance(status),
                     detail={"tool_id": tool.id, "status_code": status},
                 ) from exc
 
@@ -856,6 +859,43 @@ class ToolExecutor:
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
+
+
+def _http_status_guidance(status: int) -> str:
+    """Status-specific recovery guidance for an upstream HTTP error (principle 3).
+
+    Turns a bare "HTTP 422" into a concrete next step so an agent knows whether
+    to fix its arguments, treat it as a connector-config problem, retry, or give
+    up — without echoing the upstream body (which may carry data the agent
+    shouldn't see). The status class already says most of what the agent needs."""
+    if status in (400, 422):
+        return (
+            "The request was rejected as invalid — a required field may be missing or a value "
+            "malformed. Re-check the arguments against the tool's parameter schema, then retry."
+        )
+    if status in (401, 403):
+        return (
+            "The upstream refused authorization — the source's credential is missing, expired, or "
+            "lacks permission. This is a connector-configuration issue, not the arguments you sent."
+        )
+    if status == 404:
+        return (
+            "The target resource was not found — an id in the request (often a path parameter) "
+            "does not exist upstream. Verify it, e.g. look it up with a READ tool first."
+        )
+    if status == 409:
+        return (
+            "Conflict — the resource already exists or is in a state that blocks this operation. "
+            "Fetch its current state before retrying."
+        )
+    if status == 429:
+        return "The upstream is rate-limiting — wait and retry, or reduce the call frequency."
+    if 500 <= status < 600:
+        return (
+            "The upstream had a server error — this is on the upstream side, not the request. "
+            "Retry after a short delay; if it persists, the source may be down."
+        )
+    return "Check the arguments you sent and the source's credentials."
 
 
 def _parse_link_next(link_header: str) -> str | None:

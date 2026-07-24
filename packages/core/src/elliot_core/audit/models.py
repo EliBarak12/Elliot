@@ -59,6 +59,10 @@ class AuditToolCall(BaseModel):
     result_token_estimate: int | None = None
     note: str = ""
     """The sub-agent's observation — e.g. "retried after a confusing schema"."""
+    is_skill: bool = False
+    """True when ``tool_id`` names a skill the agent invoked as one call (rather
+    than a plain tool), so the transcript records that the workflow was exercised
+    end-to-end."""
 
 
 class AuditTranscript(BaseModel):

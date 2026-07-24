@@ -102,6 +102,12 @@ def judge_audit(
 ) -> AuditReport:
     """Score ``transcripts`` against ``config`` and return an :class:`AuditReport`."""
     tool_ids = {t.id for t in config.tools}
+    # A deterministic skill is served as a callable tool too, so an audit agent
+    # may call it by its skill id. Map each skill to the tools it chains, and
+    # treat skill ids as valid call targets — otherwise every skill call would be
+    # flagged "unknown tool" and a skill-covered surface would score 0 coverage.
+    skill_step_tools = {s.id: {step.tool_id for step in s.steps} for s in config.skills}
+    valid_ids = tool_ids | set(skill_step_tools)
     findings: list[AuditFinding] = []
 
     all_calls: list[tuple[str, int, AuditToolCall]] = [
@@ -119,7 +125,7 @@ def judge_audit(
     selection_errors = [
         t for t in error_calls if (t[2].error_code or "").upper() in _SELECTION_ERROR_CODES
     ]
-    unknown_tool_calls = [t for t in all_calls if t[2].tool_id not in tool_ids]
+    unknown_tool_calls = [t for t in all_calls if t[2].tool_id not in valid_ids]
     oversized_calls = [
         (s, i, c)
         for s, i, c in all_calls
@@ -205,7 +211,13 @@ def judge_audit(
         return 1.0 - (bad / total_calls) if total_calls else 1.0
 
     actionable_errors = len(error_calls) - len(nonactionable_errors)
-    distinct_tools_used = {c.tool_id for _, _, c in all_calls} & tool_ids
+    # A skill call exercises the tools it chains, so credit them toward coverage.
+    distinct_tools_used: set[str] = set()
+    for _, _, c in all_calls:
+        if c.tool_id in tool_ids:
+            distinct_tools_used.add(c.tool_id)
+        elif c.tool_id in skill_step_tools:
+            distinct_tools_used |= skill_step_tools[c.tool_id] & tool_ids
     coverage = len(distinct_tools_used) / len(tool_ids) if tool_ids else 1.0
 
     dimension_scores = [

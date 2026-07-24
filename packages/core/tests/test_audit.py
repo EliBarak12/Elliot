@@ -140,6 +140,62 @@ def test_judge_flags_unknown_tool_as_error() -> None:
     assert report.passed is False
 
 
+def test_judge_treats_a_skill_call_as_valid_and_credits_its_tools_for_coverage() -> None:
+    # A deterministic skill is a callable target; an audit agent may invoke it by
+    # its id. It must NOT be flagged as an unknown tool, and calling it must
+    # credit the tools it chains toward coverage.
+    from elliot_core.types import ConnectorConfig, SkillDefinition, SkillStep, ToolDefinition
+
+    tools = [
+        ToolDefinition(
+            id="list_customers",
+            name="List customers",
+            description="List customers.",
+            category="READ",
+            source_ids=[],
+            sql="SELECT id FROM customers LIMIT 20",
+        ),
+        ToolDefinition(
+            id="search_orders",
+            name="Search orders",
+            description="Search orders for a customer.",
+            category="READ",
+            source_ids=[],
+            sql="SELECT id FROM orders LIMIT 20",
+        ),
+    ]
+    skill = SkillDefinition(
+        id="customer_orders",
+        name="Customer orders",
+        description="Look up a customer, then their orders.",
+        steps=[
+            SkillStep(alias="c", tool_id="list_customers", params={}),
+            SkillStep(alias="o", tool_id="search_orders", params={}),
+        ],
+    )
+    connector = ConnectorConfig(
+        name="Acme", slug="acme", version="1.0.0", sources=[], tools=tools, skills=[skill]
+    )
+    transcripts = [
+        AuditTranscript(
+            seed_id="seed-1",
+            task="t",
+            calls=[
+                AuditToolCall(
+                    tool_id="customer_orders", ok=True, is_skill=True, result_token_estimate=120
+                )
+            ],
+            task_completed=True,
+        )
+    ]
+    report = judge_audit(transcripts, connector)
+    # Not flagged as an unknown tool.
+    assert not any(f.tool_id == "customer_orders" for f in report.findings)
+    # The skill's two step tools are both credited → full coverage from one call.
+    coverage = next(d for d in report.dimension_scores if d.dimension == "scenario_coverage")
+    assert coverage.score == 10.0
+
+
 def test_judge_flags_schema_error() -> None:
     transcripts = [
         AuditTranscript(

@@ -27,12 +27,17 @@ Task calls). Brief each sub-agent like this:
 > You are an AI agent whose ONLY tools are this connector's tools. Accomplish
 > this task: `<seed.task>`. Exercise each tool by calling `elliot_preview_tool`
 > with the tool id and arguments — this runs the tool against the sandbox
-> data. Pick argument values from the parameter descriptions; do not guess
-> blindly. Follow the rubric. Return a transcript: for every call record
-> `tool_id`, `arguments`, `ok`, `error_code`, `error_message`,
-> `result_row_count`, `result_token_estimate`, and a short `note` when
-> something was confusing. Also return `task_completed` (bool) and a one-line
-> `summary`.
+> data. If the connector ships **skills** (multi-step workflows) and your task
+> matches one, use it: call `elliot_preview_skill(skill_id, inputs={...})` — it
+> runs the whole chain in one call, exactly as an agent would invoke the
+> published skill-tool, and it's the point of the skill. Prefer a matching skill
+> over hand-chaining its steps. Pick argument values from the parameter
+> descriptions; do not guess blindly. Follow the rubric. Return a transcript:
+> for every call (tool OR skill) record `tool_id` (the skill id for a skill
+> call, with `is_skill: true`), `arguments`, `ok`, `error_code`,
+> `error_message`, `result_row_count`, `result_token_estimate`, and a short
+> `note` when something was confusing. Also return `task_completed` (bool) and a
+> one-line `summary`.
 
 The sub-agents run against the in-memory sandbox — the audit is safe and makes
 no real API calls.

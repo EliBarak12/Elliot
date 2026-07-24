@@ -87,8 +87,8 @@ def register_audit_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
         Returns up to ``count`` seeds plus the rubric and the instructions for
         spawning the audit sub-agents. Each seed should be handed to one
-        sub-agent that exercises the connector tools (via elliot_preview_tool)
-        and reports a transcript.
+        sub-agent that exercises the connector's tools (via elliot_preview_tool)
+        AND its skills (via elliot_preview_skill) and reports a transcript.
         """
         try:
             if session.connector is None:
@@ -104,9 +104,12 @@ def register_audit_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 "instructions": (
                     f"Spawn {len(seeds)} parallel sub-agents, one per seed. Give "
                     "each sub-agent ONLY the connector's tools (exercised through "
-                    "elliot_preview_tool against the sandbox data). Each sub-agent "
-                    "attempts its seed task, records every tool call per the "
-                    "rubric, and you submit its transcript with "
+                    "elliot_preview_tool against the sandbox data) AND its skills "
+                    "(exercised through elliot_preview_skill, which runs the whole "
+                    "chain in one call — a sub-agent whose seed matches a skill's "
+                    "workflow should prefer the skill over hand-chaining the steps). "
+                    "Each sub-agent attempts its seed task, records every tool and "
+                    "skill call per the rubric, and you submit its transcript with "
                     "elliot_submit_audit_transcript. When all transcripts are in, "
                     "call elliot_judge_audit."
                 ),

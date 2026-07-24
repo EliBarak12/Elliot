@@ -302,3 +302,49 @@ def test_write_tool_with_mutation_word_no_warning():
     )
     result = analyze_tool_quality(tool)
     assert not any(i.check == "mutation_hint" for i in result.issues)
+
+
+# ── danger_zone_classified ──────────────────────────────────────────────────────
+
+
+def test_unclassified_high_impact_action_warns():
+    # A high-impact verb (cancel/refund/…) the runtime doesn't auto-detect, left
+    # unclassified — the quality score should reflect the ungated danger zone.
+    tool = ToolDefinition(
+        id="cancel_subscription",
+        name="cancel_subscription",
+        description="Cancels the customer's active subscription immediately",
+        category="ACTION",
+        source_ids=["src"],
+    )
+    result = analyze_tool_quality(tool)
+    issue = next((i for i in result.issues if i.check == "danger_zone_classified"), None)
+    assert issue is not None
+    assert issue.principle == "annotations"
+
+
+def test_classified_high_impact_action_no_warning():
+    for flag in (True, False):
+        tool = ToolDefinition(
+            id="cancel_subscription",
+            name="cancel_subscription",
+            description="Cancels the customer's active subscription immediately",
+            category="ACTION",
+            source_ids=["src"],
+            destructive=flag,
+        )
+        result = analyze_tool_quality(tool)
+        assert not any(i.check == "danger_zone_classified" for i in result.issues), flag
+
+
+def test_additive_action_no_danger_zone_check():
+    # create_* has no high-impact verb — the check doesn't apply (no false warn).
+    tool = ToolDefinition(
+        id="create_invoice",
+        name="create_invoice",
+        description="Creates a new invoice for a customer",
+        category="ACTION",
+        source_ids=["src"],
+    )
+    result = analyze_tool_quality(tool)
+    assert not any(i.check == "danger_zone_classified" for i in result.issues)

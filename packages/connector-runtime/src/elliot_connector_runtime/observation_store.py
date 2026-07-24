@@ -56,6 +56,10 @@ class _ToolCall(_Base):
     result_token_estimate = Column(Integer, default=0)
     duration_ms = Column(Float, default=0)
     error = Column(Text)
+    # Structured error code (MISSING_PARAM, UPSTREAM_FETCH_FAILED, …) on a failed
+    # call, so per-tool insights can separate a contract miss the author must fix
+    # from an upstream/auth failure that isn't theirs.
+    error_code = Column(String(64))
     connector_slug = Column(String(128))
 
 
@@ -120,6 +124,7 @@ class ObservationStore:
             _enable_sqlite_concurrency(self._engine)
         _Base.metadata.create_all(self._engine)
         self._migrate_agent_identity_columns()
+        self._migrate_tool_call_error_code()
         log.info("observation_store.ready", db_url=db_url.split("@")[-1])
 
     def _migrate_agent_identity_columns(self) -> None:
@@ -150,6 +155,20 @@ class ObservationStore:
                         text(f"ALTER TABLE agent_sessions ADD COLUMN {col_name} {col_type}")
                     )
 
+    def _migrate_tool_call_error_code(self) -> None:
+        """Retro-fit the ``error_code`` column onto a pre-existing tool_calls
+        table (``create_all`` never alters an existing table). Same pattern as
+        the agent-identity migration; without it an upgraded deployment would
+        drop the structured code and the per-tool contract-miss insight would
+        read empty."""
+        inspector = sa_inspect(self._engine)
+        if "tool_calls" not in inspector.get_table_names():
+            return
+        existing = {col["name"] for col in inspector.get_columns("tool_calls")}
+        if "error_code" not in existing:
+            with self._engine.begin() as conn:
+                conn.execute(text("ALTER TABLE tool_calls ADD COLUMN error_code VARCHAR(64)"))
+
     # ------------------------------------------------------------------ writes
 
     def write_tool_call(
@@ -162,6 +181,7 @@ class ObservationStore:
         duration_ms: float,
         error: str | None = None,
         connector_slug: str | None = None,
+        error_code: str | None = None,
     ) -> None:
         # Redact secret-bearing argument fields before persisting — same
         # policy as AuditLog.record and SessionTracker.record_tool_call, so
@@ -179,6 +199,7 @@ class ObservationStore:
                     result_token_estimate=result_token_estimate,
                     duration_ms=round(duration_ms, 2),
                     error=error,
+                    error_code=error_code,
                     connector_slug=connector_slug,
                 )
             )

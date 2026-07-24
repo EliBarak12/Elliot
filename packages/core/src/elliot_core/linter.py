@@ -246,6 +246,11 @@ def _lint_tool_source_coverage(config: ConnectorConfig) -> list[LintIssue]:
 
 # A ``{{ skill.input.X }}`` binding inside a skill step's params.
 _SKILL_INPUT_RE = re.compile(r"\{\{\s*skill\.input\.([A-Za-z0-9_]+)\s*\}\}")
+# Every ``{{ ... }}`` template in a step param. The runtime resolves ONLY two
+# forms — ``{{ skill.input.<name> }}`` and ``{{ steps.<alias>.<field> }}`` — so
+# any other shape (a bare ``{{ x }}``, ``{{ inputs.x }}``, ``{{ a.rows[0].b }}``)
+# fails at call time; the linter flags it here instead of at first run.
+_SKILL_TEMPLATE_RE = re.compile(r"\{\{([^}]+)\}\}")
 
 
 def _lint_skills(config: ConnectorConfig) -> list[LintIssue]:
@@ -269,6 +274,9 @@ def _lint_skills(config: ConnectorConfig) -> list[LintIssue]:
     tools_by_id = {t.id: t for t in config.tools}
     for skill in config.skills:
         input_names = {p.name for p in skill.input_parameters}
+        # Aliases produced by EARLIER steps — a step can only reference an
+        # earlier step's output, so this grows as we walk the chain.
+        seen_aliases: set[str] = set()
         for step in skill.steps:
             target = tools_by_id.get(step.tool_id)
             if target is None:
@@ -284,6 +292,7 @@ def _lint_skills(config: ConnectorConfig) -> list[LintIssue]:
                         suggestion="Point the step at an existing tool id, or add the tool.",
                     )
                 )
+                seen_aliases.add(step.alias)
                 continue
             required = [p.name for p in target.parameters if p.required and p.default is None]
             for name in required:
@@ -326,6 +335,49 @@ def _lint_skills(config: ConnectorConfig) -> list[LintIssue]:
                                 ),
                             )
                         )
+                # Every {{ ... }} template must be one of the two forms the
+                # runtime resolves; anything else fails at call time.
+                for expr in _SKILL_TEMPLATE_RE.findall(value):
+                    parts = expr.strip().split(".")
+                    is_input = len(parts) >= 3 and parts[0] == "skill" and parts[1] == "input"
+                    is_step = len(parts) >= 3 and parts[0] == "steps"
+                    if not is_input and not is_step:
+                        issues.append(
+                            LintIssue(
+                                severity="ERROR",
+                                code="SKILL_STEP_BAD_BINDING",
+                                tool_id=target.id,
+                                message=(
+                                    f"Skill '{skill.id}' step '{step.alias}' binds '{key}' with "
+                                    f"'{{{{ {expr.strip()} }}}}', which the runtime cannot resolve "
+                                    "— it fails at runtime with SKILL_TEMPLATE_UNRESOLVED."
+                                ),
+                                suggestion=(
+                                    "Use '{{ skill.input.<name> }}' for a skill input or "
+                                    "'{{ steps.<alias>.<field> }}' for an earlier step's "
+                                    "first-row field."
+                                ),
+                            )
+                        )
+                    elif is_step and parts[1] not in seen_aliases:
+                        issues.append(
+                            LintIssue(
+                                severity="ERROR",
+                                code="SKILL_STEP_DANGLING_STEP",
+                                tool_id=target.id,
+                                message=(
+                                    f"Skill '{skill.id}' step '{step.alias}' references "
+                                    f"'{{{{ steps.{parts[1]}.{'.'.join(parts[2:])} }}}}', but no "
+                                    f"earlier step is aliased '{parts[1]}' — it resolves to "
+                                    "nothing at runtime."
+                                ),
+                                suggestion=(
+                                    "Reference an alias produced by an EARLIER step (a step "
+                                    "cannot use its own or a later step's output)."
+                                ),
+                            )
+                        )
+            seen_aliases.add(step.alias)
     return issues
 
 

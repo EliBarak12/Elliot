@@ -623,6 +623,98 @@ def test_skill_step_bound_to_declared_input_is_clean() -> None:
     assert _skill_codes(config) == set()
 
 
+def test_skill_step_wrong_input_binding_form_is_error() -> None:
+    # {{ inputs.oid }} is the wrong form — the runtime resolves {{ skill.input.X }}.
+    # order_id IS bound (to a template), so this is a binding-form error, not
+    # MISSING_PARAM, and not DANGLING_INPUT (that regex only matches skill.input).
+    config = _with_skill(
+        {
+            "id": "s",
+            "name": "S",
+            "description": "A workflow",
+            "input_parameters": [
+                {"name": "oid", "type": "integer", "required": True, "description": "Order id"}
+            ],
+            "steps": [
+                {"alias": "a", "tool_id": "get_order", "params": {"order_id": "{{ inputs.oid }}"}}
+            ],
+        }
+    )
+    codes = _skill_codes(config)
+    assert "SKILL_STEP_BAD_BINDING" in codes
+    assert "SKILL_STEP_MISSING_PARAM" not in codes
+
+
+def test_skill_step_rows_index_binding_form_is_error() -> None:
+    # The exact wrong shape the old compose-skill doc showed.
+    config = _with_skill(
+        {
+            "id": "s",
+            "name": "S",
+            "description": "A workflow",
+            "steps": [
+                {"alias": "a", "tool_id": "get_order", "params": {"order_id": "{{ a.rows[0].id }}"}}
+            ],
+        }
+    )
+    assert "SKILL_STEP_BAD_BINDING" in _skill_codes(config)
+
+
+def test_skill_step_reference_to_unknown_alias_is_error() -> None:
+    # {{ steps.ghost.id }} is the right FORM but names a step that doesn't exist
+    # earlier in the chain — it silently resolves to nothing at runtime.
+    config = _with_skill(
+        {
+            "id": "s",
+            "name": "S",
+            "description": "A workflow",
+            "steps": [
+                {
+                    "alias": "a",
+                    "tool_id": "get_order",
+                    "params": {"order_id": "{{ steps.ghost.id }}"},
+                }
+            ],
+        }
+    )
+    assert "SKILL_STEP_DANGLING_STEP" in _skill_codes(config)
+
+
+def test_skill_step_reference_to_earlier_alias_is_clean() -> None:
+    list_orders = {
+        "id": "list_orders",
+        "name": "List orders",
+        "description": "List the most recent orders",
+        "category": "READ",
+        "source_ids": [],
+        "sql": "SELECT id FROM orders LIMIT 20",
+        "parameters": [],
+    }
+    config = ConnectorConfig(
+        name="T",
+        slug="t",
+        version="1.0.0",
+        sources=[],
+        tools=[list_orders, _GET_ORDER],  # type: ignore[list-item]
+        skills=[  # type: ignore[list-item]
+            {
+                "id": "s",
+                "name": "S",
+                "description": "A workflow",
+                "steps": [
+                    {"alias": "recent", "tool_id": "list_orders", "params": {}},
+                    {
+                        "alias": "detail",
+                        "tool_id": "get_order",
+                        "params": {"order_id": "{{ steps.recent.id }}"},
+                    },
+                ],
+            }
+        ],
+    )
+    assert _skill_codes(config) == set()
+
+
 def test_prose_only_skill_is_not_step_linted() -> None:
     config = _with_skill(
         {

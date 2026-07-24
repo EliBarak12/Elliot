@@ -302,6 +302,91 @@ def test_write_tool_with_mutation_verb_no_info() -> None:
     assert not any(i.code == "WRITE_TOOL_DESCRIPTION" for i in issues)
 
 
+def test_high_impact_action_unclassified_is_warn() -> None:
+    # cancel/refund/suspend/payout… aren't in the runtime's auto-detected
+    # destructive verb set, so an unclassified one would be auto-run without
+    # confirmation — the linter must nudge the author to decide.
+    for tool_id in (
+        "cancel_subscription",
+        "refund_charge",
+        "suspend_account",
+        "send_payout",
+        "deactivate_user",
+        "cancelSubscription",
+    ):
+        config = _make_connector(
+            id=tool_id,
+            category="ACTION",
+            description=f"Perform the {tool_id} operation for a customer",
+            sql=None,
+        )
+        issues = lint_connector(config)
+        assert any(i.code == "DESTRUCTIVE_NOT_FLAGGED" and i.severity == "WARN" for i in issues), (
+            tool_id
+        )
+
+
+def test_high_impact_action_marked_destructive_true_no_warn() -> None:
+    config = _make_connector(
+        id="cancel_subscription",
+        category="ACTION",
+        description="Cancel the customer's active subscription immediately",
+        sql=None,
+        destructive=True,
+    )
+    issues = lint_connector(config)
+    assert not any(i.code == "DESTRUCTIVE_NOT_FLAGGED" for i in issues)
+
+
+def test_high_impact_action_marked_destructive_false_no_warn() -> None:
+    # The author made a deliberate call that it is safe to auto-run — respect it.
+    config = _make_connector(
+        id="cancel_reminder_email",
+        category="ACTION",
+        description="Cancel a scheduled reminder email before it is sent",
+        sql=None,
+        destructive=False,
+    )
+    issues = lint_connector(config)
+    assert not any(i.code == "DESTRUCTIVE_NOT_FLAGGED" for i in issues)
+
+
+def test_auto_detected_destructive_verb_no_high_impact_warn() -> None:
+    # `delete_*` is already auto-flagged as the danger zone by the runtime, so
+    # the high-impact nudge must not double up even when a high-impact verb also
+    # appears in the name.
+    config = _make_connector(
+        id="delete_and_cancel_order",
+        category="ACTION",
+        description="Delete the order record and cancel its subscription",
+        sql=None,
+    )
+    issues = lint_connector(config)
+    assert not any(i.code == "DESTRUCTIVE_NOT_FLAGGED" for i in issues)
+
+
+def test_additive_action_no_destructive_warn() -> None:
+    config = _make_connector(
+        id="create_invoice",
+        category="ACTION",
+        description="Create a new invoice for the customer",
+        sql=None,
+    )
+    issues = lint_connector(config)
+    assert not any(i.code == "DESTRUCTIVE_NOT_FLAGGED" for i in issues)
+
+
+def test_read_tool_with_high_impact_verb_no_warn() -> None:
+    # The danger-zone nudge is scoped to WRITE/ACTION — a READ never mutates.
+    config = _make_connector(
+        id="list_cancelled_orders",
+        category="READ",
+        description="Return orders that were cancelled in the last 30 days",
+    )
+    issues = lint_connector(config)
+    assert not any(i.code == "DESTRUCTIVE_NOT_FLAGGED" for i in issues)
+
+
 def test_no_tools_returns_empty_issues() -> None:
     config = ConnectorConfig(
         name="Empty",

@@ -326,11 +326,17 @@ def derive_agent_briefing(cfg: Any) -> str:
             f"Danger zone: {len(danger)} tool(s) are irreversible ({names}{more}) and require "
             "confirmation before you call them; every other tool is safe to run directly."
         )
-    skills = getattr(cfg, "skills", None)
-    if skills:
+    skills = getattr(cfg, "skills", None) or []
+    deterministic = [s for s in skills if getattr(s, "steps", None)]
+    prose = [s for s in skills if not getattr(s, "steps", None)]
+    if deterministic:
         lines.append(
-            f"{len(skills)} multi-step skill(s) are available as MCP prompts for common workflows."
+            f"{len(deterministic)} multi-step workflow(s) run in ONE call — call them like any "
+            "other tool and the connector executes the whole chain for you, so you don't "
+            "orchestrate the steps yourself."
         )
+    if prose:
+        lines.append(f"{len(prose)} prose workflow(s) are available as MCP prompts for guidance.")
     lines.append("Call list_tools for each tool's full parameter contract.")
     return "\n\n".join(lines)
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -12,6 +11,7 @@ import structlog
 from elliot_core.eval.matchers import match_value
 
 from .eval_types import EvalCase, EvalSuite
+from .tokens import estimate_tokens
 from .types import ConnectorConfig
 
 log = structlog.get_logger(__name__)
@@ -144,7 +144,10 @@ class EvalRunner:
             error_code = getattr(exc, "code", None)
 
         duration_ms = (time.monotonic() - t0) * 1000
-        token_estimate = max(1, len(json.dumps(rows, default=str)) // 4)
+        # The SAME estimate the runtime trace and dashboard report, so an
+        # author's max_token_estimate budget means what they see there — not a
+        # cruder chars/4 figure that passes/fails a budget the runtime wouldn't.
+        token_estimate = estimate_tokens(rows)
 
         failures = _check_expectations(case, rows, error_str, error_code, token_estimate)
         log.info(

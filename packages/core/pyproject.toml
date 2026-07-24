@@ -18,6 +18,10 @@ dependencies = [
     "structlog>=24.1",
     "fastapi>=0.115",
     "pyyaml>=6.0",
+    # Real tokenizer for the canonical token estimate (elliot_core.tokens) — the
+    # signature metric must be counted the same way in evals, traces, and the
+    # dashboard. Lazy-imported with a chars/4 fallback, so it degrades gracefully.
+    "tiktoken>=0.7",
 ]
 
 [project.scripts]

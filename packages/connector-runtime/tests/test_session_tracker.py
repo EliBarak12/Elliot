@@ -165,6 +165,16 @@ def test_signals_flag_errors_and_large_results(tmp_path: Path) -> None:
     assert "retry" in kinds
 
 
+def test_tracker_and_evals_share_one_token_estimator() -> None:
+    # The signature metric is counted ONE way: the runtime trace's per-call
+    # tokens use the same canonical estimator as the eval token budgets, so a
+    # max_token_estimate means exactly what the dashboard reports.
+    from elliot_connector_runtime.session_tracker import _estimate_tokens
+    from elliot_core.tokens import estimate_tokens
+
+    assert _estimate_tokens is estimate_tokens
+
+
 def test_contract_miss_signal_flags_param_errors(tmp_path: Path) -> None:
     # A param the tool rejected (agent got the contract wrong) fires the
     # contract_miss signal, and the structured code lands on the event — but an

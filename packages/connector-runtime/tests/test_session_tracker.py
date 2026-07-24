@@ -165,6 +165,48 @@ def test_signals_flag_errors_and_large_results(tmp_path: Path) -> None:
     assert "retry" in kinds
 
 
+def test_contract_miss_signal_flags_param_errors(tmp_path: Path) -> None:
+    # A param the tool rejected (agent got the contract wrong) fires the
+    # contract_miss signal, and the structured code lands on the event — but an
+    # upstream failure does NOT (it's not the contract's fault).
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    sid = tracker.start_session(session_id="s")
+    tracker.record_tool_call(
+        sid, "get_order", {}, 0, [], 5.0, error="missing order_id", error_code="MISSING_PARAM"
+    )
+    tracker.record_tool_call(
+        sid,
+        "get_order",
+        {"order_id": "x"},
+        0,
+        [],
+        5.0,
+        error="upstream 503",
+        error_code="UPSTREAM_FETCH_FAILED",
+    )
+
+    out = tracker.tail(1)[0]
+    signals = {s["type"] for s in out["signals"]}
+    assert "contract_miss" in signals
+    # Exactly one call was a contract miss (the upstream failure is excluded).
+    miss = next(s for s in out["signals"] if s["type"] == "contract_miss")
+    assert miss["message"].startswith("1 ")
+    # The structured code is serialized on the event for at-a-glance triage.
+    assert out["events"][0]["error_code"] == "MISSING_PARAM"
+    assert out["events"][1]["error_code"] == "UPSTREAM_FETCH_FAILED"
+
+
+def test_contract_miss_absent_when_no_param_errors(tmp_path: Path) -> None:
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    sid = tracker.start_session(session_id="s")
+    tracker.record_tool_call(sid, "list_orders", {}, 2, [{"id": 1}, {"id": 2}], 5.0)
+    tracker.record_tool_call(
+        sid, "charge", {}, 0, [], 5.0, error="upstream 500", error_code="UPSTREAM_FETCH_FAILED"
+    )
+    signals = {s["type"] for s in tracker.tail(1)[0]["signals"]}
+    assert "contract_miss" not in signals
+
+
 def test_summary_describes_tool_path(tmp_path: Path) -> None:
     tracker = SessionTracker(tmp_path / "sessions.ndjson")
     sid = tracker.start_session(session_id="s")

@@ -759,6 +759,7 @@ def _record_validation_failure(
             result_data=[],
             duration_ms=0.0,
             error=error,
+            error_code="VALIDATION_INVALID_PARAMS",
         )
 
 
@@ -808,9 +809,7 @@ def _make_observe(
     tracker: SessionTracker | None,
     store: ObservationStore | None,
     connector_slug: str | None,
-) -> Callable[
-    [str, dict[str, Any], list[dict[str, Any]], float, str | None, str | None], Awaitable[None]
-]:
+) -> Callable[..., Awaitable[None]]:
     """Build the per-call observer shared by the tool and skill handlers: record
     one call to the audit log, session tracker, and observation store so every
     call — tool or skill — is equally observable (principle 4). Blocking I/O runs
@@ -825,6 +824,7 @@ def _make_observe(
         error: str | None,
         session_id: str | None,
         identity: Any,
+        error_code: str | None = None,
     ) -> None:
         row_count = len(result_rows)
         # Estimate tokens up-front so the audit row, the observation store, and
@@ -861,6 +861,7 @@ def _make_observe(
                         result_data=result_rows,
                         duration_ms=duration_ms,
                         error=error,
+                        error_code=error_code,
                     )
                     # The session stays open and accumulates every call from
                     # this MCP connection — the idle sweeper flushes it later.
@@ -895,6 +896,7 @@ def _make_observe(
         duration_ms: float,
         error: str | None,
         session_id: str | None,
+        error_code: str | None = None,
     ) -> None:
         """Capture the request-scoped agent identity, then offload the blocking
         audit/tracker/observation-store writes to a worker thread."""
@@ -908,6 +910,7 @@ def _make_observe(
             error,
             session_id,
             identity,
+            error_code,
         )
 
     return _observe
@@ -1027,7 +1030,7 @@ def _register_tool(
                     ),
                     {"tool_id": td.id, "category": td.category},
                 )
-                await _observe(td.id, kwargs, [], 0.0, str(exc), session_id)
+                await _observe(td.id, kwargs, [], 0.0, str(exc), session_id, error_code=exc.code)
                 error_content = to_mcp_error_content(exc)
                 raise ValueError(error_content["text"])
         else:
@@ -1044,7 +1047,7 @@ def _register_tool(
                     get_current_user_id(), td.source_ids or None
                 )
             except ElliotError as exc:
-                await _observe(td.id, kwargs, [], 0.0, str(exc), session_id)
+                await _observe(td.id, kwargs, [], 0.0, str(exc), session_id, error_code=exc.code)
                 error_content = to_mcp_error_content(exc)
                 raise ValueError(error_content["text"]) from exc
 
@@ -1097,7 +1100,15 @@ def _register_tool(
                 if isinstance(exc, ElliotError)
                 else ElliotError("TOOL_EXECUTION_ERROR", str(exc))
             )
-            await _observe(td.id, kwargs, [], duration_ms, str(elliot_exc), session_id)
+            await _observe(
+                td.id,
+                kwargs,
+                [],
+                duration_ms,
+                str(elliot_exc),
+                session_id,
+                error_code=elliot_exc.code,
+            )
             error_content = to_mcp_error_content(elliot_exc)
             await _emit_runtime_log(
                 ctx,
@@ -1672,7 +1683,15 @@ def _register_one_skill_tool(
                 if isinstance(exc, ElliotError)
                 else ElliotError("TOOL_EXECUTION_ERROR", str(exc))
             )
-            await _observe(skill_id, kwargs, [], duration_ms, str(elliot_exc), session_id)
+            await _observe(
+                skill_id,
+                kwargs,
+                [],
+                duration_ms,
+                str(elliot_exc),
+                session_id,
+                error_code=elliot_exc.code,
+            )
             raise ValueError(to_mcp_error_content(elliot_exc)["text"]) from exc
 
     _skill_handler.__name__ = skill_id

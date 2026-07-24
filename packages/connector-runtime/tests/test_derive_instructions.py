@@ -104,7 +104,7 @@ def test_read_only_connector_reads_as_context_only() -> None:
     assert "Danger zone" not in text
 
 
-def test_skills_surface_as_prompts_when_present() -> None:
+def test_deterministic_skill_briefed_as_a_one_call_workflow() -> None:
     from elliot_core.types import SkillDefinition, SkillStep
 
     skill = SkillDefinition(
@@ -114,7 +114,23 @@ def test_skills_surface_as_prompts_when_present() -> None:
         steps=[SkillStep(alias="place", tool_id="create_order", params={})],
     )
     text = derive_agent_briefing(_connector([_read(), _action("create_order")], skills=[skill]))
-    assert "1 multi-step skill(s) are available as MCP prompts" in text
+    # A skill with steps is now a callable tool — the briefing must say so.
+    assert "1 multi-step workflow(s) run in ONE call" in text
+    assert "MCP prompts" not in text
+
+
+def test_prose_skill_briefed_as_a_prompt() -> None:
+    from elliot_core.types import SkillDefinition
+
+    skill = SkillDefinition(
+        id="triage",
+        name="Triage",
+        description="How to triage an incident.",
+        instructions="Assess severity, then page the on-call.",
+    )
+    text = derive_agent_briefing(_connector([_read()], skills=[skill]))
+    assert "1 prose workflow(s) are available as MCP prompts" in text
+    assert "run in ONE call" not in text
 
 
 def test_falls_back_gracefully_with_no_tools() -> None:

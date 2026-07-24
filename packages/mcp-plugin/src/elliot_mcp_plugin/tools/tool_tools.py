@@ -13,9 +13,16 @@ from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.naming import is_valid_identifier, slugify_identifier
 from elliot_core.sql import extract_sql_params, has_select_star, referenced_base_tables
 from elliot_core.sqlite.query_runner import validate_tool_sql
+from elliot_core.tokens import estimate_tokens
 from elliot_core.tools.param_validation import validate_call_params
 from elliot_core.types.tool import ToolDefinition
 from elliot_mcp_plugin.session import ElliotSession
+
+# A preview result costing more than this is worth flagging — it is the token
+# bill an agent pays every time it calls the tool (the runtime's large-result
+# threshold). Kept here so the build-time preview and the runtime trace speak
+# about "token-heavy" with the same number.
+_HEAVY_PREVIEW_TOKENS = 500
 
 # JSON-schema description of a single tool parameter spec, advertised on the
 # array params so an agent sees the expected item shape instead of a bare
@@ -113,7 +120,17 @@ def preview_tool(
             bound[p.name] = None
 
     rows = session.engine.query(sql, bound)
-    return {"rows": rows, "row_count": len(rows)}
+    # The token cost is the signature metric — show it at the moment the author
+    # inspects the tool, counted the same way the runtime trace and dashboard
+    # will, so a token-heavy tool is caught before publish, not after agents pay.
+    tokens = estimate_tokens(rows)
+    out: dict[str, Any] = {"rows": rows, "row_count": len(rows), "estimated_tokens": tokens}
+    if tokens > _HEAVY_PREVIEW_TOKENS:
+        out["note"] = (
+            f"This result is ~{tokens} tokens — an agent pays that on every call. Project only "
+            "the columns the agent needs and add a LIMIT so it fits a context window (principle 2)."
+        )
+    return out
 
 
 # Preview rows are a sanity check, not a data export — cap the live passthrough
@@ -182,6 +199,10 @@ async def _preview_passthrough(
     out: dict[str, Any] = {
         "rows": rows,
         "row_count": len(rows),
+        # The token cost of the returned slice — the signature metric, counted
+        # the same way the runtime trace will. A heavy slice means each live call
+        # is expensive; tighten the upstream page size or the fields returned.
+        "estimated_tokens": estimate_tokens(rows),
         "mode": "rest_passthrough",
         "live": True,
         "total_fetched": len(result.rows),

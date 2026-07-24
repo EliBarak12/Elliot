@@ -328,6 +328,24 @@ def test_preview_tool_returns_rows(mcp: FastMCP, session: ElliotSession, tmp_pat
     assert result["row_count"] == 3
 
 
+def test_preview_tool_reports_token_estimate(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    # The signature metric is shown at build time, counted the same way the
+    # runtime trace does — so a token-heavy tool is caught before publish.
+    from elliot_core.tokens import estimate_tokens
+
+    _load_table(session, tmp_path)
+    _tool(mcp, "elliot_create_tool")(
+        name="preview_orders",
+        description="Retrieve all orders from the system",
+        category="READ",
+        sql='SELECT * FROM "orders"',
+        parameters=[],
+    )
+    result = _tool(mcp, "elliot_preview_tool")(tool_id="preview_orders", params={})
+    assert result["estimated_tokens"] == estimate_tokens(result["rows"])
+    assert result["estimated_tokens"] >= 1
+
+
 def test_preview_tool_aggregate(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
     _load_table(session, tmp_path)
     _tool(mcp, "elliot_create_tool")(

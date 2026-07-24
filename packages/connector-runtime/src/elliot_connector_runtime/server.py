@@ -748,6 +748,7 @@ def _record_validation_failure(
             result_token_estimate=0,
             duration_ms=0.0,
             error=error,
+            error_code="VALIDATION_INVALID_PARAMS",
             connector_slug=connector_slug,
         )
     if tracker is not None:
@@ -881,6 +882,7 @@ def _make_observe(
                         result_token_estimate=token_estimate,
                         duration_ms=duration_ms,
                         error=error,
+                        error_code=error_code,
                         connector_slug=connector_slug,
                     )
                     # Do NOT close the session here: it stays open and

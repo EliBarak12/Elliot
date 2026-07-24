@@ -28,6 +28,16 @@ def test_write_and_read_tool_call(store: ObservationStore) -> None:
     assert calls[0]["result_token_estimate"] == 87
 
 
+def test_tool_call_persists_error_code(store: ObservationStore) -> None:
+    # The structured code round-trips so per-tool insights can separate a
+    # contract miss from an upstream failure; a success stores no code.
+    store.write_tool_call(None, "get_order", {}, 0, 0, 5.0, error="bad", error_code="MISSING_PARAM")
+    store.write_tool_call(None, "list_orders", {}, 3, 40, 8.0)
+    by_tool = {c["tool_id"]: c for c in store.recent_tool_calls(10)}
+    assert by_tool["get_order"]["error_code"] == "MISSING_PARAM"
+    assert by_tool["list_orders"]["error_code"] is None
+
+
 def test_session_rollups_stay_current_without_close(store: ObservationStore) -> None:
     """Regression: MCP-over-HTTP clients rarely close cleanly, so the per-agent
     breakdown must be correct from the denormalized session counters as calls
@@ -193,6 +203,41 @@ def test_observation_store_migrates_old_schema(tmp_path: Path) -> None:
     sessions = store.recent_sessions(10)
     assert sessions[0]["agent_client"] == "cursor"
     assert sessions[0]["agent_model"] == "claude-sonnet-4-5"
+
+
+def test_observation_store_migrates_tool_calls_error_code(tmp_path: Path) -> None:
+    """A pre-existing tool_calls table without error_code is upgraded in place,
+    so an author who upgrades keeps writing and reading the structured code."""
+    from sqlalchemy import create_engine
+    from sqlalchemy import text as sa_text
+
+    db_path = tmp_path / "legacy_calls.db"
+    legacy_engine = create_engine(f"sqlite:///{db_path}")
+    with legacy_engine.begin() as conn:
+        conn.execute(
+            sa_text(
+                """
+                CREATE TABLE tool_calls (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id VARCHAR(128),
+                    ts FLOAT NOT NULL,
+                    tool_id VARCHAR(128) NOT NULL,
+                    arguments TEXT,
+                    result_row_count INTEGER DEFAULT 0,
+                    result_token_estimate INTEGER DEFAULT 0,
+                    duration_ms FLOAT DEFAULT 0,
+                    error TEXT,
+                    connector_slug VARCHAR(128)
+                )
+                """
+            )
+        )
+    legacy_engine.dispose()
+
+    store = ObservationStore(f"sqlite:///{db_path}")
+    store.write_tool_call(None, "get_order", {}, 0, 0, 5.0, error="bad", error_code="MISSING_PARAM")
+    calls = store.recent_tool_calls(10)
+    assert calls[0]["error_code"] == "MISSING_PARAM"
 
 
 def test_close_session_unknown_is_noop(store: ObservationStore) -> None:

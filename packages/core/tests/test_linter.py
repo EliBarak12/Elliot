@@ -198,6 +198,48 @@ def test_select_star_with_where_no_limit_is_warn() -> None:
     assert any(i.severity == "WARN" for i in issues if i.code == "SELECT_STAR_NO_LIMIT")
 
 
+def test_aggregation_named_tool_without_aggregate_is_warn() -> None:
+    # count_orders that returns raw rows instead of a count — its name lies.
+    config = _make_connector(
+        id="count_orders",
+        name="Count orders",
+        description="Count the open orders.",
+        sql="SELECT id, status FROM orders LIMIT 20",
+    )
+    issues = lint_connector(config)
+    assert any(i.code == "AGGREGATION_NAME_NO_AGGREGATE" for i in issues)
+    assert all(i.severity == "WARN" for i in issues if i.code == "AGGREGATION_NAME_NO_AGGREGATE")
+
+
+def test_aggregation_named_tool_that_actually_aggregates_is_clean() -> None:
+    for sql in (
+        "SELECT COUNT(*) AS n FROM orders",
+        "SELECT plan, SUM(mrr) AS total FROM users GROUP BY plan",
+        "SELECT AVG(score) AS avg_score FROM reviews",
+    ):
+        config = _make_connector(
+            id="summarize_x",
+            name="Summarize X",
+            description="Summarize the data.",
+            sql=sql,
+        )
+        codes = {i.code for i in lint_connector(config)}
+        assert "AGGREGATION_NAME_NO_AGGREGATE" not in codes, sql
+
+
+def test_non_aggregation_lead_verb_selecting_a_total_column_is_not_flagged() -> None:
+    # A list/get tool that happens to select a pre-aggregated `total` column must
+    # not trip the aggregation check — the lead verb, not the columns, gates it.
+    config = _make_connector(
+        id="list_daily_totals",
+        name="List daily totals",
+        description="List each day's precomputed total.",
+        sql="SELECT day, total FROM daily_rollup LIMIT 30",
+    )
+    codes = {i.code for i in lint_connector(config)}
+    assert "AGGREGATION_NAME_NO_AGGREGATE" not in codes
+
+
 def test_select_star_with_limit_no_issue() -> None:
     config = _make_connector(sql="SELECT * FROM items LIMIT 50")
     issues = lint_connector(config)

@@ -68,6 +68,27 @@ _ENUM_DESC_RE = re.compile(
 # must know the match semantics (exact vs substring vs prefix, case handling)
 # to use it correctly. Without it, agents guess wrong — e.g. asking for "cities
 # starting with L" against an exact-match field silently returns nothing.
+# A READ tool whose NAME leads with an aggregation verb promises a *computed*
+# answer (a count / total / summary), not the raw table. If its SQL carries no
+# aggregate function or GROUP BY it returns raw rows instead — contradicting its
+# own contract (principle 1) and spending the context budget the aggregation was
+# meant to save (principle 2). Scoped to unambiguous aggregation verbs so a
+# "list_totals" / "get_summary_page" (lead verb list/get) never trips it.
+_AGGREGATION_VERBS = frozenset(
+    {
+        "count",
+        "summarize",
+        "summarise",
+        "aggregate",
+        "tally",
+        "tabulate",
+        "breakdown",
+        "average",
+        "avg",
+    }
+)
+_AGGREGATE_SQL_RE = re.compile(r"\b(COUNT|SUM|AVG|MIN|MAX|GROUP\s+BY)\b")
+
 _FILTER_PARAM_RE = re.compile(r"filter|search", re.IGNORECASE)
 _FILTER_SEMANTICS_RE = re.compile(
     r"exact|substring|prefix|suffix|contains|case[- ]?insensitive|case[- ]?sensitive|"
@@ -594,6 +615,30 @@ def lint_connector(
                     tool_id=tool.id,
                     message=f"Tool '{tool.id}' uses SELECT * without a LIMIT.",
                     suggestion="Add LIMIT :limit with a default, or select only the columns agents need.",
+                )
+            )
+
+        # A tool that NAMES itself an aggregation must actually aggregate.
+        lead_token = next(iter(re.split(r"[^a-z0-9]+", tool.id.lower())), "")
+        if (
+            lead_token in _AGGREGATION_VERBS
+            and tool.sql
+            and not _AGGREGATE_SQL_RE.search(sql_upper)
+        ):
+            issues.append(
+                LintIssue(
+                    severity="WARN",
+                    code="AGGREGATION_NAME_NO_AGGREGATE",
+                    tool_id=tool.id,
+                    message=(
+                        f"Tool '{tool.id}' is named like an aggregation ('{lead_token}…') but its "
+                        "SQL has no COUNT/SUM/AVG/GROUP BY — it returns raw rows, not the computed "
+                        "answer the name promises."
+                    ),
+                    suggestion=(
+                        "Compute the result in SQL (COUNT/SUM/AVG with GROUP BY) so the tool returns "
+                        "a small answer, or rename it to a list/get tool if it really returns rows."
+                    ),
                 )
             )
 

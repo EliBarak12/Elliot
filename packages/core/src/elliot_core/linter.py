@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .danger_zone import DESTRUCTIVE_VERBS, HIGH_IMPACT_VERBS, name_tokens
-from .sql import referenced_base_tables
+from .sql import extract_sql_params, referenced_base_tables
 from .types import ConnectorConfig
 
 Severity = Literal["ERROR", "WARN", "INFO"]
@@ -646,6 +646,34 @@ def lint_connector(
         # Names forwarded verbatim to the upstream API must keep the API's
         # spelling — exempt them from the descriptive-name rules below.
         forwarded = _forwarded_param_names(tool)
+
+        # A parameter an agent can pass but the tool never consumes is a broken
+        # contract: the agent fills it in expecting a filter/effect and gets
+        # none, so a "customers on the pro plan" request silently returns every
+        # customer. Only a raw-SQL tool is checked (its params must appear as
+        # ``:name``); a param routed to the API (forwarded) or bound by a
+        # structured filter_groups is consumed elsewhere and never flagged.
+        if tool.sql and not tool.filter_groups:
+            consumed = set(extract_sql_params(tool.sql)) | forwarded
+            for param in tool.parameters:
+                if param.name not in consumed:
+                    issues.append(
+                        LintIssue(
+                            severity="WARN",
+                            code="PARAMETER_UNUSED",
+                            tool_id=tool.id,
+                            message=(
+                                f"Tool '{tool.id}' declares parameter '{param.name}' but its SQL "
+                                "never binds it — an agent that passes it gets no effect, so the "
+                                "result is silently unfiltered."
+                            ),
+                            suggestion=(
+                                f"Reference it in the SQL (e.g. `WHERE (:{param.name} IS NULL OR "
+                                f"col = :{param.name})`), or remove the parameter."
+                            ),
+                        )
+                    )
+
         for param in tool.parameters:
             if len(param.name) <= 2 and param.name not in forwarded:
                 issues.append(

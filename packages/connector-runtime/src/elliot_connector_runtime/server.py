@@ -415,13 +415,17 @@ def _result_truncated(result: Any) -> bool:
     return False
 
 
-def _payload_for(result: Any) -> dict[str, Any]:
+def _payload_for(
+    result: Any, td: Any = None, kwargs: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Build the agent-facing tool result.
 
     Always carries an ``estimated_tokens`` count of the returned rows — token
     cost is a first-class signal the agent can use to decide whether to narrow
     a request, not just an internal metric — plus the truncation marker + note
-    when the set was capped.
+    when the set was capped, or an empty-result note (when ``td`` is supplied)
+    so a zero-row READ tells the agent what to do next instead of leaving it to
+    guess whether the filter was too narrow or the data is genuinely empty.
     """
     from .session_tracker import _estimate_tokens
 
@@ -434,6 +438,11 @@ def _payload_for(result: Any) -> dict[str, Any]:
     if _result_truncated(result):
         payload["truncated"] = True
         payload["truncation_note"] = _truncation_note(result)
+    elif not rows and td is not None:
+        note = _empty_result_note(td, kwargs or {})
+        if note:
+            payload["empty"] = True
+            payload["empty_note"] = note
     return payload
 
 
@@ -484,6 +493,33 @@ def _truncation_note(result: Any) -> str:
         f"{scope}. This is a partial result, not the complete answer — narrow the "
         "request (add or tighten a filter, or pass a smaller limit) so the full "
         "result fits, then call again."
+    )
+
+
+def _empty_result_note(td: Any, kwargs: dict[str, Any]) -> str | None:
+    """Actionable guidance for a READ tool that matched no rows (principle 3).
+
+    An empty result is ambiguous — a too-narrow filter, or genuinely no data —
+    and an agent often can't tell which, so it either retries blindly or wrongly
+    concludes "there is none". Name the arguments the caller actually supplied so
+    the next move is obvious (relax a filter among them), or say plainly that no
+    arguments were passed so the source is simply empty. Returns ``None`` when no
+    note helps — a WRITE/ACTION (an empty mutation result is normal), or a tool
+    with no declared parameters."""
+    if getattr(td, "category", None) != "READ":
+        return None
+    applied = sorted(
+        p.name for p in (getattr(td, "parameters", []) or []) if kwargs.get(p.name) is not None
+    )
+    if applied:
+        return (
+            f"No rows matched the arguments you supplied ({', '.join(applied)}). "
+            "Relax or drop any filter among them and call again, or treat the "
+            "result as genuinely empty."
+        )
+    return (
+        "No rows matched, and you supplied no arguments — the data behind this tool "
+        "is empty. Treat the result as genuinely empty rather than retrying."
     )
 
 
@@ -965,7 +1001,7 @@ def _register_tool(
 
             async def _work() -> dict[str, Any]:
                 result = await active_executor.execute(td, kwargs)
-                return _payload_for(result)
+                return _payload_for(result, td, kwargs)
 
             task_id = task_store.submit(td.id, _work())
             return {
@@ -995,8 +1031,9 @@ def _register_tool(
             )
             # Agent-facing result: rows + count + a token estimate, plus the
             # truncation marker/note when the set was capped (by row cap, source
-            # cap, or the per-call token budget).
-            return _payload_for(result)
+            # cap, or the per-call token budget), or an empty-result note when a
+            # READ matched nothing.
+            return _payload_for(result, td, kwargs)
         except Exception as exc:
             # Every failure must be observed — not just ElliotError. A tool
             # backed by a REST source fails with httpx.HTTPStatusError /

@@ -251,6 +251,74 @@ def test_judge_flags_oversized_response() -> None:
     assert any(f.dimension == "token_efficiency" for f in report.findings)
 
 
+def _danger_connector(destructive: bool | None) -> ConnectorConfig:
+    return _connector(
+        tools=[
+            {
+                "id": "cancel_subscription",
+                "name": "Cancel Subscription",
+                "description": "Cancel a customer's subscription immediately",
+                "category": "ACTION",
+                "source_ids": [],
+                "api_mapping": {"method": "POST", "path_template": "/cancel"},
+                "parameters": [],
+                "destructive": destructive,
+            }
+        ]
+    )
+
+
+def test_judge_flags_ungated_high_impact_execution() -> None:
+    # An adversarial agent successfully ran an unclassified high-impact action —
+    # the danger zone was reachable without confirmation.
+    transcripts = [
+        AuditTranscript(
+            seed_id="seed-1",
+            task="t",
+            calls=[_ok_call("cancel_subscription")],
+            task_completed=True,
+        )
+    ]
+    report = judge_audit(transcripts, _danger_connector(destructive=None))
+    assert any(f.dimension == "safety" for f in report.findings)
+    safety = next(d for d in report.dimension_scores if d.dimension == "safety")
+    assert safety.score < 10.0
+
+
+def test_judge_no_safety_finding_when_high_impact_is_classified() -> None:
+    # Explicitly flagged destructive → the runtime gates it, so executing it is
+    # not a hole. destructive: false → the author affirmed it's safe. Neither trips.
+    for flag in (True, False):
+        transcripts = [
+            AuditTranscript(
+                seed_id="seed-1",
+                task="t",
+                calls=[_ok_call("cancel_subscription")],
+                task_completed=True,
+            )
+        ]
+        report = judge_audit(transcripts, _danger_connector(destructive=flag))
+        assert not any(f.dimension == "safety" for f in report.findings), flag
+        safety = next(d for d in report.dimension_scores if d.dimension == "safety")
+        assert safety.score == 10.0
+
+
+def test_judge_safety_clean_for_ordinary_tools() -> None:
+    # Reads and additive creates are not the danger zone — full safety score.
+    transcripts = [
+        AuditTranscript(
+            seed_id="seed-1",
+            task="t",
+            calls=[_ok_call("list_customers"), _ok_call("create_invoice")],
+            task_completed=True,
+        )
+    ]
+    report = judge_audit(transcripts, _connector())
+    assert not any(f.dimension == "safety" for f in report.findings)
+    safety = next(d for d in report.dimension_scores if d.dimension == "safety")
+    assert safety.score == 10.0
+
+
 def test_judge_empty_transcripts() -> None:
     report = judge_audit([], _connector())
     assert report.transcript_count == 0

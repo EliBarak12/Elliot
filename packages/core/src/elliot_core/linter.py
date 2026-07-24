@@ -329,6 +329,83 @@ def _lint_skills(config: ConnectorConfig) -> list[LintIssue]:
     return issues
 
 
+# Tokens that mark a tool id/name as leftover scaffolding rather than a real,
+# agent-facing contract. Agents select tools by name, so a "get_stuff_now" or a
+# "probe"/"tmp" tool that shipped by accident poisons tool selection and wastes
+# context. Deliberately conservative (WARN, whole-token match) to avoid firing
+# on legitimate names.
+_SCAFFOLD_TOKENS = frozenset(
+    {
+        "stuff",
+        "foo",
+        "bar",
+        "baz",
+        "qux",
+        "probe",
+        "tmp",
+        "temp",
+        "placeholder",
+        "todo",
+        "wip",
+        "asdf",
+        "xxx",
+        "untitled",
+        "dummy",
+        "scratch",
+    }
+)
+_SCAFFOLD_DESC_RE = re.compile(r"^\s*(probe|debug|todo|fixme)\b\s*[:\-]", re.IGNORECASE)
+
+
+def _lint_scaffold_names(config: ConnectorConfig) -> list[LintIssue]:
+    """Flag tools that read as leftover build scaffolding, not a shipped contract.
+
+    An agent picks tools by their id/name, so a placeholder like ``get_stuff_now``
+    or a debug ``echo_search_probe`` that survives into a published connector
+    degrades tool selection and spends context on noise. WARN, not ERROR: the
+    author may have a reason, but nearly always it's cruft to rename or drop.
+    """
+    issues: list[LintIssue] = []
+    for tool in config.tools:
+        tokens = set(re.split(r"[^a-z0-9]+", tool.id.lower()))
+        tokens |= set(re.split(r"[^a-z0-9]+", (tool.name or "").lower()))
+        hit = tokens & _SCAFFOLD_TOKENS
+        if hit:
+            issues.append(
+                LintIssue(
+                    severity="WARN",
+                    code="TOOL_NAME_SCAFFOLD",
+                    tool_id=tool.id,
+                    message=(
+                        f"Tool '{tool.id}' looks like leftover scaffolding (token "
+                        f"'{sorted(hit)[0]}'). Agents select tools by name, so a placeholder "
+                        "id poisons tool selection."
+                    ),
+                    suggestion=(
+                        "Rename it to a descriptive, verb-first id that says what it returns "
+                        "or does — or remove it if it was a build-time probe."
+                    ),
+                )
+            )
+        elif _SCAFFOLD_DESC_RE.match(tool.description or ""):
+            issues.append(
+                LintIssue(
+                    severity="WARN",
+                    code="TOOL_DESC_SCAFFOLD",
+                    tool_id=tool.id,
+                    message=(
+                        f"Tool '{tool.id}' description reads like a debug/probe note, not an "
+                        "agent-facing contract."
+                    ),
+                    suggestion=(
+                        "Describe what the tool does for an agent, or remove the tool if it "
+                        "was scaffolding."
+                    ),
+                )
+            )
+    return issues
+
+
 # Placeholders in a path template, e.g. ``/users/{user_id}`` -> ``user_id``.
 _PATH_PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
 
@@ -398,6 +475,9 @@ def lint_connector(
 
     # ── skill executability (a deterministic skill that can never run) ────────
     issues.extend(_lint_skills(config))
+
+    # ── scaffold/placeholder tool names left in a shipped connector ───────────
+    issues.extend(_lint_scaffold_names(config))
 
     seen_ids: set[str] = set()
     for tool in config.tools:

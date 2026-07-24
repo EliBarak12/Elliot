@@ -633,3 +633,29 @@ def test_prose_only_skill_is_not_step_linted() -> None:
         }
     )
     assert _skill_codes(config) == set()
+
+
+# ── scaffold/placeholder tool names (found dogfooding a live connector) ───────
+
+
+def test_scaffold_tool_id_is_warn() -> None:
+    # Real find: id 'get_stuff_now' shipped while the name was descriptive.
+    config = _make_connector(id="get_stuff_now", name="find_stations_low_fast_charging")
+    scaffold = [i for i in lint_connector(config) if i.code == "TOOL_NAME_SCAFFOLD"]
+    assert scaffold and scaffold[0].severity == "WARN"
+
+
+def test_probe_description_is_warn() -> None:
+    # Real find: an 'echo_search_probe' whose description opened with "Probe:".
+    config = _make_connector(
+        id="echo_httpbin",
+        description="Probe: send q and store to httpbin echo to check request framing.",
+    )
+    assert "TOOL_DESC_SCAFFOLD" in {i.code for i in lint_connector(config)}
+
+
+def test_real_tool_names_are_not_flagged_scaffold() -> None:
+    for tid in ("search_users", "list_breaking_news", "get_user_posts", "list_publishers"):
+        codes = {i.code for i in lint_connector(_make_connector(id=tid, name=tid))}
+        assert "TOOL_NAME_SCAFFOLD" not in codes
+        assert "TOOL_DESC_SCAFFOLD" not in codes

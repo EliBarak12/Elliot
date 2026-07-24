@@ -271,10 +271,14 @@ def _is_destructive(category: str, tool_id: str, explicit: bool | None = None) -
     positive. Otherwise: READ tools are never destructive; among WRITE/ACTION
     tools, only those whose name carries a destructive verb (delete/remove/drop/
     purge/wipe…) qualify — additive creates and updates run without a prompt."""
-    if explicit is not None:
-        return explicit
+    # READs never mutate, so they are never the danger zone — even if a
+    # hand-authored spec set the flag (a "destructive read" would emit a
+    # contradictory readOnlyHint + destructiveHint pair). The explicit flag then
+    # wins for WRITE/ACTION tools, and the verb heuristic is the fallback.
     if category == "READ":
         return False
+    if explicit is not None:
+        return explicit
     return not _name_tokens(tool_id).isdisjoint(_DESTRUCTIVE_VERBS)
 
 

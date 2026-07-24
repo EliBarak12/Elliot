@@ -263,11 +263,16 @@ def _name_tokens(name: str) -> set[str]:
     return {t.lower() for t in re.split(r"[^a-zA-Z0-9]+", spaced) if t}
 
 
-def _is_destructive(category: str, tool_id: str) -> bool:
+def _is_destructive(category: str, tool_id: str, explicit: bool | None = None) -> bool:
     """Whether a tool is the danger zone: an irreversible mutation clients must
-    gate. READ tools never are; among WRITE/ACTION tools, only those whose name
-    carries a destructive verb (delete/remove/drop/purge/wipe…) qualify —
-    additive creates and updates are safe to run without a confirmation prompt."""
+    gate. An explicit ``destructive`` flag on the tool wins when set — so an
+    author can mark a business-critical action the verbs miss (``execute_refund``,
+    ``cancel_subscription``, ``send_payout``) as the danger zone, or clear a false
+    positive. Otherwise: READ tools are never destructive; among WRITE/ACTION
+    tools, only those whose name carries a destructive verb (delete/remove/drop/
+    purge/wipe…) qualify — additive creates and updates run without a prompt."""
+    if explicit is not None:
+        return explicit
     if category == "READ":
         return False
     return not _name_tokens(tool_id).isdisjoint(_DESTRUCTIVE_VERBS)
@@ -695,11 +700,12 @@ def _register_tool(
 
     td: ToolDefinition = tool_def
     read_only = td.category == "READ"
-    # A write is only the "danger zone" when its verb is irreversibly
-    # destructive (delete/remove/…). Additive creates and updates carry
+    # A write is the "danger zone" when its verb is irreversibly destructive
+    # (delete/remove/…) OR the author explicitly flagged it destructive (for the
+    # business-critical actions the verbs miss). Additive creates/updates carry
     # destructiveHint=False so clients don't gate them — agents operate the
     # product freely, and only genuinely destructive calls prompt for approval.
-    is_destructive = _is_destructive(td.category, td.id)
+    is_destructive = _is_destructive(td.category, td.id, getattr(td, "destructive", None))
     annotations = ToolAnnotations(
         title=td.name,
         readOnlyHint=read_only,

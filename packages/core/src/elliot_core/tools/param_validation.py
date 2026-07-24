@@ -16,6 +16,7 @@ numeric bounds (H6), and type coercion identically.
 
 from __future__ import annotations
 
+import difflib
 from typing import Any
 
 from elliot_core.errors import ElliotError
@@ -48,6 +49,23 @@ def _param_spec(p: ParameterDefinition) -> str:
     if desc:
         spec += f" — {desc}"
     return spec
+
+
+def _closest(value: str, candidates: list[str]) -> str | None:
+    """The single closest candidate to ``value``, or ``None`` if none is close.
+
+    Turns "unknown parameter 'staus'" into "did you mean 'status'?" and
+    "must be one of [...]" into a specific fix — so an agent that typo'd,
+    pluralised, or mis-cased a name or enum value corrects it in one shot
+    instead of re-scanning the list. A case-insensitive exact hit wins (the
+    most common near-miss: 'Open' for 'open'); otherwise fall back to fuzzy
+    ratio matching."""
+    lower_map = {c.lower(): c for c in candidates}
+    ci = lower_map.get(value.lower())
+    if ci is not None and ci != value:
+        return ci
+    match = difflib.get_close_matches(value, candidates, n=1, cutoff=0.6)
+    return match[0] if match else None
 
 
 def allowed_param_names(tool: ToolDefinition) -> set[str]:
@@ -164,11 +182,25 @@ def validate_call_params(
     allowed = allowed_param_names(tool)
     unknown = sorted(k for k in params if k not in allowed)
     if unknown:
+        allowed_sorted = sorted(allowed)
+        # Point each typo'd / pluralised / mis-cased key at its closest real name
+        # so the agent fixes it in one shot instead of re-scanning the whole
+        # expected list.
+        near = {k: m for k in unknown if (m := _closest(k, allowed_sorted))}
+        hint = ""
+        if near:
+            pairs = ", ".join(f"'{k}' → '{v}'" for k, v in near.items())
+            hint = f" Did you mean: {pairs}?"
         raise ElliotError(
             "UNKNOWN_PARAM",
             f"Unknown parameter(s) for tool '{tool.id}': {', '.join(unknown)}. "
-            f"Expected: {', '.join(sorted(allowed)) or '(none)'}",
-            detail={"tool_id": tool.id, "unknown": unknown, "allowed": sorted(allowed)},
+            f"Expected: {', '.join(allowed_sorted) or '(none)'}.{hint}",
+            detail={
+                "tool_id": tool.id,
+                "unknown": unknown,
+                "allowed": allowed_sorted,
+                "suggestions": near,
+            },
         )
 
     declared: dict[str, Any] = {}
@@ -202,9 +234,19 @@ def validate_call_params(
                     detail={"tool_id": tool.id, "param": p.name, "type": p.type},
                 ) from exc
             if p.enum is not None and str(coerced) not in p.enum:
+                # A case/spelling near-miss ('Open' for 'open', 'cancelled' for
+                # 'canceled') is the common enum failure — name the exact value.
+                suggestion = _closest(str(coerced), [str(e) for e in p.enum])
+                hint = f" Did you mean '{suggestion}'?" if suggestion else ""
                 raise ElliotError(
                     "INVALID_PARAM_VALUE",
-                    f"Parameter '{p.name}' must be one of {p.enum}, got: {coerced!r}",
+                    f"Parameter '{p.name}' must be one of {p.enum}, got: {coerced!r}.{hint}",
+                    detail={
+                        "tool_id": tool.id,
+                        "param": p.name,
+                        "enum": p.enum,
+                        "suggestion": suggestion,
+                    },
                 )
             if p.type in ("integer", "number"):
                 _check_bounds(p.name, coerced, p.minimum, p.maximum)

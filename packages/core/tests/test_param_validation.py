@@ -29,6 +29,37 @@ def test_rejects_unknown_param():
     assert exc.value.code == "UNKNOWN_PARAM"
 
 
+def test_unknown_param_suggests_closest_name():
+    # A typo'd key is pointed at its real name so the agent fixes it in one shot.
+    tool = _tool(a={"name": "status", "type": "string", "required": False})
+    with pytest.raises(ElliotError) as exc:
+        validate_call_params(tool, {"staus": "open"})
+    assert "did you mean" in exc.value.message.lower()
+    assert "'status'" in exc.value.message
+    assert exc.value.detail["suggestions"] == {"staus": "status"}
+
+
+def test_unknown_param_no_suggestion_when_nothing_close():
+    # A wholly unrelated key gets the expected list, no misleading suggestion.
+    tool = _tool(a={"name": "status", "type": "string", "required": False})
+    with pytest.raises(ElliotError) as exc:
+        validate_call_params(tool, {"xyzzy": "1"})
+    assert exc.value.code == "UNKNOWN_PARAM"
+    assert exc.value.detail["suggestions"] == {}
+    assert "did you mean" not in exc.value.message.lower()
+
+
+def test_invalid_enum_suggests_case_corrected_value():
+    tool = _tool(
+        a={"name": "status", "type": "string", "required": False, "enum": ["open", "closed"]}
+    )
+    with pytest.raises(ElliotError) as exc:
+        validate_call_params(tool, {"status": "Open"})
+    assert exc.value.code == "INVALID_PARAM_VALUE"
+    assert "did you mean 'open'" in exc.value.message.lower()
+    assert exc.value.detail["suggestion"] == "open"
+
+
 def test_enforces_enum():
     tool = _tool(
         a={"name": "group_by", "type": "string", "required": False, "enum": ["city", "region"]}

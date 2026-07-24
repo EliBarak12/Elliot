@@ -38,7 +38,23 @@ cases:
       min_rows: 1
       fields_present: [id, name]
       max_token_estimate: 500
+  - id: list-items-rejects-bad-status
+    description: A bad enum value is rejected, not silently ignored
+    tool_id: list_items
+    arguments: { status: not-a-real-status }
+    expect:
+      error_code: INVALID_PARAM_VALUE
 ```
+
+**Cover the error paths, not just the happy path.** A tool that returns good
+rows for good input but silently accepts bad input is not agent-ready — the
+agent gets an empty or wrong result with no signal. Add at least one case per
+tool that asserts a bad argument is *rejected*: set `expect.error_code` to the
+code you expect (`INVALID_PARAM_VALUE` for a bad enum/bound, `MISSING_PARAM` for
+an omitted required param, `UNKNOWN_PARAM` for a stray key). The case passes only
+if the tool raises that code, and fails if the call succeeds — so you prove the
+contract rejects what it should. (In a legacy JSON suite the equivalent is
+`"expect_error": "INVALID_PARAM_VALUE"` on the case.)
 
 ### 2. Read results
 

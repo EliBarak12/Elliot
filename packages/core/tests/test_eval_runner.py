@@ -159,6 +159,90 @@ async def test_executor_exception_recorded_as_failed():
     assert result.cases[0].error == "network error"
 
 
+# ── expect_error: validating the error paths, not just the happy path ──────────
+
+
+async def test_expect_error_passes_when_tool_raises_the_expected_code():
+    from elliot_core.errors import ElliotError
+
+    suite = EvalSuite(
+        id="s1",
+        name="Suite",
+        cases=[
+            EvalCase(
+                id="c1",
+                tool_id="get_users",
+                params={"status": "bogus"},
+                expect_error="INVALID_PARAM_VALUE",
+            )
+        ],
+    )
+    connector = _make_connector("get_users")
+    executor = MagicMock()
+    executor.execute = AsyncMock(
+        side_effect=ElliotError("INVALID_PARAM_VALUE", "status must be one of [a, b]")
+    )
+
+    result = await run_eval_suite(suite, executor, connector)
+
+    assert result.passed == 1
+    assert result.cases[0].passed is True
+    assert result.cases[0].error is None
+
+
+async def test_expect_error_matches_a_message_fragment_too():
+    from elliot_core.errors import ElliotError
+
+    suite = EvalSuite(
+        id="s1",
+        name="Suite",
+        cases=[EvalCase(id="c1", tool_id="get_users", params={}, expect_error="must be one of")],
+    )
+    connector = _make_connector("get_users")
+    executor = MagicMock()
+    executor.execute = AsyncMock(
+        side_effect=ElliotError("INVALID_PARAM_VALUE", "status must be one of [a, b]")
+    )
+
+    result = await run_eval_suite(suite, executor, connector)
+    assert result.passed == 1
+
+
+async def test_expect_error_fails_when_the_call_unexpectedly_succeeds():
+    suite = EvalSuite(
+        id="s1",
+        name="Suite",
+        cases=[
+            EvalCase(id="c1", tool_id="get_users", params={}, expect_error="INVALID_PARAM_VALUE")
+        ],
+    )
+    connector = _make_connector("get_users")
+    executor = _make_executor([{"id": "1"}])
+
+    result = await run_eval_suite(suite, executor, connector)
+    assert result.failed == 1
+    assert "but the call succeeded" in (result.cases[0].error or "")
+
+
+async def test_expect_error_fails_on_a_different_error():
+    from elliot_core.errors import ElliotError
+
+    suite = EvalSuite(
+        id="s1",
+        name="Suite",
+        cases=[
+            EvalCase(id="c1", tool_id="get_users", params={}, expect_error="INVALID_PARAM_VALUE")
+        ],
+    )
+    connector = _make_connector("get_users")
+    executor = MagicMock()
+    executor.execute = AsyncMock(side_effect=ElliotError("UPSTREAM_FETCH_FAILED", "boom"))
+
+    result = await run_eval_suite(suite, executor, connector)
+    assert result.failed == 1
+    assert "Expected an error containing 'INVALID_PARAM_VALUE'" in (result.cases[0].error or "")
+
+
 # ── save/load round-trip ───────────────────────────────────────────────────────
 
 

@@ -41,29 +41,68 @@ async def run_eval_suite(
         try:
             result = await executor.execute(case.tool_id, case.params)
             latency_ms = (time.monotonic() - t0) * 1000
-            passed = _score(result.rows, case.expected_rows, case.match_mode)
-            results.append(
-                EvalCaseResult(
-                    case_id=case.id,
-                    tool_id=case.tool_id,
-                    passed=passed,
-                    actual_rows=result.rows,
-                    latency_ms=round(latency_ms, 2),
+            if case.expect_error:
+                # The case asserts a failure, but the call succeeded → fail it.
+                results.append(
+                    EvalCaseResult(
+                        case_id=case.id,
+                        tool_id=case.tool_id,
+                        passed=False,
+                        actual_rows=result.rows,
+                        latency_ms=round(latency_ms, 2),
+                        error=(
+                            f"Expected an error containing '{case.expect_error}', "
+                            "but the call succeeded."
+                        ),
+                    )
                 )
-            )
+            else:
+                passed = _score(result.rows, case.expected_rows, case.match_mode)
+                results.append(
+                    EvalCaseResult(
+                        case_id=case.id,
+                        tool_id=case.tool_id,
+                        passed=passed,
+                        actual_rows=result.rows,
+                        latency_ms=round(latency_ms, 2),
+                    )
+                )
         except Exception as exc:
             latency_ms = (time.monotonic() - t0) * 1000
-            log.warning("eval.case.error", case_id=case.id, tool_id=case.tool_id, error=str(exc))
-            results.append(
-                EvalCaseResult(
-                    case_id=case.id,
-                    tool_id=case.tool_id,
-                    passed=False,
-                    actual_rows=[],
-                    latency_ms=round(latency_ms, 2),
-                    error=str(exc),
+            if case.expect_error:
+                # The error IS the asserted outcome — pass iff the expected text
+                # appears in the error CODE or its message (so an author can
+                # assert either "INVALID_PARAM_VALUE" or a message fragment).
+                haystack = f"{getattr(exc, 'code', '')} {exc}".lower()
+                matched = case.expect_error.lower() in haystack
+                results.append(
+                    EvalCaseResult(
+                        case_id=case.id,
+                        tool_id=case.tool_id,
+                        passed=matched,
+                        actual_rows=[],
+                        latency_ms=round(latency_ms, 2),
+                        error=(
+                            None
+                            if matched
+                            else f"Expected an error containing '{case.expect_error}', got: {exc}"
+                        ),
+                    )
                 )
-            )
+            else:
+                log.warning(
+                    "eval.case.error", case_id=case.id, tool_id=case.tool_id, error=str(exc)
+                )
+                results.append(
+                    EvalCaseResult(
+                        case_id=case.id,
+                        tool_id=case.tool_id,
+                        passed=False,
+                        actual_rows=[],
+                        latency_ms=round(latency_ms, 2),
+                        error=str(exc),
+                    )
+                )
 
     passed_n = sum(1 for r in results if r.passed)
     total = len(results)

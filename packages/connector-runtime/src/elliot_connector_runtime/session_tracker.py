@@ -22,6 +22,24 @@ log = structlog.get_logger(__name__)
 _LARGE_RESULT_TOKENS = 500
 # A call slower than this is worth flagging in the trace.
 _SLOW_CALL_MS = 3000.0
+# Error codes that mean the agent got the tool's *contract* wrong — it sent a
+# parameter the tool rejected (missing, wrong type, out-of-range/enum, or a name
+# the tool doesn't accept). A run that hits these is runtime proof that a tool's
+# parameter contract wasn't clear enough for the agent to call it right the first
+# time (principle 1) — the most actionable thing a connector author can see,
+# distinct from an upstream/auth failure that isn't the contract's fault.
+_CONTRACT_MISS_CODES = frozenset(
+    {
+        # FastMCP rejects a missing/wrong-typed required arg against the tool
+        # schema BEFORE the handler runs — the most common contract miss.
+        "VALIDATION_INVALID_PARAMS",
+        # Elliot's own deeper param validation (enums, ranges, unknown names).
+        "MISSING_PARAM",
+        "INVALID_PARAM_TYPE",
+        "INVALID_PARAM_VALUE",
+        "UNKNOWN_PARAM",
+    }
+)
 
 
 @dataclass
@@ -34,6 +52,10 @@ class SessionEvent:
     result_token_estimate: int | None = None
     duration_ms: float = 0.0
     error: str | None = None
+    # The structured error code (e.g. MISSING_PARAM, UPSTREAM_FETCH_FAILED) when
+    # the call failed — lets the trace classify a failure at a glance and powers
+    # the contract-miss signal, without parsing the human-facing message.
+    error_code: str | None = None
     # A short, bounded preview of what the tool returned (the call's output).
     result_preview: str | None = None
     # The agent's reasoning around this call — only populated by a harness
@@ -93,6 +115,20 @@ class AgentSession:
                     "type": "errors",
                     "severity": "high",
                     "message": f"{self.error_count} call(s) failed",
+                }
+            )
+
+        # A refinement of `errors`: how many failures were the agent getting the
+        # tool's parameter contract wrong (vs an upstream/auth failure that isn't
+        # the author's to fix). This is the signal that points an author straight
+        # at a tool whose description/enum/type wasn't clear enough.
+        contract_misses = sum(1 for e in calls if e.error_code in _CONTRACT_MISS_CODES)
+        if contract_misses:
+            out.append(
+                {
+                    "type": "contract_miss",
+                    "severity": "medium",
+                    "message": f"{contract_misses} call(s) sent a parameter the tool rejected",
                 }
             )
 
@@ -178,6 +214,7 @@ class AgentSession:
                     "result_token_estimate": e.result_token_estimate,
                     "duration_ms": round(e.duration_ms, 2),
                     "error": e.error,
+                    "error_code": e.error_code,
                     "result_preview": e.result_preview,
                     "reasoning": e.reasoning,
                 }
@@ -360,6 +397,7 @@ class SessionTracker:
         result_data: Any,
         duration_ms: float,
         error: str | None = None,
+        error_code: str | None = None,
     ) -> None:
         with self._lock:
             session = self._active.get(session_id)
@@ -379,6 +417,7 @@ class SessionTracker:
                     result_token_estimate=_estimate_tokens(result_data),
                     duration_ms=duration_ms,
                     error=error,
+                    error_code=error_code,
                     result_preview=_result_preview(result_data),
                 )
             )

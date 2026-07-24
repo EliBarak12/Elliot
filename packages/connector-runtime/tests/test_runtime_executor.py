@@ -1617,3 +1617,40 @@ def test_single_step_skill_payload_has_no_steps_key() -> None:
     payload = _skill_payload(result)
     assert payload["rows"] == [{"id": 7}]
     assert "steps" not in payload
+
+
+def test_skill_tool_description_surfaces_when_to_use_and_one_call() -> None:
+    """The agent-facing skill-tool description names the trigger and the one-call
+    value, so an agent listing tools can tell when to use the skill."""
+    from elliot_connector_runtime.server import _skill_tool_description
+    from elliot_core.types.tool import SkillDefinition, SkillStep
+
+    skill = SkillDefinition(
+        id="customer_orders",
+        name="Customer orders",
+        description="Look up a customer and summarise their orders",
+        when_to_use="the user asks about a customer's orders by email",
+        steps=[
+            SkillStep(alias="c", tool_id="find_customer", params={}),
+            SkillStep(alias="o", tool_id="list_orders", params={}),
+        ],
+    )
+    desc = _skill_tool_description(skill)
+    assert "summarise their orders" in desc
+    assert "Use this when: the user asks about a customer's orders by email" in desc
+    assert "One call runs the whole 2-step workflow" in desc
+
+
+def test_skill_tool_description_without_when_or_multistep_is_just_the_summary() -> None:
+    from elliot_connector_runtime.server import _skill_tool_description
+    from elliot_core.types.tool import SkillDefinition, SkillStep
+
+    skill = SkillDefinition(
+        id="one_step",
+        name="One step",
+        description="Do the thing",
+        steps=[SkillStep(alias="a", tool_id="t", params={})],
+    )
+    desc = _skill_tool_description(skill)
+    assert desc == "Do the thing."
+    assert "One call" not in desc  # single step earns no orchestration note

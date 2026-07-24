@@ -243,6 +243,36 @@ def _require_destructive_confirmation() -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# Verbs that mark a WRITE/ACTION tool as the "danger zone" — an irreversible
+# mutation a client should gate behind human approval rather than auto-run.
+# Kept in sync with the cloud grader's ``_DESTRUCTIVE_VERBS`` so a connector
+# Elliot builds and labels here passes Elliot's own destructive-tool grade.
+# Ordinary additive actions (create/update/send) are deliberately NOT
+# destructive: an agentic connector's whole value is operating them for the
+# user without a confirmation round-trip — only the danger zone is gated.
+_DESTRUCTIVE_VERBS = frozenset(
+    {"delete", "remove", "destroy", "drop", "purge", "wipe", "erase", "truncate", "reset", "revoke"}
+)
+
+
+def _name_tokens(name: str) -> set[str]:
+    """Lowercased word tokens of a tool name, splitting snake_case, kebab-case
+    and camelCase alike (``delete_order`` / ``notion-delete-page`` /
+    ``deleteOrder`` all yield a ``delete`` token)."""
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name)
+    return {t.lower() for t in re.split(r"[^a-zA-Z0-9]+", spaced) if t}
+
+
+def _is_destructive(category: str, tool_id: str) -> bool:
+    """Whether a tool is the danger zone: an irreversible mutation clients must
+    gate. READ tools never are; among WRITE/ACTION tools, only those whose name
+    carries a destructive verb (delete/remove/drop/purge/wipe…) qualify —
+    additive creates and updates are safe to run without a confirmation prompt."""
+    if category == "READ":
+        return False
+    return not _name_tokens(tool_id).isdisjoint(_DESTRUCTIVE_VERBS)
+
+
 def _identity_payload(identity: AgentIdentity | None) -> dict[str, Any] | None:
     if identity is None:
         return None
@@ -665,7 +695,11 @@ def _register_tool(
 
     td: ToolDefinition = tool_def
     read_only = td.category == "READ"
-    is_destructive = td.category in ("WRITE", "ACTION")
+    # A write is only the "danger zone" when its verb is irreversibly
+    # destructive (delete/remove/…). Additive creates and updates carry
+    # destructiveHint=False so clients don't gate them — agents operate the
+    # product freely, and only genuinely destructive calls prompt for approval.
+    is_destructive = _is_destructive(td.category, td.id)
     annotations = ToolAnnotations(
         title=td.name,
         readOnlyHint=read_only,
@@ -846,8 +880,8 @@ def _register_tool(
                 exc = ElliotError(
                     "CONFIRMATION_REQUIRED",
                     (
-                        f"Tool '{td.id}' is {td.category}. Re-call with confirm=true "
-                        "after the user authorises this destructive operation."
+                        f"Tool '{td.id}' performs a destructive operation. Re-call with "
+                        "confirm=true after the user authorises it."
                     ),
                     {"tool_id": td.id, "category": td.category},
                 )

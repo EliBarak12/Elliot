@@ -51,23 +51,34 @@ For each step, decide:
 - `alias` — short name you'll reference the result by (e.g. `customer`,
   `orders`).
 - `tool_id` — the registered tool's id.
-- `params` — the literal parameter dict. To thread a previous step's row
-  into this one, use the alias: `{"customer_id": "{{ customer.rows[0].id }}"}`.
+- `params` — the literal parameter dict. To thread a field of an **earlier
+  step's first result row** into this one, reference it by
+  `{{ steps.<alias>.<field> }}` — e.g. a step aliased `customer` exposes its
+  first row's `id` as `{"user_id": "{{ steps.customer.id }}"}`. This is the
+  exact binding the runtime resolves; `{{ customer.rows[0].id }}` and other
+  shapes are **not** valid and fail with `SKILL_TEMPLATE_UNRESOLVED`.
 
 ### 3. Define `input_parameters`
 
 These are the parameters the skill *itself* takes — the inputs the downstream
-agent will pass. They're separate from per-step params: they're substituted
-in wherever you reference them (`{{ inputs.<name> }}`).
+agent will pass when it calls the skill. They're separate from per-step params:
+reference them in any step with `{{ skill.input.<name> }}` (NOT
+`{{ inputs.<name> }}`, NOT a bare `{{ <name> }}` — both fail with
+`SKILL_TEMPLATE_UNRESOLVED`).
 
 Keep them tight — one or two named parameters. A skill with seven inputs is
 usually two skills.
 
 ### 4. Create the skill
 
-Call `elliot_create_skill(name, description, steps, input_parameters)`. The
-description follows the same contract as a tool description: verb-first,
-unambiguous, says what it returns and when to use it.
+Call `elliot_create_skill(name, description, steps, input_parameters)`. A
+deterministic skill (one with `steps`) is served to downstream agents as a
+**directly callable MCP tool** — they invoke it by name and the runtime runs the
+whole chain — so treat its **name and description exactly like a tool's**:
+verb-first, unambiguous, saying what it returns and when to use it. If any step
+in the chain calls a destructive tool, the whole skill inherits the danger zone:
+it is served with `destructiveHint` and, when confirmation is enabled, requires
+`confirm=true` before it runs.
 
 The keys `arguments`, `args`, `parameters`, and `inputs` are accepted as
 aliases for `params` in a step; `tool` is accepted as `tool_id`. Use the

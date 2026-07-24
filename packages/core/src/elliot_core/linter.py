@@ -92,7 +92,16 @@ _VERB_RE = re.compile(
     r"aggregate|export|generate|compute|load|send|submit|"
     r"remove|show|run|execute|insert|stream|resolve|validate|"
     r"summari[sz]e|surface|pull|lookup|identify|detect|match|group|rank|sort|"
-    r"join|map|report|yield|produce|build|compose|assemble)(?:es|s)?\b",
+    r"join|map|report|yield|produce|build|compose|assemble|"
+    # Mutation verbs — WRITE/ACTION tool descriptions naturally start with
+    # these ("Add a note…", "Cancel an order…") and must not be told to
+    # rewrite as "Return...".
+    r"add|cancel|post|set|assign|mark|close|open|apply|attach|archive|"
+    r"escalate|notify|publish|register|record|save|upload|trigger|start|stop|"
+    r"grant|revoke|merge|move|rename|copy|sync|import|schedule|approve|"
+    r"reject|complete|upsert|patch|modify|adjust|enable|disable|verify|"
+    r"convert|extract|parse|analy[sz]e|describe|explain|preview|grade|audit)"
+    r"(?:es|s)?\b",
     re.IGNORECASE,
 )
 

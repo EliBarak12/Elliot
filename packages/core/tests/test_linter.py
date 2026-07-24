@@ -504,3 +504,17 @@ def test_non_forwarded_short_and_generic_names_still_flagged() -> None:
     codes = {i.code for i in lint_connector(config)}
     assert "PARAMETER_NAME_TOO_SHORT" in codes  # q
     assert "PARAMETER_NAME_GENERIC" in codes  # key
+
+
+def test_description_mutation_verbs_pass() -> None:
+    # ACTION tools naturally open with mutation verbs; none of these should
+    # be told to rewrite as "Return...".
+    for desc in (
+        "Add a note to a helpdesk ticket on the customer's behalf.",
+        "Cancel an order by id, notifying the customer.",
+        "Escalates the ticket to the on-call engineer.",
+        "Mark a conversation as resolved.",
+    ):
+        config = _make_connector(description=desc)
+        codes = {i.code for i in lint_connector(config)}
+        assert "DESCRIPTION_MISSING_VERB" not in codes, desc

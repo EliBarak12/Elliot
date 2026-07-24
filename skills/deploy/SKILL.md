@@ -27,32 +27,37 @@ Call `elliot_lint_connector` (no arguments — it lints the built connector).
 If an eval suite exists: call `elliot_run_eval`.
 All cases must pass. Fix failures before deploying.
 
-### 4. Export
-Call `elliot_export_connector` to write the final connector file. Pass `path`
-(e.g. `connectors/<slug>.connector.json`) or accept the `.elliot/connector.json`
-default.
+### 4. Ship it
 
-### 5. Activate on the runtime
-Call `elliot_start_runtime` to launch the connector-runtime subprocess. It
-loads the connector from (in order): the `connector_path` arg you pass, the
-`ELLIOT_CONNECTOR` env var, or the workspace default `.elliot/connector.json`.
+**On Elliot Cloud (the marketplace default) — one call:** `elliot_cloud_publish`.
+It runs a publish-time smoke gate first (a cache-safe runtime build + `tools/list`
++ a per-tool execute of each auto-callable READ tool), so a connector that would
+404 on every agent call is blocked instead of shipped. On success it deploys to a
+stable public MCP URL on your tenant and returns it. If it blocks (`lint_errors`,
+`missing_secrets`, `smoke_failed`), fix and re-publish. Choose who can call it
+with `auth_mode`: `api_key` (default, shared key), `personal` (your workspace
+only), `third_party_oauth` (each user connects their own upstream account), or
+`open` (anyone, no key — non-sensitive data only). **This is the whole deploy on
+Cloud — skip the local steps below.**
 
-If you exported to a non-default path in step 4 (e.g. `connectors/<slug>.connector.json`),
-pass it explicitly: `elliot_start_runtime(connector_path="connectors/<slug>.connector.json")`.
-Otherwise the runtime will load the wrong (or no) connector.
+**Running Elliot locally instead:**
+- `elliot_export_connector` — write the connector file (`path`, or the
+  `.elliot/connector.json` default).
+- `elliot_start_runtime` — launch the connector-runtime subprocess. Pass
+  `connector_path` if you exported to a non-default path, or it loads the wrong
+  (or no) connector. Confirm with `elliot_runtime_logs`; get the agent URL with
+  `elliot_get_connection_config`; stop later with `elliot_stop_runtime`.
+  (These tools are local-only — they aren't served on Elliot Cloud.)
 
-Confirm it came up with `elliot_runtime_logs`, and get the URL agents should
-connect to with `elliot_get_connection_config`. To stop it later, call
-`elliot_stop_runtime`.
-
-### 6. Connect agents
-The tools are now served over MCP by the runtime. Use the URL from
-`elliot_get_connection_config` — `elliot connect --runtime` wires it into
-every coding agent on the machine, or add it to a client by hand.
+### 5. Connect agents
+The tools are now served over MCP. On Cloud, give agents the public URL from
+`elliot_cloud_publish` (the connector's dashboard page has one-click install
+buttons). Locally, use the URL from `elliot_get_connection_config`.
 
 ## Checklist
 - [ ] Zero lint errors
 - [ ] Zero lint warnings
-- [ ] All eval cases pass
-- [ ] Health endpoint shows connector loaded with correct tool count
+- [ ] Eval cases pass (inline `cases` or a suite)
+- [ ] Cloud: `elliot_cloud_publish` returned a public URL (smoke gate passed).
+      Local: the health endpoint shows the connector loaded with the right tool count
 - [ ] At least one manual test call succeeded in the playground

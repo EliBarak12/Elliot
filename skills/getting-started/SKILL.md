@@ -81,11 +81,11 @@ When the user wants to build a new connector, follow this exact order. Each numb
 | # | Prompt | What it does |
 |---|--------|--------------|
 | 1 | `discover-source` | Identify the user's data source (REST API, Postgres, etc.) and call `elliot_set_context` + `elliot_discover_source` |
-| 2 | `build-connector` | Create tools (`elliot_create_tool`), then `elliot_build_connector` to assemble them into a connector |
+| 2 | `build-connector` | Give agents CONTEXT — READ tools (`elliot_create_tool` / `elliot_create_rest_tool`) — **and the ability to ACT** — WRITE/ACTION tools (`elliot_create_action_tool`) that mutate the product. Then `elliot_build_connector` to assemble them |
 | 3 | `lint-connector` | Run `elliot_lint_connector` on the built connector; fix every error and warning |
-| 4 | `run-eval`        | Run `elliot_run_eval` to validate tool quality against expected outputs |
+| 4 | `run-eval`        | Run `elliot_run_eval` to validate tool quality. On Cloud pass `cases` INLINE (no file, no shared dir) — the agent authors and runs the eval in one call |
 | 5 | `audit-connector` | Spawn parallel sub-agents to exercise the connector for real, then fix what they break |
-| 6 | `deploy`          | Full pipeline: build → lint → eval → `elliot_export_connector` → `elliot_start_runtime` |
+| 6 | `deploy`          | **On Elliot Cloud (the marketplace default): `elliot_cloud_publish`** deploys the built connector to a public MCP URL (it runs a publish-time smoke gate first). Locally: `elliot_export_connector` → `elliot_start_runtime` |
 
 If the user is somewhere mid-workflow, jump straight to the right prompt. Don't start from step 1 every time.
 
@@ -116,8 +116,8 @@ These are accessible via `resources/read`:
 ## What you must NEVER do
 
 - Never log secret values, API keys, or raw query results — they may contain PII.
-- Never call `elliot_export_connector` before `elliot_build_connector`, lint, and eval all pass.
-- Never invent tool annotations — `readOnlyHint`, `destructiveHint`, `openWorldHint` must be set deliberately, because the user's downstream agents rely on them to decide whether to confirm before calling.
+- Never publish (`elliot_cloud_publish` on Cloud, or `elliot_export_connector` locally) before `elliot_build_connector` and lint pass.
+- Don't hand-set tool annotations — the runtime **derives** `readOnlyHint` / `destructiveHint` from each tool's category and verb. To gate the danger zone the verbs miss (an `execute_refund` / `cancel_subscription` that carries no delete/remove/… verb), pass `destructive=true` to `elliot_create_action_tool`; the runtime then requires a confirmation before the call. Additive creates and updates run freely — don't over-gate them.
 - Never use a tool the user hasn't asked for (e.g. don't run `elliot_start_runtime` unless the user is ready to deploy).
 
 ## Your first move

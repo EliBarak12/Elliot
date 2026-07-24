@@ -253,6 +253,61 @@ def test_limit_lookalike_column_still_flags_unbounded() -> None:
     assert any(i.code == "UNBOUNDED_SELECT" for i in issues)
 
 
+def test_declared_param_never_bound_in_sql_is_warn() -> None:
+    # 'status' is declared but the SQL never references :status — an agent that
+    # passes it gets no effect (silently unfiltered).
+    config = _make_connector(
+        sql="SELECT id, name FROM items WHERE (:filter IS NULL OR name = :filter) LIMIT 20",
+        parameters=[
+            {"name": "filter", "type": "string", "required": False, "description": "exact name"},
+            {"name": "status", "type": "string", "required": False, "description": "plan status"},
+        ],
+    )
+    issues = lint_connector(config)
+    unused = [i for i in issues if i.code == "PARAMETER_UNUSED"]
+    assert len(unused) == 1
+    assert unused[0].tool_id == "list_items"
+    assert "status" in unused[0].message
+    assert all(i.severity == "WARN" for i in unused)
+
+
+def test_all_declared_params_bound_no_unused_warn() -> None:
+    config = _make_connector(
+        sql="SELECT id FROM items WHERE (:filter IS NULL OR name = :filter) LIMIT 20",
+        parameters=[
+            {"name": "filter", "type": "string", "required": False, "description": "exact name"}
+        ],
+    )
+    assert not any(i.code == "PARAMETER_UNUSED" for i in lint_connector(config))
+
+
+def test_filter_groups_tool_not_checked_for_unused_params() -> None:
+    # A tool that binds params through structured filter_groups (not raw :name)
+    # must not be false-flagged — those params are consumed elsewhere.
+    tool = {
+        "id": "list_items",
+        "name": "List Items",
+        "description": "Return items matching a status filter",
+        "category": "READ",
+        "source_ids": [],
+        "sql": "SELECT id, name FROM items LIMIT 20",
+        "filter_groups": [
+            {"conditions": [{"field": "status", "operator": "=", "parameter_name": "status"}]}
+        ],
+        "parameters": [
+            {"name": "status", "type": "string", "required": False, "description": "status"}
+        ],
+    }
+    config = ConnectorConfig(
+        name="Test",
+        slug="test",
+        version="1.0.0",
+        sources=[],
+        tools=[tool],  # type: ignore[list-item]
+    )
+    assert not any(i.code == "PARAMETER_UNUSED" for i in lint_connector(config))
+
+
 def test_short_parameter_name_is_warn() -> None:
     config = _make_connector(
         parameters=[

@@ -19,7 +19,7 @@ from elliot_core.sqlite.engine import SQLiteEngine
 from elliot_core.sqlite.flattener import flatten
 from elliot_core.tools.executor import ToolExecutor
 from elliot_core.tools.registry import ToolRegistry
-from elliot_core.tools.skill_runner import execute_skill
+from elliot_core.tools.skill_runner import execute_skill, run_skill_steps
 from elliot_core.types import (
     ApiRequestMapping,
     AuthConfig,
@@ -80,6 +80,7 @@ __all__ = [
     "ToolExecutor",
     "ToolRegistry",
     "execute_skill",
+    "run_skill_steps",
     # connector
     "ConnectorBuilder",
     "deserialize_connector",

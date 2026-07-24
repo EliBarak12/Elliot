@@ -9,7 +9,12 @@ import pytest
 from elliot_core.errors import ElliotError
 from elliot_core.tools.executor import ToolExecutor
 from elliot_core.tools.registry import ToolRegistry
-from elliot_core.tools.skill_runner import _lookup, _resolve_value, execute_skill
+from elliot_core.tools.skill_runner import (
+    _lookup,
+    _resolve_value,
+    execute_skill,
+    run_skill_steps,
+)
 from elliot_core.types.connector import ConnectorConfig
 from elliot_core.types.source import FetchResult, SourceConfig
 from elliot_core.types.tool import (
@@ -273,3 +278,54 @@ async def test_execute_skill_multi_step_binding():
     assert set(result.meta["steps"]) == {"user", "orders"}
     user_rows = result.meta["steps"]["user"]["rows"]
     assert [{k: v for k, v in r.items() if not k.startswith("_")} for r in user_rows] == rows_a
+
+
+# ── run_skill_steps (executor-agnostic core shared by preview + runtime) ──────
+
+
+@pytest.mark.asyncio
+async def test_run_skill_steps_chains_bindings_and_recovers_every_step():
+    """The extracted core resolves inputs into step 1 and an earlier step's field
+    into step 2, answers with the final step, and exposes all steps under
+    meta.steps — driven by a caller-supplied run_step, not a concrete executor."""
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def run_step(tool_id: str, params: dict[str, Any]) -> ToolResult:
+        calls.append((tool_id, params))
+        if tool_id == "find_user":
+            return ToolResult(rows=[{"id": 42}], meta={})
+        return ToolResult(rows=[{"orders": 3}], meta={})
+
+    skill = SkillDefinition(
+        id="s",
+        name="S",
+        description="d",
+        steps=[
+            SkillStep(alias="u", tool_id="find_user", params={"email": "{{ skill.input.email }}"}),
+            SkillStep(alias="o", tool_id="count_orders", params={"user_id": "{{ steps.u.id }}"}),
+        ],
+    )
+    result = await run_skill_steps(skill, {"email": "a@b.com"}, run_step)
+
+    assert calls[0] == ("find_user", {"email": "a@b.com"})
+    assert calls[1] == ("count_orders", {"user_id": 42})
+    assert result.rows == [{"orders": 3}]
+    assert result.meta["primary_step"] == "o"
+    assert result.meta["step_count"] == 2
+    assert set(result.meta["steps"]) == {"u", "o"}
+
+
+@pytest.mark.asyncio
+async def test_run_skill_steps_propagates_step_errors():
+    async def run_step(tool_id: str, params: dict[str, Any]) -> ToolResult:
+        raise ElliotError("UPSTREAM_FETCH_FAILED", "boom")
+
+    skill = SkillDefinition(
+        id="s",
+        name="S",
+        description="d",
+        steps=[SkillStep(alias="a", tool_id="t", params={})],
+    )
+    with pytest.raises(ElliotError) as ei:
+        await run_skill_steps(skill, {}, run_step)
+    assert ei.value.code == "UPSTREAM_FETCH_FAILED"

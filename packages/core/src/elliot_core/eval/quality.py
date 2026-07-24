@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from elliot_core.danger_zone import HIGH_IMPACT_VERBS, name_tokens
 from elliot_core.linter import (
     _ENUM_DESC_RE,
     _PAGINATION_HINTS,
@@ -251,6 +252,26 @@ def analyze_tool_quality(tool: ToolDefinition) -> ToolQualityScore:
                     PRINCIPLE_ANNOTATIONS,
                 )
             )
+
+        # annotations: a high-impact action (cancel/refund/suspend…) the author
+        # left unclassified is auto-run by the runtime with no confirmation.
+        # Mirrors the linter's DESTRUCTIVE_NOT_FLAGGED so the quality SCORE — not
+        # just the linter's issue list — reflects danger-zone hygiene. Applies
+        # only to high-impact-verb tools; an explicit destructive flag passes it.
+        if name_tokens(tool.id) & HIGH_IMPACT_VERBS:
+            applicable += 1
+            if tool.destructive is None:
+                issues.append(
+                    ToolIssue(
+                        "danger_zone_classified",
+                        "warning",
+                        (
+                            f"'{tool.id}' is a high-impact action but isn't classified — set "
+                            "destructive: true to gate it behind confirmation, or false if safe"
+                        ),
+                        PRINCIPLE_ANNOTATIONS,
+                    )
+                )
 
     total = applicable or 1
     score = max(0.0, (1 - len(issues) / total) * 100)

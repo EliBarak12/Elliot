@@ -239,11 +239,12 @@ If `elliot_discover_source` returns an error:
 
 | Error code | Action |
 |-----------|--------|
-| `SOURCE_UNREACHABLE` | Confirm the URL / env var with the user, retry once. If it still fails, stop and ask. |
+| `UPSTREAM_FETCH_FAILED` | The probe couldn't reach or read the source — an unreachable URL, a wrong connection string, or (for a DB) a missing/mis-named table. The message names the URL/reason; confirm the URL, env var, or table name with the user and retry once. If it still fails, stop and ask. |
 | `AUTH_FAILED` | Confirm the env var name and that the variable is actually set in the shell. Do **not** ask the user to paste the secret. |
 | `AUTH_REQUIRED` (from `elliot_discover_source` / `elliot_connect_source`, "client id is not set") | The user hasn't registered the OAuth **app** yet. Tell them to create an OAuth app with the provider, allow a `http://127.0.0.1` loopback redirect, and export the **Client ID** + **Client Secret** as the env vars named in `client_id_secret` / `client_secret_secret`. Then retry. These are app-level, one-time, not a personal token. |
 | `AUTH_REQUIRED` (login) | An `oauth2` source needs a login. During **discovery**, call `elliot_connect_source` (same args), surface the returned `authorize_url`, let the user log in, then retry discover. At **runtime**, a `per_user` source surfaces connect URL(s) in `details.connect`; the user logs in once, then retry. Never paste a token. |
-| `SCHEMA_NOT_FOUND` | List available schemas (the error `details` will include them) and ask which one. |
+| `VALIDATION_ERROR` | The `config` shape is wrong for this `source_type` (a missing/misnamed field, a bad `encoding`, an unsupported file extension). Read the message, fix the offending field, and retry. |
+| `FILE_NOT_FOUND` / `FILE_TOO_LARGE` / `INVALID_FILE_NAME` | A file source problem — a path outside the allowlist, a too-large upload, or a bad name. Upload the file with `elliot_upload_file` and use the returned `managed_path`. |
 | anything else | Surface the error message verbatim and ask the user how they want to proceed. |
 
 Do not retry blindly. Errors from Elliot are actionable by design — read the

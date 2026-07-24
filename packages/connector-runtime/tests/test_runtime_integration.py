@@ -1571,11 +1571,13 @@ async def test_deterministic_skill_runs_as_one_mcp_call() -> None:
         assert not res.isError
         payload = _json.loads(res.content[0].text)  # type: ignore[union-attr]
 
-    # The chain ran: the final step (order count) is the primary answer, and
-    # both steps are recoverable under `steps`.
+    # The chain ran: the final step (order count) is the primary answer in
+    # `rows`; the EARLIER step is recoverable under `steps` — and the primary is
+    # NOT duplicated there (token-lean).
     assert payload["rows"] == [{"order_count": 3}]
     assert payload["primary_step"] == "o"
-    assert set(payload["steps"]) == {"u", "o"}
+    assert set(payload["steps"]) == {"u"}
+    assert payload["steps"]["u"]["rows"][0]["id"] == 42
 
 
 async def test_prose_only_skill_is_not_registered_as_an_executable_tool() -> None:

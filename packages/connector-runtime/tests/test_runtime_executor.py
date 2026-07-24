@@ -1555,3 +1555,50 @@ async def test_executor_odata_pagination_follows_next_link() -> None:
     executor = ToolExecutor(connector, secrets={})
     result = await executor.execute(connector.tools[0], {})
     assert sorted(r["id"] for r in result.rows) == [1, 2, 3]
+
+
+def test_skill_payload_omits_primary_and_counts_retained_step_rows() -> None:
+    """A skill payload is token-lean: the final step is `rows` and is NOT
+    duplicated under `steps`; estimated_tokens counts the final rows AND the
+    retained earlier-step rows, so the reported cost matches what's on the wire."""
+    from elliot_connector_runtime.server import _payload_for, _skill_payload
+    from elliot_core.types import ToolResult
+
+    result = ToolResult(
+        rows=[{"order_count": 3}],
+        meta={
+            "primary_step": "o",
+            "step_count": 2,
+            "steps": {
+                "u": {"rows": [{"id": 42, "email": "a@b.com"}], "row_count": 1, "meta": {}},
+                "o": {"rows": [{"order_count": 3}], "row_count": 1, "meta": {}},
+            },
+        },
+    )
+    payload = _skill_payload(result)
+    assert payload["rows"] == [{"order_count": 3}]
+    assert payload["primary_step"] == "o"
+    # The primary step is not repeated under `steps` — only the earlier one.
+    assert set(payload["steps"]) == {"u"}
+    # Honest accounting: more than the final step alone (which the base payload
+    # would report), because the retained `u` rows are on the wire too.
+    final_only = _payload_for(ToolResult(rows=[{"order_count": 3}], meta={}))["estimated_tokens"]
+    assert payload["estimated_tokens"] > final_only
+
+
+def test_single_step_skill_payload_has_no_steps_key() -> None:
+    """A one-step skill's only result is the answer — no redundant `steps`."""
+    from elliot_connector_runtime.server import _skill_payload
+    from elliot_core.types import ToolResult
+
+    result = ToolResult(
+        rows=[{"id": 7}],
+        meta={
+            "primary_step": "only",
+            "step_count": 1,
+            "steps": {"only": {"rows": [{"id": 7}], "row_count": 1, "meta": {}}},
+        },
+    )
+    payload = _skill_payload(result)
+    assert payload["rows"] == [{"id": 7}]
+    assert "steps" not in payload

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from elliot_core.errors import ElliotError
@@ -10,23 +11,32 @@ from elliot_core.types.tool import SkillDefinition, ToolResult
 
 _TEMPLATE_RE = re.compile(r"\{\{([^}]+)\}\}")
 
+# One step's executor: given a tool id and its resolved params, run it and return
+# the ToolResult. Design time binds tool ids through a ToolRegistry + the core
+# executor; the published runtime binds them to ToolDefinitions + a per-user
+# executor — so the orchestration takes this callable instead of a concrete
+# executor, and works identically on both surfaces.
+RunStep = Callable[[str, dict[str, Any]], Awaitable[ToolResult]]
 
-async def execute_skill(
+
+async def run_skill_steps(
     skill: SkillDefinition,
     inputs: dict[str, Any],
-    registry: ToolRegistry,
-    executor: ToolExecutor,
+    run_step: RunStep,
 ) -> ToolResult:
+    """Execute a skill's deterministic step chain, resolving ``{{ skill.input.X }}``
+    and ``{{ steps.<alias>.<field> }}`` bindings between steps.
+
+    ``run_step(tool_id, params)`` executes one tool and returns its result — the
+    caller supplies it, so the same orchestration drives both the design-time
+    preview (registry + core executor) and the published runtime (per-user
+    executor over ToolDefinitions). This is what lets a deterministic skill run
+    as a single call on both surfaces instead of only at build time."""
     step_results: dict[str, ToolResult] = {}
 
     for step in skill.steps:
-        tool = registry.get(step.tool_id)
-        if not tool:
-            raise ElliotError(
-                "TOOL_NOT_FOUND", f"Skill step references unknown tool: '{step.tool_id}'"
-            )
         resolved = _resolve_bindings(step.params, inputs, step_results)
-        result = await executor.execute(step.tool_id, resolved)
+        result = await run_step(step.tool_id, resolved)
         step_results[step.alias] = result
 
     if not step_results:
@@ -38,19 +48,45 @@ async def execute_skill(
     # "give me X AND Y" skill returned only Y (audit H7). Expose every step's
     # output under meta.steps so the caller can recover all of them, and mark
     # which alias is the primary one.
+    # Step results may be a design-time ToolResult (has ``.meta``) or the
+    # published runtime's QueryResult (has ``.rows`` but no ``.meta``); read meta
+    # defensively so the same orchestration works on both surfaces.
+    def _meta_of(r: Any) -> dict[str, Any]:
+        m = getattr(r, "meta", None)
+        return m if isinstance(m, dict) else {}
+
     last_alias, last = list(step_results.items())[-1]
     return ToolResult(
         rows=last.rows,
         meta={
-            **last.meta,
+            **_meta_of(last),
             "primary_step": last_alias,
             "step_count": len(step_results),
             "steps": {
-                alias: {"rows": r.rows, "row_count": len(r.rows), "meta": r.meta}
+                alias: {"rows": r.rows, "row_count": len(r.rows), "meta": _meta_of(r)}
                 for alias, r in step_results.items()
             },
         },
     )
+
+
+async def execute_skill(
+    skill: SkillDefinition,
+    inputs: dict[str, Any],
+    registry: ToolRegistry,
+    executor: ToolExecutor,
+) -> ToolResult:
+    """Design-time skill execution: bind each step's tool id through the session
+    ``registry`` (existence-checked) and run it on the core ``executor``. Thin
+    wrapper over :func:`run_skill_steps` so the preview and runtime share one
+    orchestration."""
+
+    async def _run_step(tool_id: str, params: dict[str, Any]) -> ToolResult:
+        if not registry.get(tool_id):
+            raise ElliotError("TOOL_NOT_FOUND", f"Skill step references unknown tool: '{tool_id}'")
+        return await executor.execute(tool_id, params)
+
+    return await run_skill_steps(skill, inputs, _run_step)
 
 
 def _resolve_bindings(

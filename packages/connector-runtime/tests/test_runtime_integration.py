@@ -1484,3 +1484,194 @@ def test_no_connector_app_health_flips_when_connector_appears(tmp_path: Path) ->
 
     path.write_text(json.dumps(MINIMAL_CONNECTOR))
     assert client.get("/health").json()["status"] == "connector_available"
+
+
+async def test_deterministic_skill_runs_as_one_mcp_call() -> None:
+    """A deterministic skill is registered as an executable MCP tool: a single
+    call runs the whole chain — binding each step's inputs from the prior step —
+    and returns the final step's rows plus every intermediate step under `steps`.
+    This is the "one MCP call" the skill model promises, on the published runtime.
+    """
+    import json as _json
+
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import (
+        ConnectorConfig,
+        ParameterDefinition,
+        SkillDefinition,
+        SkillStep,
+        SourceConfig,
+        ToolDefinition,
+    )
+
+    class _Eng:
+        def query(self, sql, params):  # type: ignore[no-untyped-def]
+            if "users" in sql.lower():
+                return [{"id": 42, "email": params.get("email")}]
+            return [{"order_count": 3}]
+
+    find_user = ToolDefinition(
+        id="find_user",
+        name="Find user",
+        description="Find a user by email.",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT id, email FROM users WHERE email = :email",
+        parameters=[
+            ParameterDefinition(name="email", type="string", required=True, description="email")
+        ],
+    )
+    count_orders = ToolDefinition(
+        id="count_orders",
+        name="Count orders",
+        description="Count a user's orders.",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT COUNT(*) AS order_count FROM orders WHERE user_id = :user_id",
+        parameters=[
+            ParameterDefinition(
+                name="user_id", type="integer", required=True, description="user id"
+            )
+        ],
+    )
+    skill = SkillDefinition(
+        id="user_order_summary",
+        name="User order summary",
+        description="Look up a user by email, then count their orders.",
+        steps=[
+            SkillStep(alias="u", tool_id="find_user", params={"email": "{{ skill.input.email }}"}),
+            SkillStep(alias="o", tool_id="count_orders", params={"user_id": "{{ steps.u.id }}"}),
+        ],
+        input_parameters=[
+            ParameterDefinition(
+                name="email", type="string", required=True, description="the user's email"
+            )
+        ],
+    )
+    cfg = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        sources=[SourceConfig(id="s", name="s", type="file", url="x")],
+        tools=[find_user, count_orders],
+        skills=[skill],
+    )
+    mcp = create_runtime_server(cfg, ToolExecutor(cfg, secrets={}, engine=_Eng()))  # type: ignore[arg-type]
+
+    # The skill is registered as an executable tool alongside the two step tools.
+    tool_names = {t.name for t in await mcp.list_tools()}
+    assert {"find_user", "count_orders", "user_order_summary"} <= tool_names
+
+    async with create_connected_server_and_client_session(mcp._mcp_server) as client:
+        await client.initialize()
+        res = await client.call_tool("user_order_summary", {"email": "a@b.com"})
+        assert not res.isError
+        payload = _json.loads(res.content[0].text)  # type: ignore[union-attr]
+
+    # The chain ran: the final step (order count) is the primary answer, and
+    # both steps are recoverable under `steps`.
+    assert payload["rows"] == [{"order_count": 3}]
+    assert payload["primary_step"] == "o"
+    assert set(payload["steps"]) == {"u", "o"}
+
+
+async def test_prose_only_skill_is_not_registered_as_an_executable_tool() -> None:
+    """A prose-only skill (no steps) has nothing to execute — it stays a prompt
+    and must NOT appear as a tool."""
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import (
+        ConnectorConfig,
+        SkillDefinition,
+        SourceConfig,
+        ToolDefinition,
+    )
+
+    class _Eng:
+        def query(self, sql, params):  # type: ignore[no-untyped-def]
+            return [{"id": 1}]
+
+    tool = ToolDefinition(
+        id="list_x",
+        name="List X",
+        description="List the things.",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT id FROM x",
+    )
+    prose = SkillDefinition(
+        id="guide",
+        name="Guide",
+        description="A prose workflow.",
+        instructions="Follow these steps thoughtfully.",
+    )
+    cfg = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        sources=[SourceConfig(id="s", name="s", type="file", url="x")],
+        tools=[tool],
+        skills=[prose],
+    )
+    mcp = create_runtime_server(cfg, ToolExecutor(cfg, secrets={}, engine=_Eng()))  # type: ignore[arg-type]
+    assert "guide" not in {t.name for t in await mcp.list_tools()}
+
+
+async def test_skill_with_a_destructive_step_is_flagged_destructive() -> None:
+    """A skill whose chain includes a destructive step is itself the danger zone:
+    its tool carries destructiveHint=True so clients gate it."""
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import (
+        ApiRequestMapping,
+        ConnectorConfig,
+        SkillDefinition,
+        SkillStep,
+        SourceConfig,
+        ToolDefinition,
+    )
+
+    class _Eng:
+        def query(self, sql, params):  # type: ignore[no-untyped-def]
+            return [{"id": 1}]
+
+    find_stale = ToolDefinition(
+        id="find_stale",
+        name="Find stale",
+        description="Find stale orders.",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT id FROM orders",
+    )
+    delete_order = ToolDefinition(
+        id="delete_order",
+        name="Delete order",
+        description="Delete an order by id.",
+        category="WRITE",
+        source_ids=["s"],
+        api_mapping=ApiRequestMapping(method="POST", body_params=["id"]),
+        parameters=[],
+    )
+    skill = SkillDefinition(
+        id="purge_stale",
+        name="Purge stale",
+        description="Find and delete stale orders.",
+        steps=[
+            SkillStep(alias="f", tool_id="find_stale", params={}),
+            SkillStep(alias="d", tool_id="delete_order", params={"id": "{{ steps.f.id }}"}),
+        ],
+    )
+    cfg = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        sources=[SourceConfig(id="s", name="s", type="rest", url="https://api.example.com")],
+        tools=[find_stale, delete_order],
+        skills=[skill],
+    )
+    mcp = create_runtime_server(cfg, ToolExecutor(cfg, secrets={}))
+    tool = next(t for t in await mcp.list_tools() if t.name == "purge_stale")
+    assert tool.annotations is not None and tool.annotations.destructiveHint is True

@@ -135,6 +135,8 @@ def test_healthy_connector_passes() -> None:
     report = _run(_connector([_read_tool()]))
     assert report.passed
     assert "list_people" in report.listed_tools
+    # Connecting always costs context: the serialized tools/list estimate.
+    assert report.context_tokens > 0
     assert report.missing_tools == []
     [result] = report.tool_results
     assert result.status == "passed"
@@ -143,7 +145,7 @@ def test_healthy_connector_passes() -> None:
 
 
 def test_registration_error_is_reported_not_raised(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _boom(config: Any, executor: Any) -> list[str]:
+    async def _boom(config: Any, executor: Any) -> tuple[list[str], int]:
         raise RuntimeError("schema generation exploded")
 
     monkeypatch.setattr(smoke_mod, "_build_and_list", _boom)
@@ -154,8 +156,8 @@ def test_registration_error_is_reported_not_raised(monkeypatch: pytest.MonkeyPat
 
 
 def test_missing_tool_fails_report(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _partial_list(config: Any, executor: Any) -> list[str]:
-        return ["some_other_tool"]
+    async def _partial_list(config: Any, executor: Any) -> tuple[list[str], int]:
+        return ["some_other_tool"], 0
 
     monkeypatch.setattr(smoke_mod, "_build_and_list", _partial_list)
     report = _run(_connector([_read_tool()]))

@@ -65,6 +65,10 @@ class SmokeReport(BaseModel):
     passed: bool
     # Tool names the built server actually lists (includes runtime built-ins).
     listed_tools: list[str] = []
+    # Estimated token cost of the serialized tools/list response — what merely
+    # CONNECTING this connector charges an agent's context window before any
+    # call is made. The ecosystem's #1 complaint about MCP servers, measured.
+    context_tokens: int = 0
     # Connector tools that failed to appear in tools/list.
     missing_tools: list[str] = []
     # The server could not even be built / listed (bad signature, bad schema).
@@ -124,17 +128,22 @@ def _first_line(text: str) -> str:
     return line[:_MAX_ERROR_CHARS]
 
 
-async def _build_and_list(config: ConnectorConfig, executor: ToolExecutor) -> list[str]:
+async def _build_and_list(config: ConnectorConfig, executor: ToolExecutor) -> tuple[list[str], int]:
     """Build a fresh, observability-free runtime server and list its tools.
 
-    Raises whatever registration raises — the caller converts it into a
-    ``registration_error``. The server is throwaway: no session manager is
-    started and nothing is written to disk.
+    Returns ``(tool_names, context_tokens)`` where ``context_tokens`` estimates
+    the serialized ``tools/list`` payload — the context-window cost of simply
+    connecting the connector. Raises whatever registration raises — the caller
+    converts it into a ``registration_error``. The server is throwaway: no
+    session manager is started and nothing is written to disk.
     """
     from .server import create_runtime_server
+    from .session_tracker import _estimate_tokens
 
     mcp = create_runtime_server(config, executor)
-    return [t.name for t in await mcp.list_tools()]
+    tools = await mcp.list_tools()
+    serialized = [t.model_dump(mode="json", exclude_none=True) for t in tools]
+    return [t.name for t in tools], _estimate_tokens(serialized)
 
 
 async def _execute_one(
@@ -206,7 +215,7 @@ async def smoke_test_connector(
     log.info("smoke.start", connector=config.slug, tools=len(config.tools), execute=execute)
 
     try:
-        listed = await _build_and_list(config, executor)
+        listed, context_tokens = await _build_and_list(config, executor)
     except Exception as exc:
         log.error("smoke.registration_failed", connector=config.slug, error=str(exc))
         return SmokeReport(
@@ -237,6 +246,7 @@ async def smoke_test_connector(
     report = SmokeReport(
         passed=not missing and not any(r.status == "failed" for r in tool_results),
         listed_tools=listed,
+        context_tokens=context_tokens,
         missing_tools=missing,
         tool_results=tool_results,
         duration_ms=round((time.monotonic() - t0) * 1000, 1),

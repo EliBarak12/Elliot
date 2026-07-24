@@ -236,21 +236,44 @@ the connect URL(s), the valid ids. (Errors also have a structured `details`
 field, but that is for the server-side audit log and is not sent over MCP, so
 recover from the message text, not from a `details.*` field.)
 
+Calling a **published connector's** tools (the tools you build) can return:
+
 | Code | When raised | Recovery |
 |------|-------------|----------|
-| `VALIDATION_INVALID_PARAMS` | A tool was called with the wrong argument shape | Read the schema (`tools/list`) and resend with corrected args |
-| `VALIDATION_MISSING_FIELD` | Required field omitted | Re-call with the missing field populated |
-| `TOOL_NOT_FOUND` | Referenced tool id does not exist in the registry | List tools (`elliot_list_tools`); use a valid id |
-| `SOURCE_UNREACHABLE` | A configured source did not respond | Check the env var holding the URL; verify the user has network access |
-| `AUTH_FAILED` | Source rejected credentials | Confirm the env var name and that it's exported in the shell — do NOT ask the user for the secret value |
+| `MISSING_PARAM` | A required parameter was omitted | The message names the parameter and its type, allowed `enum` values, numeric bounds, and description — supply a matching value and re-call |
+| `INVALID_PARAM_TYPE` | A value could not be coerced to the parameter's declared type | The message names the parameter and the expected type — resend that one argument as the correct type |
+| `INVALID_PARAM_VALUE` | A value broke the parameter's `enum` or numeric `minimum`/`maximum` | The message states the allowed values or the bound — pick a valid one and re-call |
+| `UNKNOWN_PARAM` | A parameter the tool does not accept was passed | The message lists the accepted parameter names — drop the unknown key |
+| `CONFIRMATION_REQUIRED` | A destructive (danger-zone) tool was called without `confirm=true` | Confirm the action with the user, then re-call the same tool with `confirm=true` |
 | `AUTH_REQUIRED` | A `per_user` source was called by a user who hasn't connected their account yet | Open the connect URL(s) included in the error message; the user logs in once, then retry the tool. See `elliot://docs/authentication`. |
+| `AUTH_FAILED` | Source rejected credentials | Confirm the env var name and that it's exported in the shell — do NOT ask the user for the secret value |
+| `UPSTREAM_FETCH_FAILED` | A REST/DB source did not respond or returned an error status | The message carries the status/reason — check the source URL and its env var, and the user's network; retry if it looks transient |
 | `TABLE_NOT_FOUND` | A tool's SQL references a table the connector did not materialize | Read the available table names from the message; fix the tool's `source_ids`/SQL |
-| `QUERY_TIMEOUT` | A DB query exceeded the per-query timeout | Tighten filters, add an index, or split the request |
-| `INVALID_SKILL` | Skill definition failed validation | Read the message; each step needs `{alias, tool_id, params}` |
+| `SKILL_TEMPLATE_UNRESOLVED` | A skill step's `{{ … }}` binding did not resolve | The message shows the bad reference and the valid syntax: `{{ skill.input.<name> }}` for an input, `{{ steps.<alias>.<field> }}` for an earlier step's field |
+| `TOOL_NOT_FOUND` | Referenced tool id does not exist in the registry | List tools (`tools/list`); use a valid id |
+| `INVALID_SKILL` | Skill definition failed validation | Read the message; each step needs `{alias, tool_id, params}`, and a skill needs at least one step or non-empty instructions |
 | `INTERNAL_ERROR` | Unexpected exception inside Elliot | Report to the user; the stack trace is in the server log |
+
+Calling the **builder** tools (`elliot_*`) with a bad argument shape returns a
+`VALIDATION_*` code instead — `VALIDATION_MISSING_FIELD` (a required field was
+omitted) or `VALIDATION_INVALID_PARAMS` (wrong type/shape). Recover the same way:
+read the tool schema (`tools/list`) and resend with corrected args.
 
 If you see a code not in this table, treat it as `INTERNAL_ERROR` for recovery
 purposes and surface the message verbatim to the user.
+
+## Not every next-step signal is an error
+
+A **successful** READ result can still tell you what to do next. It may carry:
+
+- `truncated: true` with a `truncation_note` — the set was capped; narrow the
+  request (tighten a filter or pass a smaller limit) and call again for the rest.
+- `empty: true` with an `empty_note` — no rows matched; relax or drop a filter
+  you supplied, or accept the result as genuinely empty rather than retrying.
+
+Read those notes the same way you read an error message: the note states the
+next step. Every result also carries `estimated_tokens`, the context-window cost
+of what you just received — use it to decide whether to narrow the next call.
 """
 
 

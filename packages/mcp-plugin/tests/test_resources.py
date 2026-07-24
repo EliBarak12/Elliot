@@ -63,13 +63,21 @@ async def test_error_codes_resource_lists_known_codes():
     contents = await mcp.read_resource("elliot://docs/error-codes")
     text = contents[0].content
     for code in (
-        "VALIDATION_INVALID_PARAMS",
+        # Real published-runtime codes an agent hits calling a connector's tools.
+        "MISSING_PARAM",
+        "INVALID_PARAM_TYPE",
+        "CONFIRMATION_REQUIRED",
+        "UPSTREAM_FETCH_FAILED",
         "TOOL_NOT_FOUND",
-        "SOURCE_UNREACHABLE",
         "AUTH_FAILED",
+        # Builder-surface validation envelope.
+        "VALIDATION_INVALID_PARAMS",
         "INTERNAL_ERROR",
     ):
         assert code in text
+    # Phantom codes that were never raised must not reappear in the reference.
+    assert "SOURCE_UNREACHABLE" not in text
+    assert "QUERY_TIMEOUT" not in text
 
 
 @pytest.mark.asyncio

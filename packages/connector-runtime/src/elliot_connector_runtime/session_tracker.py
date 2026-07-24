@@ -28,7 +28,10 @@ _SLOW_CALL_MS = 3000.0
 # parameter contract wasn't clear enough for the agent to call it right the first
 # time (principle 1) — the most actionable thing a connector author can see,
 # distinct from an upstream/auth failure that isn't the contract's fault.
-_CONTRACT_MISS_CODES = frozenset(
+# Public so the cloud's per-tool insights classify a contract miss against the
+# exact same code set the runtime's trace signal uses — one source of truth, no
+# drift between "the trace flagged a contract miss" and "the dashboard did".
+CONTRACT_MISS_CODES = frozenset(
     {
         # FastMCP rejects a missing/wrong-typed required arg against the tool
         # schema BEFORE the handler runs — the most common contract miss.
@@ -122,7 +125,7 @@ class AgentSession:
         # tool's parameter contract wrong (vs an upstream/auth failure that isn't
         # the author's to fix). This is the signal that points an author straight
         # at a tool whose description/enum/type wasn't clear enough.
-        contract_misses = sum(1 for e in calls if e.error_code in _CONTRACT_MISS_CODES)
+        contract_misses = sum(1 for e in calls if e.error_code in CONTRACT_MISS_CODES)
         if contract_misses:
             out.append(
                 {

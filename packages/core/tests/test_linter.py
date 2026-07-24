@@ -518,3 +518,118 @@ def test_description_mutation_verbs_pass() -> None:
         config = _make_connector(description=desc)
         codes = {i.code for i in lint_connector(config)}
         assert "DESCRIPTION_MISSING_VERB" not in codes, desc
+
+
+# ── skill executability (F4: a deterministic skill that can never run) ────────
+
+_GET_ORDER = {
+    "id": "get_order",
+    "name": "Get order",
+    "description": "Return a single order by its id",
+    "category": "READ",
+    "source_ids": [],
+    "sql": "SELECT * FROM orders WHERE id = :order_id",
+    "parameters": [
+        {"name": "order_id", "type": "integer", "required": True, "description": "Order id"}
+    ],
+}
+
+
+def _with_skill(skill: dict) -> ConnectorConfig:  # type: ignore[type-arg]
+    return ConnectorConfig(
+        name="T",
+        slug="t",
+        version="1.0.0",
+        sources=[],
+        tools=[_GET_ORDER],  # type: ignore[list-item]
+        skills=[skill],  # type: ignore[list-item]
+    )
+
+
+def _skill_codes(config: ConnectorConfig) -> set[str]:
+    return {i.code for i in lint_connector(config) if i.code.startswith("SKILL_")}
+
+
+def test_skill_step_unknown_tool_is_error() -> None:
+    config = _with_skill(
+        {
+            "id": "s",
+            "name": "S",
+            "description": "A workflow",
+            "steps": [{"alias": "a", "tool_id": "does_not_exist", "params": {}}],
+        }
+    )
+    assert "SKILL_STEP_UNKNOWN_TOOL" in _skill_codes(config)
+
+
+def test_skill_step_missing_required_param_is_error() -> None:
+    # get_order needs order_id; the step binds nothing → dead on first call.
+    config = _with_skill(
+        {
+            "id": "s",
+            "name": "S",
+            "description": "A workflow",
+            "steps": [{"alias": "a", "tool_id": "get_order", "params": {}}],
+        }
+    )
+    codes = _skill_codes(config)
+    assert "SKILL_STEP_MISSING_PARAM" in codes
+    assert all(
+        i.severity == "ERROR"
+        for i in lint_connector(config)
+        if i.code == "SKILL_STEP_MISSING_PARAM"
+    )
+
+
+def test_skill_step_dangling_input_binding_is_error() -> None:
+    # order_id IS bound (no MISSING_PARAM), but to an input the skill never declares.
+    config = _with_skill(
+        {
+            "id": "s",
+            "name": "S",
+            "description": "A workflow",
+            "steps": [
+                {
+                    "alias": "a",
+                    "tool_id": "get_order",
+                    "params": {"order_id": "{{ skill.input.oid }}"},
+                }
+            ],
+        }
+    )
+    codes = _skill_codes(config)
+    assert "SKILL_STEP_DANGLING_INPUT" in codes
+    assert "SKILL_STEP_MISSING_PARAM" not in codes
+
+
+def test_skill_step_bound_to_declared_input_is_clean() -> None:
+    config = _with_skill(
+        {
+            "id": "s",
+            "name": "S",
+            "description": "A workflow",
+            "input_parameters": [
+                {"name": "oid", "type": "integer", "required": True, "description": "Order id"}
+            ],
+            "steps": [
+                {
+                    "alias": "a",
+                    "tool_id": "get_order",
+                    "params": {"order_id": "{{ skill.input.oid }}"},
+                }
+            ],
+        }
+    )
+    assert _skill_codes(config) == set()
+
+
+def test_prose_only_skill_is_not_step_linted() -> None:
+    config = _with_skill(
+        {
+            "id": "p",
+            "name": "P",
+            "description": "A prose workflow",
+            "instructions": "Look up the order, then summarise it for the user.",
+        }
+    )
+    assert _skill_codes(config) == set()

@@ -244,6 +244,91 @@ def _lint_tool_source_coverage(config: ConnectorConfig) -> list[LintIssue]:
     return issues
 
 
+# A ``{{ skill.input.X }}`` binding inside a skill step's params.
+_SKILL_INPUT_RE = re.compile(r"\{\{\s*skill\.input\.([A-Za-z0-9_]+)\s*\}\}")
+
+
+def _lint_skills(config: ConnectorConfig) -> list[LintIssue]:
+    """Catch deterministic skills that can never run.
+
+    A skill's ``steps`` chain is executed by the runtime, not the agent, so a
+    step that targets a missing tool or leaves one of that tool's required
+    parameters unbound fails only on first call — after lint and publish have
+    passed. A skill that ships broken is the worst kind of "agent struggles",
+    so these are ERRORs. Three ways a step chain is dead on arrival:
+
+    * the target ``tool_id`` isn't a tool this connector defines;
+    * a required tool parameter (``required`` and no ``default``) has no key in
+      the step's ``params`` — nothing binds it, so the call is missing an arg;
+    * a ``{{ skill.input.X }}`` binding names an input the skill never declares,
+      so it resolves to nothing at runtime.
+
+    Prose-only skills (no ``steps``) are left to the agent and skipped.
+    """
+    issues: list[LintIssue] = []
+    tools_by_id = {t.id: t for t in config.tools}
+    for skill in config.skills:
+        input_names = {p.name for p in skill.input_parameters}
+        for step in skill.steps:
+            target = tools_by_id.get(step.tool_id)
+            if target is None:
+                issues.append(
+                    LintIssue(
+                        severity="ERROR",
+                        code="SKILL_STEP_UNKNOWN_TOOL",
+                        tool_id=None,
+                        message=(
+                            f"Skill '{skill.id}' step '{step.alias}' calls tool "
+                            f"'{step.tool_id}', which this connector does not define."
+                        ),
+                        suggestion="Point the step at an existing tool id, or add the tool.",
+                    )
+                )
+                continue
+            required = [p.name for p in target.parameters if p.required and p.default is None]
+            for name in required:
+                if name not in step.params:
+                    issues.append(
+                        LintIssue(
+                            severity="ERROR",
+                            code="SKILL_STEP_MISSING_PARAM",
+                            tool_id=target.id,
+                            message=(
+                                f"Skill '{skill.id}' step '{step.alias}' calls '{target.id}' "
+                                f"without binding its required parameter '{name}' — the skill "
+                                "fails at runtime with a missing argument."
+                            ),
+                            suggestion=(
+                                f"Bind '{name}' in the step params: a literal value, or a "
+                                f"reference like {{{{ skill.input.{name} }}}} / "
+                                "{{ steps.<alias>.<field> }}."
+                            ),
+                        )
+                    )
+            for key, value in step.params.items():
+                if not isinstance(value, str):
+                    continue
+                for ref in _SKILL_INPUT_RE.findall(value):
+                    if ref not in input_names:
+                        issues.append(
+                            LintIssue(
+                                severity="ERROR",
+                                code="SKILL_STEP_DANGLING_INPUT",
+                                tool_id=target.id,
+                                message=(
+                                    f"Skill '{skill.id}' step '{step.alias}' binds '{key}' to "
+                                    f"skill input '{ref}', which the skill does not declare — it "
+                                    "resolves to nothing at runtime."
+                                ),
+                                suggestion=(
+                                    f"Add '{ref}' to the skill's input_parameters, or correct "
+                                    "the binding name."
+                                ),
+                            )
+                        )
+    return issues
+
+
 # Placeholders in a path template, e.g. ``/users/{user_id}`` -> ``user_id``.
 _PATH_PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
 
@@ -310,6 +395,9 @@ def lint_connector(
 
     # ── SQL ↔ source_ids coverage (runtime "no such table" guard) ────────────
     issues.extend(_lint_tool_source_coverage(config))
+
+    # ── skill executability (a deterministic skill that can never run) ────────
+    issues.extend(_lint_skills(config))
 
     seen_ids: set[str] = set()
     for tool in config.tools:

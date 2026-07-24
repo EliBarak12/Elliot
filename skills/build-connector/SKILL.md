@@ -109,10 +109,16 @@ snapshot":
   parameter names) to forward those args as live query-string params and fetch
   **fresh on every call**, bypassing the snapshot — for search / per-id lookups
   whose result must vary per call.
-- **WRITE / ACTION (live).** A `WRITE` or `ACTION` tool is backed by
-  `api_mapping` (not SQL) and makes a live HTTP request per call, mapping
-  parameters via `path_template` (`/issues/{number}`), `query_params`, and
-  `body_params`. These do **not** use the SQL conventions below.
+- **WRITE / ACTION (live).** Author these with **`elliot_create_action_tool`**
+  (not `elliot_create_tool`) — the dedicated builder for a real HTTP mutation
+  against a REST source. It maps each parameter into `path_template`
+  (`/issues/{number}`), `query_params`, or `body_params`, and **rejects any
+  parameter you leave unrouted** so the tool can't silently drop an agent's
+  input. This is the half that lets agents ACT on the product, not just read it.
+  Pass `destructive=true` to gate an irreversible action the verb doesn't name
+  (`execute_refund`, `cancel_subscription`) behind a confirmation; leave it off
+  for additive creates/updates so agents run them freely. These do **not** use
+  the SQL conventions below.
 
 **Per-user auth.** If each caller should act as themselves (their own GitHub /
 Slack / Gmail token, not one shared key), that's configured on the *source* at

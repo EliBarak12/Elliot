@@ -79,6 +79,53 @@ def test_enforces_declared_minimum():
     assert exc.value.code == "INVALID_PARAM_VALUE"
 
 
+def test_missing_param_names_type_enum_and_description():
+    # An agent that omits a required param must learn what to supply — type,
+    # allowed values, and meaning — not just the name.
+    tool = _tool(
+        a={
+            "name": "status",
+            "type": "string",
+            "required": True,
+            "enum": ["open", "closed"],
+            "description": "Filter tickets by their state.",
+        }
+    )
+    with pytest.raises(ElliotError) as exc:
+        validate_call_params(tool, {})
+    assert exc.value.code == "MISSING_PARAM"
+    msg = exc.value.message
+    assert "status" in msg
+    assert "string" in msg
+    assert "open" in msg and "closed" in msg
+    assert "Filter tickets by their state." in msg
+    assert exc.value.detail["enum"] == ["open", "closed"]
+
+
+def test_missing_required_integer_names_its_bounds():
+    tool = _tool(
+        a={"name": "limit", "type": "integer", "required": True, "minimum": 1, "maximum": 50}
+    )
+    with pytest.raises(ElliotError) as exc:
+        validate_call_params(tool, {})
+    assert exc.value.code == "MISSING_PARAM"
+    assert "between 1 and 50" in exc.value.message
+
+
+def test_type_error_names_the_offending_parameter():
+    # Two integer params: a bad value must say WHICH one, not a bare
+    # "expected integer, got 'abc'".
+    tool = _tool(
+        a={"name": "page", "type": "integer", "required": False},
+        b={"name": "limit", "type": "integer", "required": False},
+    )
+    with pytest.raises(ElliotError) as exc:
+        validate_call_params(tool, {"limit": "abc"})
+    assert exc.value.code == "INVALID_PARAM_TYPE"
+    assert "limit" in exc.value.message
+    assert exc.value.detail["param"] == "limit"
+
+
 def test_passes_through_allowed_passthrough_keys():
     tool = ToolDefinition.model_validate(
         {

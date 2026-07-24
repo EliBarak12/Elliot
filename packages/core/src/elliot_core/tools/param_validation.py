@@ -19,10 +19,35 @@ from __future__ import annotations
 from typing import Any
 
 from elliot_core.errors import ElliotError
-from elliot_core.types.tool import ToolDefinition
+from elliot_core.types.tool import ParameterDefinition, ToolDefinition
 
 _TRUE_STRINGS = {"true", "1", "yes", "on"}
 _FALSE_STRINGS = {"false", "0", "no", "off"}
+
+
+def _param_spec(p: ParameterDefinition) -> str:
+    """A compact, agent-readable spec for one parameter — everything an agent
+    needs to supply the value correctly WITHOUT re-reading ``tools/list``: the
+    type, its allowed ``enum`` values, any numeric bounds, and the description.
+
+    This is what turns a bare "parameter missing: 'status'" into an actionable
+    error the agent can act on in one shot (principle 3), instead of guessing
+    the type or the allowed values and calling again."""
+    bits: list[str] = [p.type]
+    if p.enum:
+        bits.append(f"one of {p.enum}")
+    if p.type in ("integer", "number"):
+        if p.minimum is not None and p.maximum is not None:
+            bits.append(f"between {p.minimum} and {p.maximum}")
+        elif p.minimum is not None:
+            bits.append(f">= {p.minimum}")
+        elif p.maximum is not None:
+            bits.append(f"<= {p.maximum}")
+    spec = f"(expected {', '.join(bits)})"
+    desc = (p.description or "").strip()
+    if desc:
+        spec += f" — {desc}"
+    return spec
 
 
 def allowed_param_names(tool: ToolDefinition) -> set[str]:
@@ -150,9 +175,32 @@ def validate_call_params(
     for p in tool.parameters:
         val = params.get(p.name, p.default)
         if val is None and p.required:
-            raise ElliotError("MISSING_PARAM", f"Required parameter missing: '{p.name}'")
+            # Name the type, allowed values, bounds, and meaning — so the agent
+            # supplies the right value on the retry instead of guessing.
+            raise ElliotError(
+                "MISSING_PARAM",
+                f"Required parameter missing: '{p.name}' {_param_spec(p)}",
+                detail={
+                    "tool_id": tool.id,
+                    "param": p.name,
+                    "type": p.type,
+                    "enum": p.enum,
+                    "minimum": p.minimum,
+                    "maximum": p.maximum,
+                },
+            )
         if val is not None:
-            coerced = coerce_value(val, p.type)
+            try:
+                coerced = coerce_value(val, p.type)
+            except ElliotError as exc:
+                # Attribute the type error to THIS parameter: "Expected integer,
+                # got 'abc'" alone doesn't say which one when a tool has several
+                # params of the same type.
+                raise ElliotError(
+                    exc.code,
+                    f"Parameter '{p.name}': {exc.message}",
+                    detail={"tool_id": tool.id, "param": p.name, "type": p.type},
+                ) from exc
             if p.enum is not None and str(coerced) not in p.enum:
                 raise ElliotError(
                     "INVALID_PARAM_VALUE",

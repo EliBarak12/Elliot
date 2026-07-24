@@ -453,17 +453,32 @@ def _payload_for(
 
 
 def _skill_payload(result: Any) -> dict[str, Any]:
-    """Agent-facing payload for a skill call. Starts from the base tool payload
-    (the final step's rows + token estimate) and — because a skill runs a chain —
-    also carries every step's output under ``steps`` with the ``primary_step``
-    marker, so a "give me X and Y" skill returns both, not just the last step
-    (the audit-H7 guarantee the runner preserves in ``meta.steps``)."""
+    """Agent-facing payload for a skill call. ``rows`` is the final step (the
+    answer); the EARLIER steps are carried under ``steps`` so a "give me X and Y"
+    skill returns both (the audit-H7 guarantee).
+
+    Two token-efficiency details, because a skill is Elliot's minimum-token thesis
+    applied to a whole workflow: the primary step is NOT repeated under ``steps``
+    (its rows are already ``rows`` — duplicating them would double the payload),
+    and ``estimated_tokens`` is recomputed to include the retained step rows, so
+    the cost an agent sees is the cost it actually pays, not just the final
+    step's."""
     payload = _payload_for(result)
     meta = getattr(result, "meta", None) or {}
     if isinstance(meta, dict) and "steps" in meta:
-        payload["steps"] = meta["steps"]
-        payload["primary_step"] = meta.get("primary_step")
+        primary = meta.get("primary_step")
+        # Every step except the primary — whose rows are already in ``rows``.
+        other_steps = {alias: step for alias, step in meta["steps"].items() if alias != primary}
+        payload["primary_step"] = primary
         payload["step_count"] = meta.get("step_count")
+        if other_steps:
+            payload["steps"] = other_steps
+            from .session_tracker import _estimate_tokens
+
+            extra_rows = [r for step in other_steps.values() for r in step.get("rows", []) or []]
+            payload["estimated_tokens"] = int(
+                payload.get("estimated_tokens", 0)
+            ) + _estimate_tokens(extra_rows)
     return payload
 
 

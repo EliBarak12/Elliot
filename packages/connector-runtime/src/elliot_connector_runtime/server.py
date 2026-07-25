@@ -918,6 +918,63 @@ def _make_observe(
     return _observe
 
 
+# Cap the field roster appended to a tool's description: enough for the agent to
+# know what comes back (and what it can chain into the next tool) without dumping
+# a wide SELECT's every column into tools/list on every session.
+_MAX_RETURN_FIELDS_SHOWN = 12
+
+
+def _returned_field_names(td: Any) -> list[str]:
+    """The output field names a tool advertises, in declaration order, de-duped.
+
+    Prefers the tool's declared ``return_fields`` — the SELECT columns, using
+    each field's ``alias`` when it renames the column, since that is the name the
+    agent actually sees in a row. Falls back to the top-level keys of an
+    ``output_schema`` when the tool declares one instead (REST passthrough /
+    WRITE-ACTION shapes). A bare ``*`` is not a field name and is skipped."""
+    names: list[str] = []
+    for rf in getattr(td, "return_fields", None) or []:
+        name = (getattr(rf, "alias", None) or getattr(rf, "field", "") or "").strip()
+        if name and name != "*" and name not in names:
+            names.append(name)
+    if not names:
+        schema = getattr(td, "output_schema", None)
+        if isinstance(schema, dict):
+            for key in schema:
+                k = str(key).strip()
+                if k and k not in names:
+                    names.append(k)
+    return names
+
+
+def _tool_registration_description(td: Any) -> str:
+    """The agent-facing tool description, enriched with WHAT the tool returns.
+
+    A bare description says what a tool DOES but not which fields come back — so
+    an agent can't tell whether ``list_orders`` gives it the ``order_id`` that
+    ``get_order`` needs, and tool CHAINING becomes guesswork (the place agents
+    struggle most). When the tool declares its output fields, name them:
+    "Returns: order_id, status, total, customer_id." Paid once in tools/list, it
+    saves the far larger cost of a wrong tool pick or a broken chain (principle 1:
+    the description is the contract; principle 2: spend tokens where they save
+    tokens). Left untouched when no fields are declared (e.g. a SELECT * tool) so
+    the description never gains an empty or misleading "Returns:"."""
+    base = td.description or ""
+    names = _returned_field_names(td)
+    if not names:
+        return base
+    shown = names[:_MAX_RETURN_FIELDS_SHOWN]
+    more = (
+        ""
+        if len(names) <= _MAX_RETURN_FIELDS_SHOWN
+        else f", +{len(names) - _MAX_RETURN_FIELDS_SHOWN} more"
+    )
+    clause = f"Returns: {', '.join(shown)}{more}."
+    stripped = base.rstrip()
+    sep = "" if stripped.endswith(".") else "."
+    return f"{stripped}{sep} {clause}".strip()
+
+
 def _register_tool(
     mcp: FastMCP,
     executor: ToolExecutor,
@@ -1180,9 +1237,12 @@ def _register_tool(
     )
     _handler.__annotations__["return"] = dict[str, Any]
 
-    mcp.tool(name=td.id, title=td.name, description=td.description, annotations=annotations)(
-        _handler
-    )
+    mcp.tool(
+        name=td.id,
+        title=td.name,
+        description=_tool_registration_description(td),
+        annotations=annotations,
+    )(_handler)
 
 
 def _register_task_tool(

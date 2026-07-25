@@ -244,14 +244,21 @@ _PREVIEW_MAX_CHARS = 800
 
 
 def _result_preview(data: Any) -> str | None:
-    """A short, bounded preview of a tool's output for the console.
+    """A short, bounded, REDACTED preview of a tool's output for the console.
 
     Only the first few rows are kept and the whole thing is capped — enough
-    for a user to see *what* came back without dumping a full result set.
+    for a user to see *what* came back without dumping a full result set. The
+    sample is run through the same redactor as the recorded arguments before it
+    is serialized, so a secret an upstream API returns in its response body (an
+    ``access_token`` field, a bearer string) never lands unredacted in the
+    session log or the Agent Console — matching the "never log secrets/PII"
+    policy the arguments already follow.
     """
+    from elliot_core.redaction import redact_value
+
     try:
         sample = data[:3] if isinstance(data, list) else data
-        text = json.dumps(sample, default=str)
+        text = json.dumps(redact_value(sample), default=str)
     except Exception:
         return None
     if len(text) > _PREVIEW_MAX_CHARS:

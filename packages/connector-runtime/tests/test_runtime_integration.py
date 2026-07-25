@@ -1683,6 +1683,39 @@ async def test_skill_with_a_destructive_step_is_flagged_destructive() -> None:
     assert "delete_order" in (tool.description or "")
 
 
+async def test_read_tool_description_advertises_its_return_fields() -> None:
+    """Through real MCP registration, a READ tool that declares return_fields
+    tells the agent what it gets back — so an agent listing tools can see which
+    tool yields the id it needs to chain the next call (principle 1)."""
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import ConnectorConfig, SourceConfig, ToolDefinition
+    from elliot_core.types.tool import ReturnField
+
+    list_orders = ToolDefinition(
+        id="list_orders",
+        name="List orders",
+        description="List recent orders",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT id, status FROM orders LIMIT 50",
+        return_fields=[
+            ReturnField(field="id", alias="order_id"),
+            ReturnField(field="status"),
+        ],
+    )
+    cfg = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        sources=[SourceConfig(id="s", name="s", type="rest", url="https://api.example.com")],
+        tools=[list_orders],
+    )
+    mcp = create_runtime_server(cfg, ToolExecutor(cfg, secrets={}))
+    tool = next(t for t in await mcp.list_tools() if t.name == "list_orders")
+    assert "Returns: order_id, status." in (tool.description or "")
+
+
 async def test_skill_call_is_recorded_in_the_observation_store() -> None:
     """A skill call is as observable as a tool call: it lands in the observation
     store under the skill id (via the shared observer), so the Agent Console

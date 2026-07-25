@@ -1698,3 +1698,85 @@ def test_skill_tool_description_pluralises_multiple_destructive_steps() -> None:
     assert "irreversible steps" in desc
     assert desc.count("revoke_access") == 1
     assert "delete_account" in desc
+
+
+def test_tool_description_names_the_fields_it_returns() -> None:
+    """A tool that declares its output fields advertises them in its description,
+    so an agent can see list_orders yields order_id — the key it can chain into
+    get_order — instead of guessing whether the tool gives it what it needs."""
+    from elliot_connector_runtime.server import _tool_registration_description
+    from elliot_core.types.tool import ReturnField, ToolDefinition
+
+    tool = ToolDefinition(
+        id="list_orders",
+        name="List orders",
+        description="List recent orders",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT id, status FROM orders LIMIT 50",
+        return_fields=[
+            ReturnField(field="id", alias="order_id"),
+            ReturnField(field="status"),
+            ReturnField(field="total"),
+        ],
+    )
+    desc = _tool_registration_description(tool)
+    # The base survives, and the alias (not the raw column) is what's named: an
+    # exact "order_id, status, total" proves the raw column 'id' was replaced.
+    assert desc.startswith("List recent orders.")
+    assert "Returns: order_id, status, total." in desc
+
+
+def test_tool_description_unchanged_when_no_fields_declared() -> None:
+    from elliot_connector_runtime.server import _tool_registration_description
+    from elliot_core.types.tool import ToolDefinition
+
+    # A SELECT * tool declares no return_fields — no misleading empty "Returns:".
+    tool = ToolDefinition(
+        id="dump",
+        name="Dump",
+        description="Return everything in the table.",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT * FROM t LIMIT 10",
+    )
+    assert _tool_registration_description(tool) == "Return everything in the table."
+    assert "Returns:" not in _tool_registration_description(tool)
+
+
+def test_tool_description_falls_back_to_output_schema_keys() -> None:
+    from elliot_connector_runtime.server import _tool_registration_description
+    from elliot_core.types.tool import ToolDefinition
+
+    # A WRITE tool with no return_fields but a declared output_schema names its
+    # keys — so an agent knows create_order hands back the new order_id to chain.
+    tool = ToolDefinition(
+        id="create_order",
+        name="Create order",
+        description="Create a new order",
+        category="WRITE",
+        source_ids=["s"],
+        output_schema={"order_id": "string", "status": "string"},
+    )
+    desc = _tool_registration_description(tool)
+    assert "Returns: order_id, status." in desc
+
+
+def test_tool_description_caps_wide_field_lists() -> None:
+    from elliot_connector_runtime.server import _tool_registration_description
+    from elliot_core.types.tool import ReturnField, ToolDefinition
+
+    tool = ToolDefinition(
+        id="wide",
+        name="Wide",
+        description="Return a wide row.",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT * FROM t LIMIT 5",
+        return_fields=[ReturnField(field=f"c{i}") for i in range(20)],
+    )
+    desc = _tool_registration_description(tool)
+    # 12 shown, remainder summarised rather than dumped.
+    assert "c0, c1" in desc
+    assert "+8 more." in desc
+    assert "c12" not in desc.split("Returns:")[1]

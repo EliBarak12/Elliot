@@ -1578,14 +1578,23 @@ def _register_skill_tools(
             )
 
 
-def _skill_tool_description(skill: Any) -> str:
+def _skill_tool_description(skill: Any, destructive_steps: list[str] | None = None) -> str:
     """The agent-facing description of a deterministic skill registered as a
     callable tool. Enriches the author's one-liner with the trigger
     (``when_to_use``) and the fact that one call runs the whole chain — so an
     agent listing tools can tell WHEN to reach for the skill instead of
     orchestrating the individual tools itself. Without this the skill was a bare
     one-liner and its one-call value (and the ``when_to_use`` the author wrote)
-    were invisible at the moment the agent chooses a tool."""
+    were invisible at the moment the agent chooses a tool.
+
+    ``destructive_steps`` — the ids of any danger-zone step the chain runs — are
+    NAMED in the description so the danger lives in the CONTRACT, not only in the
+    machine ``destructiveHint`` flag. A skill hides its steps behind one
+    innocuous-looking call ("close_month_end" that deletes draft invoices
+    inside), so the agent choosing the tool, and the human approving the
+    confirmation, must be told in words that calling it triggers an irreversible
+    operation — the same reason a WRITE tool's description names its mutation
+    (principle 1: descriptions are contracts)."""
     name = getattr(skill, "name", "") or "workflow"
     base = (getattr(skill, "description", "") or f"Run the {name} workflow.").strip().rstrip(".")
     parts = [f"{base}."]
@@ -1596,6 +1605,16 @@ def _skill_tool_description(skill: Any) -> str:
     if step_count > 1:
         parts.append(
             f"One call runs the whole {step_count}-step workflow — you don't orchestrate the steps."
+        )
+    if destructive_steps:
+        # De-dup, stable order; cap the named list the same way the agent
+        # briefing caps its danger-zone roster.
+        shown = list(dict.fromkeys(destructive_steps))
+        names = ", ".join(shown[:4])
+        more = "" if len(shown) <= 4 else f", +{len(shown) - 4} more"
+        noun = "an irreversible step" if len(shown) == 1 else "irreversible steps"
+        parts.append(
+            f"Danger zone: this runs {noun} ({names}{more}) and clients confirm before it executes."
         )
     return " ".join(parts)
 
@@ -1617,16 +1636,16 @@ def _register_one_skill_tool(
 
     skill_id = skill.id
     skill_name = skill.name
-    skill_desc = _skill_tool_description(skill)
     steps = skill.steps
     input_params = skill.input_parameters
 
     # Union of the step tools' source_ids (what a per-user executor must hold
-    # credentials for) and whether any step is the danger zone — a skill is only
-    # gated if a step it runs is genuinely destructive.
+    # credentials for) and which steps are the danger zone — a skill is only
+    # gated if a step it runs is genuinely destructive, and those step ids are
+    # named in the description so the danger is stated, not just flagged.
     skill_source_ids: list[str] = []
     seen: set[str] = set()
-    any_destructive = False
+    destructive_steps: list[str] = []
     for s in steps:
         std = tools_by_id.get(s.tool_id)
         if std is None:
@@ -1636,8 +1655,10 @@ def _register_one_skill_tool(
                 seen.add(sid)
                 skill_source_ids.append(sid)
         if _is_destructive(std.category, std.id, getattr(std, "destructive", None)):
-            any_destructive = True
+            destructive_steps.append(std.id)
 
+    any_destructive = bool(destructive_steps)
+    skill_desc = _skill_tool_description(skill, destructive_steps)
     require_confirmation = any_destructive and _require_destructive_confirmation()
     annotations = ToolAnnotations(
         title=skill_name,

@@ -1677,6 +1677,10 @@ async def test_skill_with_a_destructive_step_is_flagged_destructive() -> None:
     mcp = create_runtime_server(cfg, ToolExecutor(cfg, secrets={}))
     tool = next(t for t in await mcp.list_tools() if t.name == "purge_stale")
     assert tool.annotations is not None and tool.annotations.destructiveHint is True
+    # The danger is also stated in the description an agent reads and a human
+    # confirms — not only carried as the machine flag — and it names the step.
+    assert "Danger zone" in (tool.description or "")
+    assert "delete_order" in (tool.description or "")
 
 
 async def test_skill_call_is_recorded_in_the_observation_store() -> None:

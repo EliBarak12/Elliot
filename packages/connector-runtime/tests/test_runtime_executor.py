@@ -1654,3 +1654,47 @@ def test_skill_tool_description_without_when_or_multistep_is_just_the_summary() 
     desc = _skill_tool_description(skill)
     assert desc == "Do the thing."
     assert "One call" not in desc  # single step earns no orchestration note
+
+
+def test_skill_tool_description_names_destructive_steps() -> None:
+    """A skill that runs a danger-zone step states it in words — the danger is in
+    the contract the agent reads and the human confirms, not only the flag."""
+    from elliot_connector_runtime.server import _skill_tool_description
+    from elliot_core.types.tool import SkillDefinition, SkillStep
+
+    skill = SkillDefinition(
+        id="close_month_end",
+        name="Close month end",
+        description="Close the month-end books",
+        steps=[
+            SkillStep(alias="f", tool_id="find_drafts", params={}),
+            SkillStep(alias="d", tool_id="delete_draft_invoices", params={}),
+        ],
+    )
+    # Without the hint the danger is invisible; with it, the destructive step is
+    # named so an innocuous-sounding skill can't hide an irreversible operation.
+    plain = _skill_tool_description(skill)
+    assert "Danger zone" not in plain
+
+    flagged = _skill_tool_description(skill, ["delete_draft_invoices"])
+    assert "Danger zone" in flagged
+    assert "irreversible step" in flagged
+    assert "delete_draft_invoices" in flagged
+    assert "confirm before it executes" in flagged
+
+
+def test_skill_tool_description_pluralises_multiple_destructive_steps() -> None:
+    from elliot_connector_runtime.server import _skill_tool_description
+    from elliot_core.types.tool import SkillDefinition, SkillStep
+
+    skill = SkillDefinition(
+        id="offboard",
+        name="Offboard",
+        description="Offboard a departing user",
+        steps=[SkillStep(alias="a", tool_id="t", params={})],
+    )
+    desc = _skill_tool_description(skill, ["revoke_access", "delete_account", "revoke_access"])
+    # De-duplicated and pluralised.
+    assert "irreversible steps" in desc
+    assert desc.count("revoke_access") == 1
+    assert "delete_account" in desc

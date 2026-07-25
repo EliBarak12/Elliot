@@ -277,6 +277,33 @@ def test_result_preview_recorded_for_tool_call(tmp_path: Path) -> None:
     assert preview is not None and "Rex" in preview
 
 
+def test_result_preview_redacts_secrets_in_response_body(tmp_path: Path) -> None:
+    # An upstream API can return a secret in its *response body* — an OAuth
+    # token endpoint, a "create API key" call. The result preview is stored in
+    # the session log and shown in the Agent Console, so it must be redacted
+    # exactly like the recorded arguments are: a secret the tool RETURNS is no
+    # safer to persist than one the agent PASSED IN. (never log secrets/PII.)
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    sid = tracker.start_session(session_id="s")
+    result = [
+        {
+            "user": "rex",
+            "access_token": "super-secret-value",  # sensitive key name
+            "note": "Bearer ghp_ABCDEFGHIJ0123456789KLMNOPQRSTUV",  # secret-shaped value
+        }
+    ]
+    tracker.record_tool_call(sid, "create_token", {}, 1, result, 5.0)
+
+    preview = tracker.tail(1)[0]["events"][0]["result_preview"]
+    assert preview is not None
+    # The benign field survives; both the sensitive-keyed value and the
+    # secret-shaped token are gone, replaced by the redaction placeholder.
+    assert "rex" in preview
+    assert "super-secret-value" not in preview
+    assert "ghp_ABCDEFGHIJ0123456789KLMNOPQRSTUV" not in preview
+    assert "***" in preview
+
+
 def test_subscribe_receives_published_updates(tmp_path: Path) -> None:
     tracker = SessionTracker(tmp_path / "sessions.ndjson")
     queue = tracker.subscribe()

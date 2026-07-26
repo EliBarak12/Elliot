@@ -152,6 +152,16 @@ class ToolDefinition(BaseModel):
     # confirm=true gate.
     destructive: bool | None = None
 
+    # Off switch. A disabled tool stays in the connector — its SQL, mapping and
+    # parameters are preserved — but the runtime never registers it, so it is
+    # absent from tools/list and no agent can call it. Publish-time lint and the
+    # execute smoke skip it for the same reason: it is not part of the contract
+    # the connector offers.
+    #
+    # Defaults True so every spec written before this field keeps serving every
+    # tool it declares.
+    enabled: bool = True
+
 
 class SkillStep(BaseModel):
     model_config = _strict

@@ -933,3 +933,79 @@ def test_real_tool_names_are_not_flagged_scaffold() -> None:
         codes = {i.code for i in lint_connector(_make_connector(id=tid, name=tid))}
         assert "TOOL_NAME_SCAFFOLD" not in codes
         assert "TOOL_DESC_SCAFFOLD" not in codes
+
+
+# ── the tool off switch (enabled=False) ───────────────────────────────────────
+
+
+def test_disabled_tool_is_not_graded() -> None:
+    # A disabled tool is never registered, so its description quality is not
+    # part of the contract the connector offers — it must not block a publish.
+    bad = {
+        "id": "x",
+        "name": "x",
+        "description": "short",  # would trip DESCRIPTION_TOO_SHORT while served
+        "category": "READ",
+        "source_ids": [],
+        "sql": "SELECT 1",
+        "enabled": False,
+    }
+    config = ConnectorConfig(
+        name="T",
+        slug="t",
+        version="1.0.0",
+        sources=[],
+        tools=[_GET_ORDER, bad],  # type: ignore[list-item]
+    )
+    assert all(i.tool_id != "x" for i in lint_connector(config))
+
+
+def test_enabled_tool_with_same_flaw_is_still_graded() -> None:
+    # Guard the test above: the flaw is real, only the off switch hides it.
+    served = {
+        "id": "x",
+        "name": "x",
+        "description": "short",
+        "category": "READ",
+        "source_ids": [],
+        "sql": "SELECT 1",
+        "enabled": True,
+    }
+    config = ConnectorConfig(
+        name="T",
+        slug="t",
+        version="1.0.0",
+        sources=[],
+        tools=[_GET_ORDER, served],  # type: ignore[list-item]
+    )
+    assert any(i.tool_id == "x" for i in lint_connector(config))
+
+
+def test_tools_default_to_enabled() -> None:
+    # Every spec written before the field keeps serving every tool it declares.
+    from elliot_core.types import ToolDefinition
+
+    assert ToolDefinition.model_validate(_GET_ORDER).enabled is True
+
+
+def test_skill_step_calling_disabled_tool_is_error() -> None:
+    # The skill would register and then fail on its first step — the same
+    # dead-on-arrival class F4 closed for unbound params.
+    disabled = {**_GET_ORDER, "enabled": False}
+    config = ConnectorConfig(
+        name="T",
+        slug="t",
+        version="1.0.0",
+        sources=[],
+        tools=[disabled],  # type: ignore[list-item]
+        skills=[  # type: ignore[list-item]
+            {
+                "id": "s",
+                "name": "S",
+                "description": "A workflow",
+                "steps": [{"alias": "a", "tool_id": "get_order", "params": {"order_id": 1}}],
+            }
+        ],
+    )
+    issues = [i for i in lint_connector(config) if i.code == "SKILL_STEP_DISABLED_TOOL"]
+    assert issues and issues[0].severity == "ERROR"

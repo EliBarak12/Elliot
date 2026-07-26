@@ -316,6 +316,25 @@ def _lint_skills(config: ConnectorConfig) -> list[LintIssue]:
                 )
                 seen_aliases.add(step.alias)
                 continue
+            if not getattr(target, "enabled", True):
+                issues.append(
+                    LintIssue(
+                        severity="ERROR",
+                        code="SKILL_STEP_DISABLED_TOOL",
+                        tool_id=target.id,
+                        message=(
+                            f"Skill '{skill.id}' step '{step.alias}' calls tool "
+                            f"'{step.tool_id}', which is disabled. The runtime never "
+                            "registers it, so the skill cannot run."
+                        ),
+                        suggestion=(
+                            f"Re-enable '{step.tool_id}', point the step at a tool that is "
+                            "enabled, or disable the skill too."
+                        ),
+                    )
+                )
+                seen_aliases.add(step.alias)
+                continue
             required = [p.name for p in target.parameters if p.required and p.default is None]
             for name in required:
                 if name not in step.params:
@@ -525,6 +544,15 @@ def lint_connector(
     """
     issues: list[LintIssue] = []
 
+    # Disabled tools are never registered, so they are not part of the contract
+    # the connector offers — grade what agents can actually call. The full set
+    # is kept for _lint_skills, which has to see a disabled tool to catch a
+    # skill step pointing at one (dead on arrival, same class as F4).
+    declared = config
+    served_tools = [t for t in config.tools if getattr(t, "enabled", True)]
+    if len(served_tools) != len(config.tools):
+        config = config.model_copy(update={"tools": served_tools})
+
     # ── connector-level checks ──────────────────────────────────────────────
     if len(config.tools) > _MAX_TOOLS:
         issues.append(
@@ -548,7 +576,8 @@ def lint_connector(
     issues.extend(_lint_tool_source_coverage(config))
 
     # ── skill executability (a deterministic skill that can never run) ────────
-    issues.extend(_lint_skills(config))
+    # Deliberately the full set: a step calling a disabled tool must be caught.
+    issues.extend(_lint_skills(declared))
 
     # ── scaffold/placeholder tool names left in a shipped connector ───────────
     issues.extend(_lint_scaffold_names(config))

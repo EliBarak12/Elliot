@@ -225,11 +225,16 @@ async def smoke_test_connector(
         )
 
     listed_set = set(listed)
-    missing = [t.id for t in config.tools if t.id not in listed_set]
+    # A disabled tool is deliberately absent from tools/list. Smoking it would
+    # report every one as "missing from tools/list" and block the publish — the
+    # gate proves what the connector *offers*, and a disabled tool offers
+    # nothing.
+    smokeable = [t for t in config.tools if getattr(t, "enabled", True)]
+    missing = [t.id for t in smokeable if t.id not in listed_set]
 
     tool_results: list[ToolSmokeResult] = []
     if execute:
-        for tool in config.tools:
+        for tool in smokeable:
             if tool.id in missing:
                 continue
             outcome = await _execute_one(executor, tool, tool_timeout_seconds)

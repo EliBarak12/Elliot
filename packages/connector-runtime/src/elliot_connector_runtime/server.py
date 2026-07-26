@@ -268,8 +268,11 @@ def derive_agent_briefing(cfg: Any) -> str:
     if desc:
         lead = f"{lead} {desc.rstrip('.')}."
 
-    read_tools = [t for t in cfg.tools if t.category == "READ"]
-    act_tools = [t for t in cfg.tools if t.category != "READ"]
+    # Disabled tools are not registered, so the briefing must not advertise
+    # them — counting them here would promise the agent tools it cannot call.
+    served = [t for t in cfg.tools if getattr(t, "enabled", True)]
+    read_tools = [t for t in served if t.category == "READ"]
+    act_tools = [t for t in served if t.category != "READ"]
     danger = [
         t for t in act_tools if _is_destructive(t.category, t.id, getattr(t, "destructive", None))
     ]
@@ -636,6 +639,12 @@ def create_runtime_server(
 
     task_store = get_task_store()
     for tool_def in cfg.tools:
+        # The off switch: a disabled tool keeps its definition in the connector
+        # but is never registered, so it never reaches tools/list and no agent
+        # can call it. Nothing else about the connector changes.
+        if not getattr(tool_def, "enabled", True):
+            log.info("runtime.tool.disabled", connector=connector_slug, tool=tool_def.id)
+            continue
         _register_tool(
             mcp,
             executor,
@@ -1427,6 +1436,9 @@ def _register_resources(mcp: FastMCP, cfg: Any, executor: ToolExecutor, json: An
         return json.dumps(snapshot, indent=2, default=str)
 
     for tool_def in c.tools:
+        # No sample resource for a tool the agent cannot call.
+        if not getattr(tool_def, "enabled", True):
+            continue
         _register_sample_resource(mcp, executor, tool_def, json)
 
     for source in c.sources:

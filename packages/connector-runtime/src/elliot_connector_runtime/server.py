@@ -761,6 +761,19 @@ def _record_validation_failure(
             connector_slug=connector_slug,
         )
     if tracker is not None:
+        # Open first, exactly as the store branch above does. record_tool_call
+        # drops the event when the session isn't active, and the handler --
+        # which is what normally calls get_or_start_session -- never ran here.
+        # On a stateless deployment every request carries a fresh session id,
+        # so without this the validation failure was written to the store and
+        # dropped from the session trace on every single call: the metrics page
+        # counted it, the agent-session trace did not, and the two disagreed
+        # about the same traffic.
+        tracker.get_or_start_session(
+            session_id,
+            agent_hint=agent_hint,
+            agent_identity=identity_payload,
+        )
         tracker.record_tool_call(
             session_id=session_id,
             tool_id=tool_id,

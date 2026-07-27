@@ -378,6 +378,77 @@ async def test_argument_validation_failures_are_recorded() -> None:
     assert errored[0]["tool_id"] == "get_thing"
 
 
+async def test_argument_validation_failures_reach_the_session_trace() -> None:
+    """The session trace must show the same calls the observation store does.
+
+    ``record_tool_call`` ignores a session that was never opened, and the tool
+    handler -- the thing that normally opens it -- does not run for an argument
+    validation failure. So the failure landed in the store and vanished from the
+    session, and the two observability views disagreed about the same traffic:
+    Metrics counted the call, the agent-session trace did not.
+
+    A stateless deployment feels this on every call, because each request
+    carries a session id the tracker has never seen.
+    """
+    import tempfile
+
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_connector_runtime.session_tracker import SessionTracker
+    from elliot_core.types import (
+        ConnectorConfig,
+        ParameterDefinition,
+        SourceConfig,
+        ToolDefinition,
+    )
+
+    class _Eng:
+        def query(self, sql, params):  # type: ignore[no-untyped-def]
+            return [{"id": 1}]
+
+    cfg = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        sources=[SourceConfig(id="s", name="s", type="file", url="x")],
+        tools=[
+            ToolDefinition(
+                id="get_thing",
+                name="Get Thing",
+                description="Get a thing by id",
+                category="READ",
+                source_ids=["s"],
+                sql="SELECT id FROM s WHERE id = :thing_id",
+                parameters=[
+                    ParameterDefinition(
+                        name="thing_id", type="integer", required=True, description="id"
+                    )
+                ],
+            )
+        ],
+        skills=[],
+    )
+    d = tempfile.mkdtemp()
+    tracker = SessionTracker(f"{d}/sessions.ndjson")
+    mcp = create_runtime_server(
+        cfg,
+        ToolExecutor(cfg, secrets={}, engine=_Eng()),  # type: ignore[arg-type]
+        tracker=tracker,
+    )
+
+    async with create_connected_server_and_client_session(mcp._mcp_server) as client:
+        await client.initialize()
+        res = await client.call_tool("get_thing", {})  # missing required param
+        assert res.isError
+
+    events = [e for s in tracker.tail(10) for e in s.get("events") or []]
+    assert len(events) == 1, f"validation failure missing from the session trace: {events}"
+    assert events[0]["tool_id"] == "get_thing"
+    assert events[0]["error_code"] == "VALIDATION_INVALID_PARAMS"
+
+
 async def test_runtime_advertises_logging_and_streams_structured_telemetry() -> None:
     """The runtime must declare the MCP ``logging`` capability and stream each
     tool call's observability as a structured ``notifications/message`` (so a

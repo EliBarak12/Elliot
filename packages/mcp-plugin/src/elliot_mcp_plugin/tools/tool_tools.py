@@ -33,7 +33,7 @@ _PARAM_ITEM_SCHEMA: dict[str, Any] = {
         "name": {"type": "string"},
         "type": {
             "type": "string",
-            "enum": ["string", "integer", "number", "boolean", "date"],
+            "enum": ["string", "integer", "number", "boolean", "date", "object", "array"],
         },
         "required": {"type": "boolean"},
         "description": {"type": "string"},
@@ -599,6 +599,29 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                     "path, query_params, or body_params — the runtime would silently drop "
                     "them. Route each one (or remove it).",
                     detail={"unrouted": unrouted},
+                )
+            # object/array parameters are nested JSON — they can only travel in
+            # a JSON request body, never a path placeholder or query value.
+            complex_params = sorted(
+                str(p["name"])
+                for p in (parameters or [])
+                if isinstance(p, dict) and p.get("type") in ("object", "array")
+            )
+            misrouted = sorted(set(complex_params) - set(body_names))
+            if misrouted:
+                raise ElliotError(
+                    "UNSUPPORTED_PARAM_ROUTING",
+                    f"object/array parameter(s) {', '.join(misrouted)} must be routed via "
+                    "body_params — nested JSON cannot fill a path placeholder or query "
+                    "value.",
+                    detail={"misrouted": misrouted},
+                )
+            if complex_params and body_format != "json":
+                raise ElliotError(
+                    "UNSUPPORTED_PARAM_ROUTING",
+                    "object/array parameters require body_format='json' — form encoding "
+                    "cannot carry nested JSON.",
+                    detail={"complex_params": complex_params},
                 )
 
             tool = ToolDefinition.model_validate(

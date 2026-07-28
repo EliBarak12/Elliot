@@ -214,9 +214,13 @@ def test_list_tools_after_create(mcp: FastMCP, session: ElliotSession, tmp_path:
     result = _tool(mcp, "elliot_list_tools")()
     assert result["count"] == 1
     assert result["tools"][0]["id"] == "list_orders"
-    # SQL is stored in session.tool_sql, not on the model — the list endpoint
-    # must merge it in so the Studio editor can render the query.
-    assert result["tools"][0]["sql"] == 'SELECT * FROM "orders"'
+    # Default listing is a token-diet summary — SQL is only in verbose mode.
+    # It is stored in session.tool_sql, not on the model, so the verbose list
+    # must merge it in for the Studio editor to render the query.
+    assert "sql" not in result["tools"][0]
+    assert result["tools"][0]["has_sql"] is True
+    full = _tool(mcp, "elliot_list_tools")(verbose=True)
+    assert full["tools"][0]["sql"] == 'SELECT * FROM "orders"'
 
 
 # ---------------------------------------------------------------------------

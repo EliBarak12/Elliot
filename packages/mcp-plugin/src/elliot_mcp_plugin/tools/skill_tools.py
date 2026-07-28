@@ -12,6 +12,7 @@ from elliot_core.errors import ElliotError, to_mcp_error_content
 from elliot_core.naming import is_valid_identifier, slugify_identifier
 from elliot_core.tools.skill_runner import execute_skill
 from elliot_core.tools.validator import validate_skill_definition
+from elliot_mcp_plugin.build_state import refresh_built_connector
 from elliot_mcp_plugin.session import ElliotSession
 
 log = structlog.get_logger(__name__)
@@ -112,11 +113,11 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 slug = "skill_" + uuid.uuid4().hex[:8]
             elif not is_valid_identifier(slug):
                 slug = f"s_{slug}"
+            # Same name → UPDATE the existing skill in place. The old behaviour
+            # silently minted `_2` / `_3` duplicates (LIVE_QA F3), leaving
+            # agents guessing which copy is real and no way to fix a skill.
             skill_id = slug
-            _suffix = 2
-            while session.registry.get_skill(skill_id) is not None:
-                skill_id = f"{slug}_{_suffix}"
-                _suffix += 1
+            existing = session.registry.get_skill(skill_id)
             normalized_steps = _normalize_skill_steps(steps or [])
             skill = validate_skill_definition(
                 {
@@ -136,6 +137,7 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
                         f"Step '{step.alias}' references unknown tool: '{step.tool_id}'",
                     )
             session.registry.add_skill(skill)
+            refresh_built_connector(session)
             session.save()
             # Surface the new skill as an MCP prompt immediately so it shows up
             # in prompts/list without a server restart (F-027). Best-effort: a
@@ -146,8 +148,9 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 register_session_skill_prompt(mcp, skill)
             except Exception:
                 log.warning("skill.prompt.register_failed", skill_id=skill.id, exc_info=True)
-            log.info("skill.created", skill_id=skill.id)
-            return {"skill_id": skill.id, "status": "created"}
+            status = "updated" if existing else "created"
+            log.info("skill.saved", skill_id=skill.id, status=status)
+            return {"skill_id": skill.id, "status": status}
         except ElliotError as exc:
             return to_mcp_error_content(exc)
         except Exception as exc:
@@ -259,6 +262,7 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
             if session.registry.get_skill(skill_id) is None:
                 return {"error": f"Skill not found: {skill_id}"}
             session.registry.delete_skill(skill_id)
+            refresh_built_connector(session)
             session.save()
             log.info("skill.deleted", skill_id=skill_id)
             return {"status": "deleted", "skill_id": skill_id}

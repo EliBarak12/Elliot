@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import os
 import subprocess
 import sys
@@ -11,69 +10,26 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
 
 import structlog
 from mcp.server.fastmcp import FastMCP
 
 from elliot_core.connector.serializer import serialize_connector
 from elliot_core.errors import ElliotError, to_mcp_error_content
-from elliot_core.types.connector import ConnectorConfig
-from elliot_core.types.tool import ToolDefinition
+from elliot_mcp_plugin.build_state import (
+    analysis_config,
+    assemble_connector,
+    refresh_built_connector,
+)
+from elliot_mcp_plugin.build_state import (
+    build_table_warnings as _build_table_warnings,
+)
+from elliot_mcp_plugin.build_state import (
+    connector_build_id as _connector_build_id,
+)
 from elliot_mcp_plugin.session import ElliotSession
 
 log = structlog.get_logger(__name__)
-
-
-def _connector_build_id(config: ConnectorConfig) -> str:
-    """Stable short id for a built connector's content.
-
-    A re-judge should reflect the connector that's loaded NOW, so audit
-    transcripts are tagged with the build they ran against and the judge scopes
-    to the current build. The id is a hash of the serialized spec, so any change
-    to a tool (or its SQL/params) yields a new id and old transcripts fall out
-    of scope; an identical rebuild keeps the same id.
-    """
-    raw = config.model_dump_json().encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()[:12]
-
-
-def _build_table_warnings(
-    session: ElliotSession, tools: list[ToolDefinition]
-) -> list[dict[str, Any]]:
-    """Flag built tools whose SQL references tables not loaded in the session.
-
-    Only checked when the session has data materialized (post-discover) and
-    only for SQL-backed tools — filter_groups / passthrough tools resolve
-    their tables at runtime. Each entry names the tool and its missing tables
-    so the agent can fix or drop it before publishing (audit B3).
-    """
-    from elliot_core.sql import referenced_base_tables
-
-    available = set(session.engine.get_table_names())
-    if not available:
-        return []
-    warnings: list[dict[str, Any]] = []
-    for tool in tools:
-        sql = session.tool_sql.get(tool.id)
-        if not sql:
-            continue
-        # ``referenced_base_tables`` strips CTE aliases so a ``WITH x AS (...)``
-        # tool is not false-flagged as referencing a missing table ``x``.
-        missing = [t for t in referenced_base_tables(sql) if t not in available]
-        if missing:
-            warnings.append(
-                {
-                    "tool_id": tool.id,
-                    "missing_tables": sorted(missing),
-                    "message": (
-                        f"Tool '{tool.id}' references table(s) "
-                        f"{sorted(missing)} that are not loaded — it will fail at "
-                        "call time. Fix its SQL or drop the tool before publishing."
-                    ),
-                }
-            )
-    return warnings
 
 
 _RUNTIME_LOG_RELATIVE = Path(".elliot/runtime.log")
@@ -181,44 +137,17 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             effective_instructions = instructions or (
                 session.connector.instructions if session.connector else ""
             )
-            selected_tools = (
-                [t for t in session.registry.get_all() if t.id in tool_ids]
-                if tool_ids is not None
-                else session.registry.get_all()
-            )
-            selected_skills = (
-                [s for s in session.registry.get_all_skills() if s.id in (skill_ids or [])]
-                if skill_ids is not None
-                else session.registry.get_all_skills()
-            )
-            referenced_source_ids = {sid for t in selected_tools for sid in t.source_ids}
-            sources = [s for sid, s in session.sources.items() if sid in referenced_source_ids]
-
-            # GAP-2: inject SQL that was stored separately back into ToolDefinition objects
-            tools_with_sql = []
-            for tool in selected_tools:
-                sql = session.tool_sql.get(tool.id)
-                if sql:
-                    tool = tool.model_copy(update={"sql": sql})
-                tools_with_sql.append(tool)
-
-            # GAP-3: replace UUID source IDs with human-readable source names
-            uuid_to_name = {sid: src.name for sid, src in session.sources.items()}
-            sources_named = [src.model_copy(update={"id": src.name}) for src in sources]
-            tools_remapped = [
-                tool.model_copy(
-                    update={"source_ids": [uuid_to_name.get(sid, sid) for sid in tool.source_ids]}
-                )
-                for tool in tools_with_sql
-            ]
-
-            config = session.builder.set_meta(
+            config, selected_tools = assemble_connector(
+                session,
                 name=name,
                 slug=slug,
                 version=effective_version,
                 description=description,
                 instructions=effective_instructions,
-            ).build(sources=sources_named, tools=tools_remapped, skills=selected_skills)
+                tool_ids=tool_ids,
+                skill_ids=skill_ids,
+            )
+            selected_skills = config.skills or []
 
             session.connector = config
             session.build_id = _connector_build_id(config)
@@ -236,7 +165,7 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 "status": "built",
                 "tool_count": len(selected_tools),
                 "skill_count": len(selected_skills),
-                "source_count": len(sources),
+                "source_count": len(config.sources),
             }
             # B3: a SQL tool that references a table the session never
             # materialized builds clean but errors on every call ("no such
@@ -274,9 +203,22 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
             if session.connector is None:
                 return {"error": "No connector built yet — call elliot_build_connector first"}
 
+            # F5: re-assemble from the CURRENT registry state so an
+            # elliot_update_tool since the last build can never ship a stale
+            # definition. Selection and meta are preserved.
+            refresh_built_connector(session)
+            session.save()
+
             # Lint gate — never ship a broken contract (principle 1). Errors are
             # absolute; warnings block unless the caller explicitly opts in.
-            issues = lint_connector(session.connector)
+            # Product-intent sensitive fields feed the SENSITIVE_FIELD_EXPOSED
+            # rule — previously recorded but never passed, so the rule was dead.
+            issues = lint_connector(
+                session.connector,
+                sensitive_fields=(
+                    session.product_intent.sensitive_fields if session.product_intent else None
+                ),
+            )
             errors = [i for i in issues if i.severity == "ERROR"]
             warnings = [i for i in issues if i.severity == "WARN"]
             if errors or (warnings and not allow_warnings):
@@ -392,19 +334,39 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
     @mcp.tool()
     def elliot_lint_connector() -> dict:  # type: ignore[type-arg]
-        """Run the static linter on the current built connector and return all issues."""
+        """Run the static linter on the session's CURRENT tools and skills.
+
+        Analyzes everything in the session right now — every tool and skill,
+        whether or not it made it into the last build — so a stale or subset
+        build snapshot can never hide problems. Product-intent
+        ``sensitive_fields`` are enforced (SENSITIVE_FIELD_EXPOSED).
+        """
         try:
             import dataclasses
 
             from elliot_core.linter import lint_connector
 
-            if session.connector is None:
-                return {"error": "No connector built yet — call elliot_build_connector first"}
-            issues = lint_connector(session.connector)
+            config = analysis_config(session)
+            if config is None:
+                return {
+                    "error": (
+                        "Nothing to lint yet — create at least one tool "
+                        "(elliot_create_tool / elliot_create_rest_tool / "
+                        "elliot_create_action_tool) first."
+                    )
+                }
+            issues = lint_connector(
+                config,
+                sensitive_fields=(
+                    session.product_intent.sensitive_fields if session.product_intent else None
+                ),
+            )
             return {
                 "issues": [dataclasses.asdict(i) for i in issues],
                 "error_count": sum(1 for i in issues if i.severity == "ERROR"),
                 "warning_count": sum(1 for i in issues if i.severity == "WARN"),
+                "scanned_tools": len(config.tools),
+                "scanned_skills": len(config.skills or []),
             }
         except Exception as exc:
             log.error("connector.lint.failed", error=str(exc))

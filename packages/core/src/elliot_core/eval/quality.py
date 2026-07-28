@@ -278,8 +278,24 @@ def analyze_tool_quality(tool: ToolDefinition) -> ToolQualityScore:
     return ToolQualityScore(tool_id=tool.id, score=round(score, 1), issues=issues)
 
 
-def analyze_connector_quality(config: ConnectorConfig) -> ConnectorQualityScore:
+def analyze_connector_quality(
+    config: ConnectorConfig,
+    broken_tools: dict[str, str] | None = None,
+) -> ConnectorQualityScore:
+    """Score every tool in the config.
+
+    ``broken_tools`` maps tool_id → reason for tools the caller knows are
+    broken at a level static contract checks can't see (e.g. their SQL
+    references a table the session never materialized). A broken tool scores
+    0 with an error issue — a connector with a broken tool must never read
+    as 100/100.
+    """
     tool_scores = [analyze_tool_quality(t) for t in config.tools]
+    for ts in tool_scores:
+        reason = (broken_tools or {}).get(ts.tool_id)
+        if reason:
+            ts.issues.append(ToolIssue("source_materialized", "error", reason, PRINCIPLE_SCHEMA))
+            ts.score = 0.0
     all_issues = [i for ts in tool_scores for i in ts.issues]
     return ConnectorQualityScore(
         overall_score=(

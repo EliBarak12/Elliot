@@ -16,6 +16,7 @@ from elliot_core.sqlite.query_runner import validate_tool_sql
 from elliot_core.tokens import estimate_tokens
 from elliot_core.tools.param_validation import validate_call_params
 from elliot_core.types.tool import ToolDefinition
+from elliot_mcp_plugin.build_state import refresh_built_connector
 from elliot_mcp_plugin.session import ElliotSession
 
 # A preview result costing more than this is worth flagging — it is the token
@@ -697,34 +698,68 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 patch["source_ids"] = _infer_source_ids_from_sql(sql_patch, session)
             if patch:
                 session.registry.update(tool_id, patch)
+            # F5: an update after a build previously left the built connector
+            # silently stale — export/publish shipped the OLD definition.
+            # Re-assemble the build (same meta + selection) so what ships is
+            # always what the registry says NOW.
+            refreshed = refresh_built_connector(session)
             session.save()
-            return {"tool_id": tool_id, "status": "updated"}
+            result = {"tool_id": tool_id, "status": "updated"}
+            if refreshed:
+                result["connector"] = "rebuilt with the updated definition"
+            return result
         except ElliotError as exc:
             return to_mcp_error_content(exc)
         except Exception as exc:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
-    def elliot_list_tools() -> dict:  # type: ignore[type-arg]
-        """List all user-defined connector tools with their full definitions."""
+    def elliot_list_tools(verbose: bool = False) -> dict:  # type: ignore[type-arg]
+        """List the connector's tools — compact by default, full with verbose.
+
+        The default is a summary (id, category, truncated description,
+        parameter names) sized for an agent's context window; a 20-tool
+        connector costs ~1-2K tokens instead of ~30K. Pass ``verbose=true``
+        for complete definitions including SQL, or use ``elliot_get_tool``
+        for one tool's full contract.
+        """
         try:
             # Pick up any tools the agent created since our last list — even
             # if the agent's MCP client spawned its own plugin process and
             # writes to the same workspace.
             session.refresh_from_disk()
-            # SQL lives in session.tool_sql, not on the model (see
-            # elliot_create_tool), so merge it in just like elliot_get_tool —
-            # otherwise the Studio editor renders an empty query field.
-            tools = []
+            tools: list[dict[str, Any]] = []
             for t in session.registry.get_all():
-                dumped = t.model_dump()
-                if dumped.get("sql") is None:
-                    dumped["sql"] = session.tool_sql.get(t.id)
-                tools.append(dumped)
-            return {
-                "tools": tools,
-                "count": len(tools),
-            }
+                if verbose:
+                    # SQL lives in session.tool_sql, not on the model (see
+                    # elliot_create_tool), so merge it in just like
+                    # elliot_get_tool — otherwise the Studio editor renders an
+                    # empty query field.
+                    dumped = t.model_dump()
+                    if dumped.get("sql") is None:
+                        dumped["sql"] = session.tool_sql.get(t.id)
+                    tools.append(dumped)
+                else:
+                    desc = t.description.strip()
+                    tools.append(
+                        {
+                            "id": t.id,
+                            "name": t.name,
+                            "category": t.category,
+                            "description": desc[:160] + ("…" if len(desc) > 160 else ""),
+                            "parameters": [p.name for p in t.parameters],
+                            "source_ids": t.source_ids,
+                            "has_sql": bool(t.sql or session.tool_sql.get(t.id)),
+                            "destructive": t.destructive,
+                        }
+                    )
+            result: dict[str, Any] = {"tools": tools, "count": len(tools)}
+            if not verbose and tools:
+                result["note"] = (
+                    "Summary view. Pass verbose=true for full definitions, or "
+                    "elliot_get_tool(tool_id) for one tool."
+                )
+            return result
         except Exception as exc:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
@@ -749,6 +784,7 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 return {"error": f"Tool not found: {tool_id}"}
             session.registry.delete(tool_id)
             session.tool_sql.pop(tool_id, None)
+            refresh_built_connector(session)
             session.save()
             log.info("tool.deleted", tool_id=tool_id)
             return {"status": "deleted", "tool_id": tool_id}

@@ -4,7 +4,11 @@ version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
     "elliot-core",
-    "mcp>=1.0",
+    # Capped below 2.0: the SDK's 2.0 release drops `mcp.server.fastmcp`
+    # (FastMCP became MCPServer under `mcp.server.mcpserver`), which every
+    # server in this repo imports. Unbounded, a fresh install resolves to
+    # 2.0 and fails at import. Lift the cap with a deliberate migration.
+    "mcp>=1.0,<2",
     "pyyaml>=6.0",
     "structlog>=24.0",
 ]

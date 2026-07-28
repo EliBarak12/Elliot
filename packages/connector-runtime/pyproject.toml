@@ -7,7 +7,11 @@ dependencies = [
     "fastapi>=0.115",
     "httpx>=0.27",
     "jmespath>=1.0",
-    "mcp>=1.3",
+    # Capped below 2.0: the SDK's 2.0 release drops `mcp.server.fastmcp`
+    # (FastMCP became MCPServer under `mcp.server.mcpserver`), which every
+    # server in this repo imports. Unbounded, a fresh install resolves to
+    # 2.0 and fails at import. Lift the cap with a deliberate migration.
+    "mcp>=1.3,<2",
     "slowapi>=0.1.9",
     # Real token counting for the observability/efficiency figures. Optional at
     # runtime — session_tracker falls back to a chars/4 estimate if it (or its

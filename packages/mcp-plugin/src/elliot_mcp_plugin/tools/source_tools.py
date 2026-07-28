@@ -637,6 +637,14 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
               POST/PUT/PATCH API that reads its inputs from the JSON request
               body instead of the URL query string; a tool's forwarded params
               then land in the body.
+            - pagination — fetch multiple pages at discovery:
+              {"strategy": "cursor"|"offset"|"page"|"link_header"|"odata",
+               "page_size": 100, "max_pages": 5, "cursor_field": "...",
+               "next_url_field": "..."}. Without it only the first response
+              is loaded.
+        Tip: elliot_import_api_collection proposes a ready `auth` block (with
+        {{ env:NAME }} placeholders) from the spec's securitySchemes — pass it
+        here as config["auth"] after creating the named secrets.
         name: logical name used as the SQLite table prefix
         """
         try:

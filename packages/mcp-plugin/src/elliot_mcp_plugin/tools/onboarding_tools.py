@@ -83,6 +83,30 @@ def register_onboarding_tools(mcp: FastMCP, session: ElliotSession) -> None:
         return {"recorded": True, "intent": session.product_intent.model_dump()}
 
     @mcp.tool()
+    def elliot_getting_started() -> dict:  # type: ignore[type-arg]
+        """Return Elliot's getting-started guide: principles, workflow, recovery.
+
+        The same content as the ``getting_started`` MCP prompt, exposed as a
+        tool for clients that cannot fetch prompts programmatically. Call it
+        once at the start of a session before building.
+        """
+        try:
+            from elliot_mcp_plugin.prompts import load_skills
+
+            for skill in load_skills():
+                if "getting" in skill.name.lower().replace("-", "_"):
+                    return {"guide": skill.body, "source": skill.name}
+            return {
+                "error": (
+                    "getting-started guide not found in the skills directory — "
+                    "set ELLIOT_SKILLS_DIR or reinstall the plugin package."
+                )
+            }
+        except Exception as exc:
+            log.error("onboarding.getting_started.failed", error=str(exc), exc_info=True)
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+
+    @mcp.tool()
     def elliot_import_api_collection(collection: str) -> dict:  # type: ignore[type-arg]
         """Import the user's API description into a proposed connector.
 

@@ -127,6 +127,11 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
         the Studio / cloud UI), so use it to tell downstream agents how to use
         these tools: auth quirks, pagination defaults, which tool to reach for
         first. Leave empty to fall back to an auto-generated description.
+
+        Build = SELECTION. Later edits to selected tools/skills refresh the
+        build automatically (a stale definition can never ship), but tools
+        created AFTER this build join only on the next explicit build. Lint
+        and quality-scan always analyze the full current session either way.
         """
         try:
             effective_version = (

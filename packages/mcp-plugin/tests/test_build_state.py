@@ -231,3 +231,67 @@ def test_list_sources_summary_by_default(
     full = _tool(mcp, "elliot_list_sources")(verbose=True)
     vcols = full["sources"][0]["columns"]
     assert vcols and all(isinstance(c, dict) and "type" in c for c in vcols)
+
+
+# ── audit batch: update_skill, list_skills diet, getting_started ─────────────
+
+
+def test_update_skill_patches_in_place(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+) -> None:
+    _setup_source_and_tool(mcp, tmp_path)
+    _tool(mcp, "elliot_create_skill")(
+        name="order_brief",
+        description="Produce a one-shot order brief.",
+        steps=[{"alias": "o", "tool_id": "list_orders", "params": {}}],
+    )
+    out = _tool(mcp, "elliot_update_skill")(
+        skill_id="order_brief", patch={"description": "Produce a two-step order brief with totals."}
+    )
+    assert out == {"skill_id": "order_brief", "status": "updated"}
+    skill = session.registry.get_skill("order_brief")
+    assert skill is not None and "two-step" in skill.description
+    # Steps untouched by a description-only patch.
+    assert [s.tool_id for s in skill.steps] == ["list_orders"]
+
+
+def test_update_skill_unknown_id_and_unknown_step_tool(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+) -> None:
+    _setup_source_and_tool(mcp, tmp_path)
+    missing = _tool(mcp, "elliot_update_skill")(skill_id="ghost", patch={"description": "x"})
+    assert "error" in missing
+    _tool(mcp, "elliot_create_skill")(
+        name="order_brief",
+        description="Produce a one-shot order brief.",
+        steps=[{"alias": "o", "tool_id": "list_orders", "params": {}}],
+    )
+    bad = _tool(mcp, "elliot_update_skill")(
+        skill_id="order_brief",
+        patch={"steps": [{"alias": "o", "tool_id": "nonexistent_tool", "params": {}}]},
+    )
+    assert "TOOL_NOT_FOUND" in str(bad)
+
+
+def test_list_skills_summary_by_default(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+) -> None:
+    _setup_source_and_tool(mcp, tmp_path)
+    _tool(mcp, "elliot_create_skill")(
+        name="order_brief",
+        description="Produce a one-shot order brief.",
+        steps=[{"alias": "o", "tool_id": "list_orders", "params": {}}],
+    )
+    out = _tool(mcp, "elliot_list_skills")()
+    item = out["skills"][0]
+    assert "steps" not in item
+    assert item["step_count"] == 1
+    full = _tool(mcp, "elliot_list_skills")(verbose=True)
+    assert full["skills"][0]["steps"][0]["tool_id"] == "list_orders"
+
+
+def test_getting_started_tool_returns_guide(mcp: FastMCP) -> None:
+    out = _tool(mcp, "elliot_getting_started")()
+    # In a source checkout the skills dir is found; the guide must be real text.
+    assert "guide" in out, out
+    assert len(out["guide"]) > 200

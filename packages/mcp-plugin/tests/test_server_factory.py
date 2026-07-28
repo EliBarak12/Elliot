@@ -122,17 +122,21 @@ def test_destructive_tool_call_blocked_for_unknown_agents(session: ElliotSession
 
 
 def test_newly_hidden_destructive_tools_not_listed(session: ElliotSession):
-    """elliot_delete_tool / _delete_skill / clear_audit / uninstall_trace_hook are
-    destructive and must be hidden from non-Studio agents (F-020)."""
+    """clear_audit / uninstall_trace_hook stay hidden from non-Studio agents.
+
+    elliot_delete_tool / elliot_delete_skill are deliberately VISIBLE again:
+    hiding them while elliot_delete_source (which cascade-deletes tools) stayed
+    agent-visible was backwards — draft pruning is a design-time edit, not a
+    runtime-destructive action (tool-surface audit, 2026-07-28)."""
     server = create_elliot_server(session)
     names = {t.name for t in server._tool_manager.list_tools()}
     for hidden in (
-        "elliot_delete_tool",
-        "elliot_delete_skill",
         "elliot_clear_audit_transcripts",
         "elliot_uninstall_trace_hook",
     ):
         assert hidden not in names, f"{hidden} should be hidden from non-Studio agents"
+    for visible in ("elliot_delete_tool", "elliot_delete_skill"):
+        assert visible in names, f"{visible} should be visible to agents"
 
 
 def test_missing_required_arg_surfaces_validation_code(session: ElliotSession):

@@ -539,7 +539,10 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
         Every parameter must be routed somewhere (path placeholder, query, or
         body) — unrouted parameters are rejected so the tool cannot silently
-        drop an agent's input.
+        drop an agent's input. Parameters typed ``object`` or ``array`` carry
+        nested JSON: they must be routed via ``body_params`` with
+        ``body_format="json"`` (never a path placeholder or query value), or
+        creation fails with UNSUPPORTED_PARAM_ROUTING.
         """
         try:
             source = session.sources.get(source_id)
@@ -671,7 +674,18 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
     @mcp.tool()
     def elliot_update_tool(tool_id: str, patch: dict) -> dict:  # type: ignore[type-arg]
-        """Partially update a tool definition (name, description, sql, parameters)."""
+        """Partially update a tool definition — including the shaping fields.
+
+        ``patch`` merges into the existing definition. Beyond name /
+        description / sql / parameters, this is THE way to set the
+        response-shaping and contract fields that have no create-time argument:
+        ``limit``, ``return_fields`` (with alias + aggregation),
+        ``filter_groups``, ``response_shape`` ({max_rows, rename}),
+        ``output_schema``, ``run_async``, ``destructive``, and per-parameter
+        ``enum`` / ``minimum`` / ``maximum`` / ``default``. Use them to keep
+        results small and typed instead of hand-writing SQL projections.
+        The built connector is refreshed automatically after the update.
+        """
         try:
             tool = session.registry.get(tool_id)
             if tool is None:

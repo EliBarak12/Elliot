@@ -182,8 +182,10 @@ def register_eval_tools(mcp: FastMCP, session: ElliotSession) -> None:
         """List discoverable eval suites — the ``suite_id`` values elliot_run_eval accepts.
 
         Scans ``<EVAL_DIR>`` (default ``.elliot/eval``) for ``.yaml`` / ``.yml`` /
-        ``.json`` files; each suite_id is the filename stem. Lets a UI populate a
-        suite dropdown instead of asking the user to guess a name.
+        ``.json`` files; each suite_id is the filename stem. An empty list is
+        normal on a fresh workspace (nothing is seeded): pass ``cases`` inline
+        to ``elliot_run_eval`` — the primary mode on Elliot Cloud — or write a
+        suite file first.
         """
         try:
             eval_dir = Path(EVAL_DIR)

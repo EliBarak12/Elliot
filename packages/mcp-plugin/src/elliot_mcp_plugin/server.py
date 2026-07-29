@@ -5,11 +5,16 @@ from typing import Any
 import mcp.types as types
 import structlog
 from mcp.server import Server
-from mcp.server.fastmcp import FastMCP
 from mcp.server.stdio import stdio_server
 
 from elliot_core.connector.schema_gen import to_mcp_tool_schema
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.mcp_compat import (
+    FastMCP,
+    ToolError,
+    wrap_tool_calls,
+    wrap_tool_listing,
+)
 from elliot_core.tools.executor import ToolExecutor
 from elliot_core.types.connector import ConnectorConfig
 
@@ -20,10 +25,10 @@ def _make_annotations(schema: dict[str, Any]) -> types.ToolAnnotations:
     ann = schema.get("annotations", {})
     return types.ToolAnnotations(
         title=ann.get("title"),
-        readOnlyHint=ann.get("readOnlyHint"),
-        destructiveHint=ann.get("destructiveHint"),
-        idempotentHint=ann.get("idempotentHint"),
-        openWorldHint=ann.get("openWorldHint"),
+        read_only_hint=ann.get("readOnlyHint"),
+        destructive_hint=ann.get("destructiveHint"),
+        idempotent_hint=ann.get("idempotentHint"),
+        open_world_hint=ann.get("openWorldHint"),
     )
 
 
@@ -36,39 +41,40 @@ def build_tool_list(config: ConnectorConfig) -> list[types.Tool]:
             types.Tool(
                 name=schema["name"],
                 description=schema["description"],
-                inputSchema=schema["inputSchema"],
+                input_schema=schema["inputSchema"],
                 annotations=_make_annotations(schema),
-                outputSchema=schema.get("outputSchema"),
+                output_schema=schema.get("outputSchema"),
             )
         )
     return tools
 
 
-def create_server(config: ConnectorConfig, secrets: dict[str, str]) -> Server:
-    server = Server("elliot")
+def create_server(config: ConnectorConfig, secrets: dict[str, str]) -> Server[Any]:
     executor = ToolExecutor(config, secrets)
     tools = build_tool_list(config)
 
-    @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
-    async def list_tools() -> list[types.Tool]:
-        return tools
+    async def list_tools(
+        ctx: Any, params: types.PaginatedRequestParams | None
+    ) -> types.ListToolsResult:
+        return types.ListToolsResult(tools=tools)
 
-    @server.call_tool()  # type: ignore[untyped-decorator]
-    async def call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
+    async def call_tool(ctx: Any, params: types.CallToolRequestParams) -> types.CallToolResult:
+        name = params.name
+        arguments = params.arguments or {}
         try:
-            result = await executor.execute(name, arguments or {})
+            result = await executor.execute(name, arguments)
             structured = {"rows": result.rows, "count": len(result.rows)}
             summary = f"{len(result.rows)} row(s) returned"
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=summary)],
-                structuredContent=structured,
-                isError=False,
+                structured_content=structured,
+                is_error=False,
             )
         except ElliotError as exc:
             content = to_mcp_error_content(exc)
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=content["text"])],
-                isError=True,
+                is_error=True,
             )
         except Exception as exc:
             # CLAUDE.md: every MCP tool handler has a top-level catch-all.
@@ -78,10 +84,10 @@ def create_server(config: ConnectorConfig, secrets: dict[str, str]) -> Server:
             content = to_mcp_error_content(exc)
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=content["text"])],
-                isError=True,
+                is_error=True,
             )
 
-    return server
+    return Server("elliot", on_list_tools=list_tools, on_call_tool=call_tool)
 
 
 def _local_instructions() -> str:
@@ -136,12 +142,9 @@ def create_elliot_server(session: Any) -> FastMCP:
     from elliot_mcp_plugin.tools.tool_tools import register_tool_tools
     from elliot_mcp_plugin.tools.trace_tools import register_trace_tools
 
-    mcp = FastMCP(
-        "elliot",
-        instructions=_local_instructions(),
-        streamable_http_path="/",
-        stateless_http=True,
-    )
+    # Transport options (path, statelessness) moved to the HTTP app builder in
+    # SDK v2 — see main.py, which mounts the app at "/" with stateless_http=True.
+    mcp = FastMCP("elliot", instructions=_local_instructions())
     register_source_tools(mcp, session)
     register_sql_tools(mcp, session)
     register_tool_tools(mcp, session)
@@ -223,47 +226,46 @@ def _hide_destructive_tools_from_other_agents(mcp: FastMCP) -> None:
     destructive actions (currently ``studio_remove_source``) are hidden, so
     source/tool deletion must be triggered by a human in Studio or Cloud.
     """
-    tool_manager = mcp._tool_manager
-    original_list = tool_manager.list_tools
-    original_call = tool_manager.call_tool
 
-    def filtered_list() -> Any:
-        tools = original_list()
+    def filtered_list(tools: list[Any]) -> list[Any]:
         if _is_studio_client():
             return tools
         return [t for t in tools if t.name not in _DESTRUCTIVE_TOOL_NAMES]
 
-    async def filtered_call(
-        name: str,
-        arguments: dict[str, Any],
-        context: Any = None,
-        convert_result: bool = False,
-    ) -> Any:
-        if name in _DESTRUCTIVE_TOOL_NAMES and not _is_studio_client():
-            raise ElliotError(
-                "TOOL_NOT_FOUND",
-                f"Unknown tool: {name}",
-            )
-        from mcp.server.fastmcp.exceptions import ToolError
-        from pydantic import ValidationError as PydanticValidationError
+    def make_filtered_call(original_call: Any) -> Any:
+        async def filtered_call(
+            name: str,
+            arguments: dict[str, Any],
+            context: Any = None,
+            convert_result: bool = False,
+        ) -> Any:
+            if name in _DESTRUCTIVE_TOOL_NAMES and not _is_studio_client():
+                raise ElliotError(
+                    "TOOL_NOT_FOUND",
+                    f"Unknown tool: {name}",
+                )
+            from pydantic import ValidationError as PydanticValidationError
 
-        try:
-            return await original_call(name, arguments, context, convert_result)
-        except ToolError as exc:
-            # FastMCP's Tool.run wraps every in-handler exception — including the
-            # pydantic argument-validation error that fires BEFORE a handler's
-            # own try/except — as ToolError(__cause__=original). Re-surface the
-            # cause as the structured "[CODE] message" envelope so agents can
-            # branch on VALIDATION_*/Elliot codes instead of a raw pydantic dump.
-            cause = exc.__cause__
-            if isinstance(cause, ElliotError):
-                raise ToolError(f"[{cause.code}] {cause.message}") from cause
-            if isinstance(cause, PydanticValidationError):
-                raise ToolError(_format_validation_error(cause)) from cause
-            raise
+            try:
+                return await original_call(name, arguments, context, convert_result)
+            except ToolError as exc:
+                # The SDK's Tool.run wraps every in-handler exception — including
+                # the pydantic argument-validation error that fires BEFORE a
+                # handler's own try/except — as ToolError(__cause__=original).
+                # Re-surface the cause as the structured "[CODE] message"
+                # envelope so agents can branch on VALIDATION_*/Elliot codes
+                # instead of a raw pydantic dump.
+                cause = exc.__cause__
+                if isinstance(cause, ElliotError):
+                    raise ToolError(f"[{cause.code}] {cause.message}") from cause
+                if isinstance(cause, PydanticValidationError):
+                    raise ToolError(_format_validation_error(cause)) from cause
+                raise
 
-    tool_manager.list_tools = filtered_list  # type: ignore[method-assign]
-    tool_manager.call_tool = filtered_call  # type: ignore[method-assign]
+        return filtered_call
+
+    wrap_tool_listing(mcp, filtered_list)
+    wrap_tool_calls(mcp, make_filtered_call)
 
 
 async def run_stdio(config: ConnectorConfig, secrets: dict[str, str]) -> None:

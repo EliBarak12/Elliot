@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from mcp.server.fastmcp import FastMCP
 
+from elliot_core.mcp_compat import FastMCP
 from elliot_mcp_plugin.resources import register_resources
 
 

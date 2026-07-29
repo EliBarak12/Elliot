@@ -6,10 +6,10 @@ import re
 from typing import Annotated, Any
 
 import structlog
-from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.mcp_compat import FastMCP
 from elliot_core.naming import is_valid_identifier, slugify_identifier
 from elliot_core.sql import extract_sql_params, has_select_star, referenced_base_tables
 from elliot_core.sqlite.query_runner import validate_tool_sql

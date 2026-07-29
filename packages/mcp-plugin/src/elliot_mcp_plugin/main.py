@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from elliot_core.auth_middleware import ApiKeyMiddleware, enforce_auth_configured
 from elliot_core.http_middleware import AgentIdentityMiddleware
+from elliot_core.mcp_compat import build_http_app
 from elliot_mcp_plugin import __version__
 from elliot_mcp_plugin.server import create_elliot_server
 from elliot_mcp_plugin.session import ElliotSession
@@ -21,8 +22,12 @@ log = structlog.get_logger(__name__)
 session = ElliotSession(cwd=os.environ.get("ELLIOT_WORKSPACE", "."))
 
 mcp = create_elliot_server(session)
-# Initialize the session manager by calling streamable_http_app once at module level
-_mcp_app = mcp.streamable_http_app()
+# Initialize the session manager by building the HTTP app once at module
+# level. Transport options live on the app builder in SDK v2 (not the server
+# constructor): the app is mounted under /mcp so its internal path is "/", and
+# stateless serves both 2026-07-28 stateless clients and 2025-era handshake
+# clients without minting transport sessions.
+_mcp_app = build_http_app(mcp, path="/", stateless=True)
 
 
 @asynccontextmanager

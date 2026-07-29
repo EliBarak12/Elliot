@@ -18,7 +18,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 import structlog
-from mcp.server.fastmcp import FastMCP
+
+from elliot_core.mcp_compat import FastMCP
 
 log = structlog.get_logger(__name__)
 

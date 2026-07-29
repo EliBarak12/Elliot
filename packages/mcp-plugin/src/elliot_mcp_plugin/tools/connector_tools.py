@@ -14,10 +14,10 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from mcp.server.fastmcp import FastMCP
 
 from elliot_core.connector.serializer import serialize_connector
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.mcp_compat import FastMCP
 from elliot_core.types.connector import ConnectorConfig
 from elliot_core.types.tool import ToolDefinition
 from elliot_mcp_plugin.session import ElliotSession

@@ -6,8 +6,8 @@ import os
 from pathlib import Path
 
 import pytest
-from mcp.server.fastmcp import FastMCP
 
+from elliot_core.mcp_compat import FastMCP
 from elliot_mcp_plugin.prompts import (
     Skill,
     _parse_skill_file,

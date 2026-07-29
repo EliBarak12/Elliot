@@ -10,10 +10,10 @@ from __future__ import annotations
 import json
 
 import structlog
-from mcp.server.fastmcp import FastMCP
 
 from elliot_core.audit.models import ProductIntent
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.mcp_compat import FastMCP
 from elliot_mcp_plugin.session import ElliotSession
 
 log = structlog.get_logger(__name__)

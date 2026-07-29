@@ -9,6 +9,7 @@ import json
 import os
 import re
 import time
+import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
@@ -16,7 +17,6 @@ from typing import Annotated, Any
 import structlog
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -37,6 +37,16 @@ from elliot_core.auth_middleware import ApiKeyMiddleware, enforce_auth_configure
 from elliot_core.danger_zone import is_destructive
 from elliot_core.error_middleware import register_error_handlers
 from elliot_core.http_middleware import AgentIdentityMiddleware, UserIdentityMiddleware
+from elliot_core.mcp_compat import (
+    Context,
+    FastMCP,
+    MCPDeprecationWarning,
+    ToolError,
+    build_http_app,
+    get_client_identity,
+    register_legacy_set_level,
+    wrap_tool_calls,
+)
 from elliot_core.user_identity import get_current_user_id
 
 from .audit import AuditLog
@@ -321,23 +331,6 @@ def _identity_payload(identity: AgentIdentity | None) -> dict[str, Any] | None:
     return payload if any(payload.values()) else None
 
 
-def _capability_names(capabilities: Any) -> tuple[str, ...] | None:
-    """Reduce an MCP ``ClientCapabilities`` object to the names the client
-    advertised (``roots``, ``sampling``, ``elicitation``, ``experimental``).
-
-    The handshake sends a present-but-empty object for each supported
-    capability and ``None`` for the rest, so a non-None attribute means
-    "supported". Returns ``None`` when nothing was advertised."""
-    if capabilities is None:
-        return None
-    names = [
-        name
-        for name in ("roots", "sampling", "elicitation", "experimental")
-        if getattr(capabilities, name, None) is not None
-    ]
-    return tuple(names) if names else None
-
-
 def _agent_hint_from_identity(identity: AgentIdentity | None) -> str:
     """Best-effort string for the legacy ``agent_hint`` column."""
     if identity is None:
@@ -346,18 +339,20 @@ def _agent_hint_from_identity(identity: AgentIdentity | None) -> str:
     return label if label and label != "unknown" else "mcp"
 
 
-def _current_session_and_identity(mcp: FastMCP) -> tuple[str | None, dict[str, Any] | None]:
+def _current_session_and_identity(ctx: Any) -> tuple[str | None, dict[str, Any] | None]:
     """Best-effort (session_id, identity) for the in-flight MCP request.
 
     Mirrors the correlation logic in ``_register_tool``'s handler: prefer the
     stable ``mcp-session-id`` header, fall back to the per-call request id, and
-    enrich the contextvar identity with ``clientInfo`` from the handshake.
+    enrich the contextvar identity with client info from either protocol era
+    (initialize handshake or per-request ``_meta``). ``ctx`` is the SDK context
+    injected into the calling handler — v2 removed ``mcp.get_context()``, so
+    callers must thread it through.
     """
     session_id: str | None = None
     client_name: str | None = None
     client_version: str | None = None
-    with contextlib.suppress(Exception):
-        ctx = mcp.get_context()
+    if ctx is not None:
         with contextlib.suppress(Exception):
             session_id = ctx.request_id
         with contextlib.suppress(Exception):
@@ -366,16 +361,29 @@ def _current_session_and_identity(mcp: FastMCP) -> tuple[str | None, dict[str, A
                 mcp_session_id = request.headers.get("mcp-session-id")
                 if mcp_session_id:
                     session_id = mcp_session_id
-        with contextlib.suppress(Exception):
-            client_params = ctx.session.client_params
-            if client_params is not None and client_params.clientInfo is not None:
-                client_name = client_params.clientInfo.name
-                client_version = client_params.clientInfo.version
+        sdk_identity = get_client_identity(ctx)
+        client_name = sdk_identity.client_name
+        client_version = sdk_identity.client_version
     identity = get_current_agent_identity()
     if client_name:
         with contextlib.suppress(Exception):
             identity = merge_client_info(identity, client_name, client_version)
     return session_id, _identity_payload(identity)
+
+
+def _ctx_signature_param() -> inspect.Parameter:
+    """A keyword-only ``ctx`` parameter carrying the SDK ``Context`` annotation.
+
+    Appended to the synthetic signatures of dynamically built handlers so the
+    SDK injects its per-request context there (and keeps it out of the tool's
+    input schema — Context-annotated parameters are never surfaced to agents).
+    """
+    return inspect.Parameter(
+        "ctx",
+        inspect.Parameter.KEYWORD_ONLY,
+        annotation=Context,
+        default=None,
+    )
 
 
 def _result_truncated(result: Any) -> bool:
@@ -548,7 +556,11 @@ async def _emit_runtime_log(ctx: Any, level: str, data: dict[str, Any]) -> None:
     """
     if ctx is None:
         return
-    with contextlib.suppress(Exception):
+    with contextlib.suppress(Exception), warnings.catch_warnings():
+        # MCP logging is deprecated on the 2026-07-28 path (SEP-2577) but still
+        # the only inline channel for 2025-era clients; the SDK gates delivery
+        # per era, so we keep emitting and silence its deprecation chatter.
+        warnings.simplefilter("ignore", MCPDeprecationWarning)
         await ctx.session.send_log_message(
             level=level,
             data=data,
@@ -630,12 +642,12 @@ def create_runtime_server(
             "(outcome 'success', 'failure', or 'partial') so the connector author "
             "can see what to improve."
         )
-    # streamable_http_path="/" so that mounting at /mcp exposes the MCP
-    # endpoint at /mcp/ (matching the plugin and the docs), not /mcp/mcp/.
     # serverInfo.name is the connector's public identity — it is what MCP
     # clients (Claude, Cursor) and graders display. A hardcoded
-    # "elliot-runtime" made every published connector anonymous.
-    mcp = FastMCP(cfg.name or "elliot-runtime", instructions=instructions, streamable_http_path="/")
+    # "elliot-runtime" made every published connector anonymous. Transport
+    # options (path, statelessness) moved to the HTTP app builder in SDK v2 —
+    # see create_app.
+    mcp = FastMCP(cfg.name or "elliot-runtime", instructions=instructions)
 
     task_store = get_task_store()
     for tool_def in cfg.tools:
@@ -705,27 +717,29 @@ def _register_validation_capture(
         return
 
     import pydantic
-    from mcp.server.fastmcp.exceptions import ToolError
 
-    tool_manager = mcp._tool_manager
-    orig_call = tool_manager.call_tool
+    def _make_wrapped(orig_call: Any) -> Any:
+        async def _wrapped(name: str, arguments: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+            try:
+                return await orig_call(name, arguments, *args, **kwargs)
+            except ToolError as exc:
+                if isinstance(exc.__cause__, pydantic.ValidationError):
+                    # The SDK context rides as call_tool's third argument; use
+                    # it for correlation (v2 removed mcp.get_context()).
+                    ctx = args[0] if args else kwargs.get("context")
+                    with contextlib.suppress(Exception):
+                        _record_validation_failure(
+                            ctx, store, tracker, connector_slug, name, arguments, exc
+                        )
+                raise
 
-    async def _wrapped(name: str, arguments: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
-        try:
-            return await orig_call(name, arguments, *args, **kwargs)
-        except ToolError as exc:
-            if isinstance(exc.__cause__, pydantic.ValidationError):
-                with contextlib.suppress(Exception):
-                    _record_validation_failure(
-                        mcp, store, tracker, connector_slug, name, arguments, exc
-                    )
-            raise
+        return _wrapped
 
-    tool_manager.call_tool = _wrapped  # type: ignore[method-assign]
+    wrap_tool_calls(mcp, _make_wrapped)
 
 
 def _record_validation_failure(
-    mcp: FastMCP,
+    ctx: Any,
     store: ObservationStore | None,
     tracker: SessionTracker | None,
     connector_slug: str | None,
@@ -734,7 +748,7 @@ def _record_validation_failure(
     exc: Exception,
 ) -> None:
     """Write one error observation for an argument-validation failure."""
-    session_id, identity_payload = _current_session_and_identity(mcp)
+    session_id, identity_payload = _current_session_and_identity(ctx)
     if not session_id:
         return
     # Single compact line — never the full multi-line pydantic dump.
@@ -784,15 +798,10 @@ def _register_logging(mcp: FastMCP) -> None:
     ``logging/setLevel`` call fails with "Method not found". Registering the
     handler both advertises the capability and lets the client choose its
     minimum severity; the lowlevel session then filters notifications to that
-    level automatically.
+    level automatically. On the 2026-07-28 path log delivery is per-request
+    ``_meta`` opt-in and the SDK gates it without our involvement.
     """
-    from mcp import types
-
-    @mcp._mcp_server.set_logging_level()  # type: ignore[no-untyped-call, untyped-decorator]
-    async def _set_level(level: types.LoggingLevel) -> None:  # pragma: no cover - thin shim
-        # The ServerSession records the level and filters send_log_message on it;
-        # we only need to accept the request so the capability is advertised.
-        return None
+    register_legacy_set_level(mcp)
 
 
 def _resolve_stable_session_id(ctx: Any) -> str | None:
@@ -1004,15 +1013,15 @@ def _register_tool(
     # A write is the "danger zone" when its verb is irreversibly destructive
     # (delete/remove/…) OR the author explicitly flagged it destructive (for the
     # business-critical actions the verbs miss). Additive creates/updates carry
-    # destructiveHint=False so clients don't gate them — agents operate the
+    # destructive_hint=False so clients don't gate them — agents operate the
     # product freely, and only genuinely destructive calls prompt for approval.
     is_destructive = _is_destructive(td.category, td.id, getattr(td, "destructive", None))
     annotations = ToolAnnotations(
         title=td.name,
-        readOnlyHint=read_only,
-        destructiveHint=is_destructive,
-        idempotentHint=read_only,
-        openWorldHint=True,
+        read_only_hint=read_only,
+        destructive_hint=is_destructive,
+        idempotent_hint=read_only,
+        open_world_hint=True,
     )
     run_async: bool = getattr(td, "run_async", False)
     require_confirmation = is_destructive and _require_destructive_confirmation()
@@ -1022,17 +1031,19 @@ def _register_tool(
     async def _handler(**kwargs: Any) -> dict[str, Any]:
         import time
 
-        from mcp.server.fastmcp import Context
-
-        ctx: Context[Any, Any, Any] | None = None
+        # The SDK injects its per-request Context via the ctx parameter added
+        # to the synthetic signature below (v2 removed mcp.get_context()); pop
+        # it so it never reaches the executor as a tool argument.
+        ctx: Any = kwargs.pop("ctx", None)
         session_id: str | None = None
         mcp_session_id: str | None = None
         client_name: str | None = None
         client_version: str | None = None
         protocol_version: str | None = None
         capabilities: tuple[str, ...] | None = None
-        with contextlib.suppress(Exception):
-            ctx = mcp.get_context()
+        header_client: str | None = None
+        header_client_version: str | None = None
+        header_model: str | None = None
         await _emit_runtime_log(ctx, "debug", {"event": "tool.call.start", "tool": td.id})
         if ctx is not None:
             # request_id is per-call — only a last-resort correlation id.
@@ -1040,9 +1051,6 @@ def _register_tool(
                 session_id = ctx.request_id
             # Prefer the MCP protocol session id (stable for the whole agent
             # connection) so a multi-step run groups into one trace.
-            header_client: str | None = None
-            header_client_version: str | None = None
-            header_model: str | None = None
             with contextlib.suppress(Exception):
                 request = ctx.request_context.request
                 if request is not None:
@@ -1057,17 +1065,15 @@ def _register_tool(
                     header_model = request.headers.get("x-model") or request.headers.get(
                         "x-model-name"
                     )
-            # clientInfo / protocolVersion / capabilities from the MCP
-            # `initialize` handshake — the spec-backed signals.
-            with contextlib.suppress(Exception):
-                client_params = ctx.session.client_params
-                if client_params is not None:
-                    if client_params.clientInfo is not None:
-                        client_name = client_params.clientInfo.name
-                        client_version = client_params.clientInfo.version
-                    protocol_version = getattr(client_params, "protocolVersion", None)
-                    capabilities = _capability_names(getattr(client_params, "capabilities", None))
-            # Fall back to the explicit header when the handshake didn't surface
+            # clientInfo / protocolVersion / capabilities — spec-backed signals
+            # from either era: the 2025 initialize handshake or the 2026
+            # per-request `_meta` (mcp_compat reads whichever is present).
+            sdk_identity = get_client_identity(ctx)
+            client_name = sdk_identity.client_name
+            client_version = sdk_identity.client_version
+            protocol_version = sdk_identity.protocol_version
+            capabilities = sdk_identity.capabilities
+            # Fall back to the explicit header when the protocol didn't surface
             # a client — otherwise every real call records as "unknown".
             if not client_name and header_client:
                 client_name = header_client
@@ -1239,12 +1245,14 @@ def _register_tool(
                 default=False,
             )
         )
+    params.append(_ctx_signature_param())
     object.__setattr__(
         _handler,
         "__signature__",
         inspect.Signature(params, return_annotation=dict[str, Any]),
     )
     _handler.__annotations__["return"] = dict[str, Any]
+    _handler.__annotations__["ctx"] = Context
 
     mcp.tool(
         name=td.id,
@@ -1308,10 +1316,10 @@ def _register_feedback_tool(
 
     annotations = ToolAnnotations(
         title="Submit agent feedback",
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=False,
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=False,
     )
 
     @mcp.tool(
@@ -1335,6 +1343,7 @@ def _register_feedback_tool(
         input_summary: str = "",
         output_summary: str = "",
         detail: str = "",
+        ctx: Context = None,  # type: ignore[assignment]  # injected by the SDK
     ) -> dict[str, Any]:
         normalized = (outcome or "").strip().lower()
         if normalized not in _FEEDBACK_OUTCOMES:
@@ -1345,7 +1354,7 @@ def _register_feedback_tool(
             )
             raise ValueError(to_mcp_error_content(exc)["text"])
 
-        session_id, identity = _current_session_and_identity(mcp)
+        session_id, identity = _current_session_and_identity(ctx)
 
         def _persist() -> None:
             store.write_feedback(
@@ -1734,10 +1743,10 @@ def _register_one_skill_tool(
     require_confirmation = any_destructive and _require_destructive_confirmation()
     annotations = ToolAnnotations(
         title=skill_name,
-        readOnlyHint=False,
-        destructiveHint=any_destructive,
-        idempotentHint=False,
-        openWorldHint=True,
+        read_only_hint=False,
+        destructive_hint=any_destructive,
+        idempotent_hint=False,
+        open_world_hint=True,
     )
 
     # Skill calls are observed through the SAME per-call observer as tools — audit
@@ -1748,9 +1757,7 @@ def _register_one_skill_tool(
     async def _skill_handler(**kwargs: Any) -> dict[str, Any]:
         import time
 
-        ctx: Any = None
-        with contextlib.suppress(Exception):
-            ctx = mcp.get_context()
+        ctx: Any = kwargs.pop("ctx", None)
         session_id = _resolve_stable_session_id(ctx)
 
         if require_confirmation:
@@ -1856,12 +1863,14 @@ def _register_one_skill_tool(
                 default=False,
             )
         )
+    sig_params.append(_ctx_signature_param())
     object.__setattr__(
         _skill_handler,
         "__signature__",
         inspect.Signature(sig_params, return_annotation=dict[str, Any]),
     )
     _skill_handler.__annotations__["return"] = dict[str, Any]
+    _skill_handler.__annotations__["ctx"] = Context
 
     mcp.tool(name=skill_id, title=skill_name, description=skill_desc, annotations=annotations)(
         _skill_handler
@@ -1950,7 +1959,11 @@ def create_app(
         config, executor, audit=audit, tracker=tracker, store=store, executor_pool=pool
     )
 
-    _mcp_app = mcp.streamable_http_app()
+    # path="/" so that mounting at /mcp exposes the MCP endpoint at /mcp/
+    # (matching the plugin and the docs), not /mcp/mcp/. The runtime stays on
+    # transport sessions for now (stateless=False); P2 of the 2026-07-28
+    # upgrade flips it once Elliot session handles carry the correlation.
+    _mcp_app = build_http_app(mcp, path="/", stateless=False)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Any:

@@ -7,9 +7,9 @@ import inspect
 from pathlib import Path
 
 import pytest
-from mcp.server.fastmcp import FastMCP
 
 from elliot_core.connector.serializer import deserialize_connector
+from elliot_core.mcp_compat import FastMCP
 from elliot_mcp_plugin.server import create_elliot_server
 from elliot_mcp_plugin.session import ElliotSession
 

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import structlog
-from mcp.server.fastmcp import FastMCP
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.mcp_compat import FastMCP
 from elliot_core.types.connector import ProductContext
 from elliot_mcp_plugin.session import ElliotSession
 

@@ -22,6 +22,18 @@ export interface SourceConfig {
   data_path: string | null;
 }
 
+/** MCP Apps view config for a tool (ToolUIConfig on the Python side). */
+export interface ToolUiConfig {
+  enabled: boolean;
+  preset: "auto" | "table" | "detail" | "metric" | "chart" | "form" | "markdown" | "custom";
+  title?: string | null;
+  mapping: Record<string, string>;
+  custom_html?: string | null;
+  csp_connect_domains: string[];
+  prefer_border: boolean;
+  visibility: Array<"model" | "app">;
+}
+
 export interface ToolDefinition {
   id: string;
   name: string;
@@ -33,6 +45,7 @@ export interface ToolDefinition {
   filter_groups?: FilterGroup[];
   return_fields?: ReturnField[];
   api_mapping?: ApiRequestMapping | null;
+  ui?: ToolUiConfig | null;
 }
 
 export interface SkillStep {

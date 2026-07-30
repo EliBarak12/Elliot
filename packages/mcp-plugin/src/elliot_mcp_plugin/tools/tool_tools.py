@@ -733,6 +733,39 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
+    def elliot_preview_tool_ui(tool_id: str, ui: dict | None = None) -> dict:  # type: ignore[type-arg]
+        """Build the MCP Apps HTML view for a tool — exactly what agents get at
+        ``ui://<slug>/<tool_id>`` — so Studio can render it in its sandboxed
+        preview. Pass ``ui`` (a ToolUIConfig-shaped dict) to preview a DRAFT
+        view config without saving it to the tool first.
+        """
+        try:
+            from pathlib import Path
+
+            from elliot_core.apps import build_tool_app_html, ui_resource_uri
+            from elliot_core.types.tool import ToolUIConfig
+
+            tool = session.registry.get(tool_id)
+            if tool is None:
+                return {"error": f"Tool not found: {tool_id}"}
+            ui_cfg = ToolUIConfig.model_validate(ui) if ui else (tool.ui or ToolUIConfig())
+            slug = session.connector.slug if session.connector else None
+            connector_dir = Path(session.workspace._dir).resolve().parent
+            html = build_tool_app_html(
+                tool, ui_cfg, connector_slug=slug, connector_dir=connector_dir
+            )
+            return {
+                "tool_id": tool_id,
+                "uri": ui_resource_uri(slug, tool_id),
+                "html": html,
+                "preset": ui_cfg.preset,
+            }
+        except ElliotError as exc:
+            return to_mcp_error_content(exc)
+        except Exception as exc:
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+
+    @mcp.tool()
     def elliot_validate_tool(tool: dict) -> dict:  # type: ignore[type-arg]
         """Validate a tool definition without saving it to the registry.
 

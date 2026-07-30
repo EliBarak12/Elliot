@@ -150,4 +150,47 @@ async function listTools(): Promise<unknown> {
   return parsed.tools ?? [];
 }
 
-export { getMcpClient, callTool, listTools };
+/** The full MCP tool result — text, structured content AND result _meta.
+ * `callTool` above deliberately collapses to the parsed text body (every
+ * existing hook depends on that); App previews need the rest of the
+ * envelope, so this variant keeps it. */
+export interface McpToolResult {
+  data: unknown;
+  content: Array<{ type: string; text?: string }>;
+  structuredContent: Record<string, unknown> | null;
+  meta: Record<string, unknown> | null;
+  isError: boolean;
+}
+
+async function callToolResult(
+  name: string,
+  args: Record<string, unknown>
+): Promise<McpToolResult> {
+  const client = await getMcpClient();
+  const result = await client.callTool({ name, arguments: args });
+  const content = (result.content ?? []) as Array<{ type: string; text?: string }>;
+  const text = content[0]?.text ?? "{}";
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = text;
+  }
+  return {
+    data,
+    content,
+    structuredContent: (result.structuredContent as Record<string, unknown> | undefined) ?? null,
+    meta: (result._meta as Record<string, unknown> | undefined) ?? null,
+    isError: result.isError === true,
+  };
+}
+
+/** Read an MCP resource (e.g. a ui:// App template) from the plugin. */
+async function readResource(uri: string): Promise<{ text: string; mimeType: string | null }> {
+  const client = await getMcpClient();
+  const result = await client.readResource({ uri });
+  const first = result.contents[0] as { text?: string; mimeType?: string } | undefined;
+  return { text: first?.text ?? "", mimeType: first?.mimeType ?? null };
+}
+
+export { getMcpClient, callTool, callToolResult, listTools, readResource };

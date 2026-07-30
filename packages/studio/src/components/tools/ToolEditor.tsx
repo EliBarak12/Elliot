@@ -12,7 +12,8 @@ import { FilterGroupBuilder, type FilterGroup } from "./FilterGroupBuilder";
 import { ReturnFieldSelector, type ReturnField } from "./ReturnFieldSelector";
 import { ApiMappingForm, type ApiRequestMapping } from "./ApiMappingForm";
 import { ToolTester } from "./ToolTester";
-import type { ToolDefinition, ParameterDefinition } from "@/types/api";
+import { ToolUITab } from "./ToolUITab";
+import type { ToolDefinition, ParameterDefinition, ToolUiConfig } from "@/types/api";
 
 type Category = "READ" | "WRITE" | "ACTION" | "AGGREGATE";
 
@@ -51,6 +52,7 @@ export function ToolEditor({ tool, onSaved, onDeleted }: Props) {
   const [apiMapping, setApiMapping] = useState<ApiRequestMapping>(
     tool?.api_mapping ?? DEFAULT_API_MAPPING
   );
+  const [ui, setUi] = useState<ToolUiConfig | null>(tool?.ui ?? null);
   const [saved, setSaved] = useState(false);
   const [status, setStatus] = useState<{ type: "ok" | "error"; message: string } | null>(null);
 
@@ -67,6 +69,7 @@ export function ToolEditor({ tool, onSaved, onDeleted }: Props) {
     setFilterGroups(tool.filter_groups ?? []);
     setReturnFields(tool.return_fields ?? []);
     setApiMapping(tool.api_mapping ?? DEFAULT_API_MAPPING);
+    setUi(tool.ui ?? null);
     setSaved(false);
     setStatus(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -108,6 +111,7 @@ export function ToolEditor({ tool, onSaved, onDeleted }: Props) {
           category,
           source_ids: sourceIds,
           parameters,
+          ui,
           ...(isRead
             ? { filter_groups: filterGroups, return_fields: returnFields }
             : { api_mapping: apiMapping }),
@@ -324,6 +328,10 @@ export function ToolEditor({ tool, onSaved, onDeleted }: Props) {
           </label>
           <ApiMappingForm value={apiMapping} onChange={setApiMapping} />
         </div>
+      )}
+
+      {tool && (
+        <ToolUITab toolId={tool.id} value={ui} onChange={setUi} returnFields={returnFields} />
       )}
 
       {status && (

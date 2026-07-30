@@ -16,6 +16,7 @@ import {
 import { useTools, useCallTool } from '@/hooks/useTools';
 import { ParameterForm } from '@/components/playground/ParameterForm';
 import { ResultViewer } from '@/components/playground/ResultViewer';
+import { AppResultView } from '@/components/playground/AppPreviewHost';
 import type { ToolDefinition } from '@/types/api';
 import { cn } from '@/lib/utils';
 
@@ -51,8 +52,12 @@ export default function PlaygroundPage() {
     latencyMs: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [resultView, setResultView] = useState<'app' | 'json'>('app');
 
   const selectedTool = tools.find((t) => t.id === selectedToolId) ?? null;
+  // A tool with a UI config defaults to its App view — the same thing an
+  // agent's host (Claude/ChatGPT) renders for it.
+  const hasAppView = Boolean(selectedTool?.ui && selectedTool.ui.enabled !== false);
 
   const handleToolChange = (id: string) => {
     setSelectedToolId(id);
@@ -256,19 +261,54 @@ export default function PlaygroundPage() {
                       <span>{selectedTool?.name}</span>
                     </CardDescription>
                   </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleExportFixture}
-                    className="gap-1.5"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                    Export fixture
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    {hasAppView && (
+                      <div
+                        className="flex rounded-md border border-border overflow-hidden"
+                        data-testid="result-view-toggle"
+                      >
+                        {(['app', 'json'] as const).map((mode) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => setResultView(mode)}
+                            className={cn(
+                              'px-2.5 py-1 text-xs uppercase transition-colors',
+                              resultView === mode
+                                ? 'bg-primary text-primary-foreground'
+                                : 'text-muted-foreground hover:bg-muted'
+                            )}
+                          >
+                            {mode}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleExportFixture}
+                      className="gap-1.5"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Export fixture
+                    </Button>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>
-                <ResultViewer result={currentResult.result} latencyMs={currentResult.latencyMs} />
+                {hasAppView && resultView === 'app' && selectedTool ? (
+                  <AppResultView
+                    toolId={selectedTool.id}
+                    args={params}
+                    resultData={currentResult.result}
+                  />
+                ) : (
+                  <ResultViewer
+                    result={currentResult.result}
+                    latencyMs={currentResult.latencyMs}
+                  />
+                )}
               </CardContent>
             </Card>
           ) : (

@@ -1754,3 +1754,111 @@ async def test_skill_call_is_recorded_in_the_observation_store() -> None:
         assert not res.is_error
 
     assert any(c.get("tool_id") == "do_it" for c in store.recent_tool_calls(50))
+
+
+# ── 2026-07-28: Elliot session handles on the stateless wire ─────────────────
+
+
+_MODERN_HEADERS = {
+    "Accept": "application/json, text/event-stream",
+    "MCP-Protocol-Version": "2026-07-28",
+}
+_MODERN_META = {
+    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    "io.modelcontextprotocol/clientCapabilities": {},
+    "io.modelcontextprotocol/clientInfo": {"name": "probe26", "version": "1"},
+}
+
+
+def _modern_call(client: TestClient, req_id: int, extra_headers: dict | None = None) -> tuple:
+    resp = client.post(
+        "/mcp/",
+        json={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "method": "tools/call",
+            "params": {"name": "list_animals", "arguments": {}, "_meta": _MODERN_META},
+        },
+        headers={
+            **_MODERN_HEADERS,
+            # 2026-07-28 header-based routing: Mcp-Name MUST match params.name
+            # on tools/call, else the server answers HeaderMismatch (-32020).
+            "Mcp-Method": "tools/call",
+            "Mcp-Name": "list_animals",
+            **(extra_headers or {}),
+        },
+    )
+    body = resp.text
+    if "data:" in body:
+        data = json.loads(next(ln for ln in body.splitlines() if ln.startswith("data:"))[5:])
+    else:
+        data = json.loads(body)
+    return resp, data
+
+
+@respx.mock
+def test_session_handle_minted_and_echoed_on_stateless_wire(app) -> None:
+    """A handle-less 2026 request gets a server-minted es_ handle echoed in
+    both the Elliot-Session-Id response header and the result _meta — the
+    spec-recommended 'server-minted handle' replacing protocol sessions."""
+    respx.get("https://api.example.com/animals").mock(
+        return_value=httpx.Response(200, json={"items": [{"id": 1, "name": "Rex"}]})
+    )
+    with TestClient(app) as client:
+        resp, data = _modern_call(client, 1)
+        assert resp.status_code == 200
+        header_handle = resp.headers.get("Elliot-Session-Id")
+        assert header_handle and header_handle.startswith("es_")
+        meta = data["result"].get("_meta") or {}
+        assert meta.get("io.elliot/session") == header_handle
+
+
+@respx.mock
+def test_echoed_handle_groups_calls_into_one_session(app) -> None:
+    """Two stateless calls echoing the same Elliot-Session-Id land in ONE
+    logical session (exact grouping — no heuristics), visible on /v1/sessions."""
+    respx.get("https://api.example.com/animals").mock(
+        return_value=httpx.Response(200, json={"items": [{"id": 1, "name": "Rex"}]})
+    )
+    with TestClient(app) as client:
+        resp1, _ = _modern_call(client, 1)
+        handle = resp1.headers["Elliot-Session-Id"]
+        resp2, _ = _modern_call(client, 2, {"Elliot-Session-Id": handle})
+        assert resp2.headers["Elliot-Session-Id"] == handle
+
+        sessions = client.get("/v1/sessions?n=10").json()
+        mine = [s for s in sessions if s["session_id"] == handle]
+        assert len(mine) == 1, f"expected one stitched session, got {sessions}"
+        assert mine[0]["total_tool_calls"] == 2
+
+        raw = client.get("/v1/sessions?n=10&stitched=0").json()
+        assert any(s["session_id"] == handle for s in raw)
+
+
+@respx.mock
+def test_meta_carried_handle_upgrades_minted_one(app) -> None:
+    """A client that echoes the handle via request _meta (instead of the
+    header) still lands in the same session — _meta upgrades a minted handle."""
+    respx.get("https://api.example.com/animals").mock(
+        return_value=httpx.Response(200, json={"items": [{"id": 1, "name": "Rex"}]})
+    )
+    with TestClient(app) as client:
+        resp1, _ = _modern_call(client, 1)
+        handle = resp1.headers["Elliot-Session-Id"]
+        resp2 = client.post(
+            "/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "list_animals",
+                    "arguments": {},
+                    "_meta": {**_MODERN_META, "io.elliot/session": handle},
+                },
+            },
+            headers={**_MODERN_HEADERS, "Mcp-Method": "tools/call", "Mcp-Name": "list_animals"},
+        )
+        # The response header reflects the _meta-upgraded handle, not a
+        # freshly minted one.
+        assert resp2.headers["Elliot-Session-Id"] == handle

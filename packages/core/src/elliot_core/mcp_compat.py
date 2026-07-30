@@ -52,6 +52,7 @@ __all__ = [
     "create_server",
     "get_client_identity",
     "register_legacy_set_level",
+    "session_meta_middleware",
     "types",
     "wrap_tool_calls",
     "wrap_tool_listing",
@@ -64,17 +65,21 @@ def create_server(
     instructions: str | None = None,
     extensions: Sequence[Extension] | None = None,
     cache_hints: Mapping[str, CacheHint] | None = None,
+    middleware: Sequence[Any] | None = None,
 ) -> MCPServer:
     """Construct an ``MCPServer``.
 
     Extensions (e.g. MCP Apps) are consumed at construction time by the SDK
     and cannot be added later — callers must assemble them before this call.
+    ``middleware`` entries are the SDK's ``ServerMiddleware`` callables,
+    listed outermost-first.
     """
     return MCPServer(
         name,
         instructions=instructions,
         extensions=extensions,
         cache_hints=cache_hints,  # type: ignore[arg-type]
+        middleware=middleware,
     )
 
 
@@ -214,6 +219,51 @@ def wrap_tool_calls(mcp: MCPServer, make_wrapper: Callable[[CallToolFn], CallToo
     tool_manager.call_tool = make_wrapper(  # type: ignore[assignment, method-assign]
         tool_manager.call_tool
     )
+
+
+async def session_meta_middleware(ctx: Any, call_next: Callable[[Any], Awaitable[Any]]) -> Any:
+    """SDK-tier middleware carrying Elliot session handles over MCP ``_meta``.
+
+    Inbound: a handle in request ``_meta["io.elliot/session"]`` upgrades the
+    contextvar bound by the ASGI ``ElliotSessionMiddleware`` (the header
+    always outranks it; see ``session_handle.upgrade_from_meta``). Outbound:
+    every request result is stamped with the current handle in its ``_meta``,
+    so cooperating clients can echo it on their next stateless request and
+    keep an exact journey. Notifications pass through untouched.
+    """
+    from elliot_core.session_handle import (
+        SESSION_META_KEY,
+        get_current_session_handle,
+        upgrade_from_meta,
+    )
+
+    # Middleware runs before params validation, so read the raw wire meta
+    # when the typed ctx.meta isn't populated yet (the modern HTTP path).
+    meta = getattr(ctx, "meta", None)
+    if not isinstance(meta, Mapping):
+        params = getattr(ctx, "params", None)
+        meta = params.get("_meta") if isinstance(params, Mapping) else None
+    if isinstance(meta, Mapping):
+        upgrade_from_meta(meta.get(SESSION_META_KEY))
+    result = await call_next(ctx)
+    handle = get_current_session_handle()
+    if handle is not None and result is not None:
+        try:
+            if isinstance(result, dict):
+                # Modern path: the handler chain already produced the wire
+                # dict; the SDK's serverInfo stamp merges into _meta after us,
+                # so this key survives.
+                existing_meta = result.get("_meta")
+                merged = dict(existing_meta) if isinstance(existing_meta, Mapping) else {}
+                merged[SESSION_META_KEY] = handle.value
+                result["_meta"] = merged
+            elif hasattr(result, "meta"):
+                existing = dict(result.meta or {})
+                existing[SESSION_META_KEY] = handle.value
+                result.meta = existing
+        except Exception:  # noqa: BLE001 - echo must never break a response
+            log.debug("session_meta.echo_failed", exc_info=True)
+    return result
 
 
 def register_legacy_set_level(

@@ -27,6 +27,9 @@ export interface AgentIdentity {
   model?: string | null;
   modality?: string | null;
   user_agent?: string | null;
+  /** MCP protocol revision the client spoke (e.g. "2026-07-28"). */
+  protocol_version?: string | null;
+  capabilities?: string[] | null;
 }
 
 export interface SessionSignal {

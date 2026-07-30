@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from elliot_core.auth_middleware import ApiKeyMiddleware, enforce_auth_configured
-from elliot_core.http_middleware import AgentIdentityMiddleware
+from elliot_core.http_middleware import AgentIdentityMiddleware, ElliotSessionMiddleware
 from elliot_core.mcp_compat import build_http_app
 from elliot_mcp_plugin import __version__
 from elliot_mcp_plugin.server import create_elliot_server
@@ -51,6 +51,8 @@ app = FastAPI(lifespan=lifespan)
 # (OPTIONS) is answered before the auth check runs.
 app.add_middleware(ApiKeyMiddleware)
 app.add_middleware(AgentIdentityMiddleware)
+# App-level session handle on the stateless transport (mint + echo).
+app.add_middleware(ElliotSessionMiddleware)
 _studio_origin = os.environ.get("ELLIOT_STUDIO_ORIGIN", "http://localhost:5173")
 app.add_middleware(
     CORSMiddleware,
@@ -65,8 +67,13 @@ app.add_middleware(
         # so the server can negotiate protocol version. Browser preflight will
         # fail without it in the allow-list — Studio cannot reach :3000/mcp.
         "Mcp-Protocol-Version",
+        # 2026-07-28 header-based routing + Elliot's own session handle.
+        "Mcp-Method",
+        "Mcp-Name",
+        "Elliot-Session-Id",
     ],
     allow_methods=["GET", "POST", "OPTIONS", "DELETE"],
+    expose_headers=["Elliot-Session-Id"],
 )
 
 

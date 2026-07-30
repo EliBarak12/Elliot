@@ -36,7 +36,11 @@ from elliot_core.agent_identity import (
 from elliot_core.auth_middleware import ApiKeyMiddleware, enforce_auth_configured
 from elliot_core.danger_zone import is_destructive
 from elliot_core.error_middleware import register_error_handlers
-from elliot_core.http_middleware import AgentIdentityMiddleware, UserIdentityMiddleware
+from elliot_core.http_middleware import (
+    AgentIdentityMiddleware,
+    ElliotSessionMiddleware,
+    UserIdentityMiddleware,
+)
 from elliot_core.mcp_compat import (
     Context,
     FastMCP,
@@ -45,8 +49,10 @@ from elliot_core.mcp_compat import (
     build_http_app,
     get_client_identity,
     register_legacy_set_level,
+    session_meta_middleware,
     wrap_tool_calls,
 )
+from elliot_core.session_handle import get_current_session_handle
 from elliot_core.user_identity import get_current_user_id
 
 from .audit import AuditLog
@@ -59,7 +65,7 @@ from .oauth_routes import register_oauth_routes
 from .oauth_store import CredentialVault
 from .observation_store import ObservationStore
 from .protocols.openai import register_openai_routes
-from .session_tracker import SessionTracker
+from .session_tracker import SessionTracker, stitch_stateless_fragments
 from .task_store import TaskStore, get_task_store
 from .trace_ingest import IngestPayload
 
@@ -646,8 +652,13 @@ def create_runtime_server(
     # clients (Claude, Cursor) and graders display. A hardcoded
     # "elliot-runtime" made every published connector anonymous. Transport
     # options (path, statelessness) moved to the HTTP app builder in SDK v2 —
-    # see create_app.
-    mcp = FastMCP(cfg.name or "elliot-runtime", instructions=instructions)
+    # see create_app. session_meta_middleware carries Elliot's session handle
+    # over MCP result _meta so stateless clients can echo it back.
+    mcp = FastMCP(
+        cfg.name or "elliot-runtime",
+        instructions=instructions,
+        middleware=[session_meta_middleware],
+    )
 
     task_store = get_task_store()
     for tool_def in cfg.tools:
@@ -805,10 +816,18 @@ def _register_logging(mcp: FastMCP) -> None:
 
 
 def _resolve_stable_session_id(ctx: Any) -> str | None:
-    """The id that groups a client's calls into one session/trace: prefer the MCP
-    protocol ``mcp-session-id`` header (stable for the whole connection), falling
-    back to the per-call ``request_id``. Shared by tool and skill handlers so a
-    skill call lands in the same session as the tool calls around it."""
+    """The id that groups a client's calls into one session/trace.
+
+    On HTTP the Elliot session handle is authoritative — resolved by
+    ``ElliotSessionMiddleware`` from headers (``Elliot-Session-Id``, legacy
+    ``Mcp-Session-Id``) or minted, then possibly upgraded from request
+    ``_meta`` by ``session_meta_middleware``. Outside an HTTP request (stdio,
+    direct handler invocation in tests) fall back to the legacy header / the
+    per-call ``request_id``. Shared by tool and skill handlers so a skill
+    call lands in the same session as the tool calls around it."""
+    handle = get_current_session_handle()
+    if handle is not None:
+        return handle.value
     if ctx is None:
         return None
     session_id: str | None = None
@@ -821,6 +840,11 @@ def _resolve_stable_session_id(ctx: Any) -> str | None:
             if header_sid:
                 session_id = header_sid
     return session_id
+
+
+def _current_handle_source() -> str | None:
+    handle = get_current_session_handle()
+    return handle.source if handle is not None else None
 
 
 def _make_observe(
@@ -844,6 +868,7 @@ def _make_observe(
         session_id: str | None,
         identity: Any,
         error_code: str | None = None,
+        handle_source: str | None = None,
     ) -> None:
         row_count = len(result_rows)
         # Estimate tokens up-front so the audit row, the observation store, and
@@ -891,6 +916,7 @@ def _make_observe(
                         agent_hint=agent_hint,
                         connector_slug=connector_slug,
                         agent_identity=identity_payload,
+                        handle_source=handle_source,
                     )
                     store.write_tool_call(
                         session_id=session_id,
@@ -908,6 +934,20 @@ def _make_observe(
                     # idle sweeper / shutdown closes it (mirroring the
                     # SessionTracker lifecycle), so the observation-store
                     # rollup reflects a completed run, not a single call.
+        if store is not None and isinstance(identity_payload, dict):
+            # Handshake telemetry per call: on the 2026 stateless path there is
+            # no initialize to observe, so the per-request identity is the only
+            # source of "which client speaks which protocol" facts. Upsert per
+            # client — the store unions capabilities and keeps last_seen fresh.
+            client = identity_payload.get("client")
+            if client:
+                caps = identity_payload.get("capabilities")
+                with contextlib.suppress(Exception):
+                    store.record_handshake(
+                        client,
+                        identity_payload.get("protocol_version"),
+                        tuple(caps) if caps else None,
+                    )
 
     async def _observe(
         tool_id: str,
@@ -921,6 +961,7 @@ def _make_observe(
         """Capture the request-scoped agent identity, then offload the blocking
         audit/tracker/observation-store writes to a worker thread."""
         identity = get_current_agent_identity()
+        handle_source = _current_handle_source()
         await run_in_threadpool(
             _observe_blocking,
             tool_id,
@@ -931,6 +972,7 @@ def _make_observe(
             session_id,
             identity,
             error_code,
+            handle_source,
         )
 
     return _observe
@@ -1035,8 +1077,6 @@ def _register_tool(
         # to the synthetic signature below (v2 removed mcp.get_context()); pop
         # it so it never reaches the executor as a tool argument.
         ctx: Any = kwargs.pop("ctx", None)
-        session_id: str | None = None
-        mcp_session_id: str | None = None
         client_name: str | None = None
         client_version: str | None = None
         protocol_version: str | None = None
@@ -1045,16 +1085,14 @@ def _register_tool(
         header_client_version: str | None = None
         header_model: str | None = None
         await _emit_runtime_log(ctx, "debug", {"event": "tool.call.start", "tool": td.id})
+        # The Elliot session handle (minted/echoed on the stateless wire)
+        # groups this call into its journey; stdio/tests fall back to the
+        # legacy header or the per-call request id.
+        session_id = _resolve_stable_session_id(ctx)
         if ctx is not None:
-            # request_id is per-call — only a last-resort correlation id.
-            with contextlib.suppress(Exception):
-                session_id = ctx.request_id
-            # Prefer the MCP protocol session id (stable for the whole agent
-            # connection) so a multi-step run groups into one trace.
             with contextlib.suppress(Exception):
                 request = ctx.request_context.request
                 if request is not None:
-                    mcp_session_id = request.headers.get("mcp-session-id")
                     # Explicit override headers — set by gateways/clients that
                     # want to label themselves (and the only signal available
                     # when the per-tenant runtime can't reach the handshake's
@@ -1078,8 +1116,6 @@ def _register_tool(
             if not client_name and header_client:
                 client_name = header_client
                 client_version = client_version or header_client_version
-        if mcp_session_id:
-            session_id = mcp_session_id
         if client_name or protocol_version or capabilities or header_model:
             with contextlib.suppress(Exception):
                 set_current_agent_identity(
@@ -1960,10 +1996,13 @@ def create_app(
     )
 
     # path="/" so that mounting at /mcp exposes the MCP endpoint at /mcp/
-    # (matching the plugin and the docs), not /mcp/mcp/. The runtime stays on
-    # transport sessions for now (stateless=False); P2 of the 2026-07-28
-    # upgrade flips it once Elliot session handles carry the correlation.
-    _mcp_app = build_http_app(mcp, path="/", stateless=False)
+    # (matching the plugin and the docs), not /mcp/mcp/. stateless=True: the
+    # 2026-07-28 revision has no transport sessions at all, and 2025 clients
+    # are served sessionlessly from the same endpoint — session continuity is
+    # carried by Elliot's own handles (ElliotSessionMiddleware + result _meta),
+    # so any replica can serve any request and a republish never strands a
+    # client on a dead in-memory session.
+    _mcp_app = build_http_app(mcp, path="/", stateless=True)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Any:
@@ -2016,6 +2055,9 @@ def create_app(
     # Bind the parsed AX agent identity to a contextvar so tool handlers can
     # attribute calls to a specific client/model rather than a generic 'mcp'.
     app.add_middleware(AgentIdentityMiddleware)
+    # Resolve/mint the Elliot session handle and echo it as Elliot-Session-Id
+    # on every response — the app-level session on the stateless transport.
+    app.add_middleware(ElliotSessionMiddleware)
     # End-user identity (auth boundary 1). Two modes:
     #   * Default: trust an X-Elliot-User header (gateway / manual config).
     #   * ELLIOT_MCP_OAUTH=1: Elliot is the MCP OAuth authorization server, so a
@@ -2046,8 +2088,13 @@ def create_app(
             # MCP TS SDK >=1.10 sends Mcp-Protocol-Version on every call;
             # without it the browser preflight fails.
             "Mcp-Protocol-Version",
+            # 2026-07-28 header-based routing + Elliot's own session handle.
+            "Mcp-Method",
+            "Mcp-Name",
+            "Elliot-Session-Id",
             "X-Elliot-User",
         ],
+        expose_headers=["Elliot-Session-Id"],
     )
     # Per-user OAuth connect/callback endpoints (auth boundary 2).
     register_oauth_routes(app, config, secrets, vault, pool)
@@ -2065,8 +2112,16 @@ def create_app(
         return audit.tail(n)
 
     @app.get("/v1/sessions")
-    async def get_sessions(n: int = 20) -> list[dict[str, Any]]:
-        return tracker.tail(n)
+    async def get_sessions(n: int = 20, stitched: int = 1) -> list[dict[str, Any]]:
+        """Recent agent sessions. ``stitched=1`` (default) reassembles the
+        one-shot fragments a stateless transport produces into logical
+        journeys — exact for clients that echo the Elliot session handle,
+        identity+idle-gap heuristic otherwise. ``stitched=0`` returns the raw
+        fragments for debugging."""
+        if not stitched:
+            return tracker.tail(n)
+        raw = tracker.tail(max(n, 200))
+        return stitch_stateless_fragments(raw)[:n]
 
     @app.get("/v1/sessions/stream")
     async def stream_sessions(request: Request) -> StreamingResponse:

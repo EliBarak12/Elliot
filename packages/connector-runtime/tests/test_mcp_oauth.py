@@ -168,10 +168,25 @@ def test_full_authorization_code_flow(oauth_client: TestClient) -> None:
     access = tok.json()["access_token"]
     assert access
 
-    # 4. /mcp now accepts the bearer (no 401 challenge)
-    r = oauth_client.get(
+    # 4. /mcp now accepts the bearer (no 401 challenge). Probe with a POST
+    # initialize — on the stateless transport a GET opens an unbounded SSE
+    # stream that TestClient would wait on forever.
+    r = oauth_client.post(
         "/mcp/",
-        headers={"Authorization": f"Bearer {access}", "Accept": "text/event-stream"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "probe", "version": "0"},
+            },
+        },
+        headers={
+            "Authorization": f"Bearer {access}",
+            "Accept": "application/json, text/event-stream",
+        },
     )
     assert r.status_code != 401
 

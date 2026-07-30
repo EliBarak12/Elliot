@@ -10,7 +10,7 @@ import os
 import re
 import time
 import warnings
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
@@ -47,6 +47,7 @@ from elliot_core.mcp_compat import (
     CacheableMethod,
     CacheHint,
     Context,
+    Extension,
     FastMCP,
     MCPDeprecationWarning,
     ToolError,
@@ -636,6 +637,7 @@ def create_runtime_server(
     store: ObservationStore | None = None,
     executor_pool: ExecutorPool | None = None,
     connector_dir: Path | None = None,
+    extra_extensions: Sequence[Extension] = (),
 ) -> FastMCP:
     """
     Build a FastMCP server whose tool list mirrors the connector's ToolDefinitions.
@@ -671,6 +673,7 @@ def create_runtime_server(
     # io.modelcontextprotocol/ui in the server capabilities; hosts without
     # Apps support simply ignore the extra metadata (text results unchanged).
     apps_ext = build_apps_extension(cfg, connector_dir=connector_dir)
+    extensions = [ext for ext in (apps_ext, *extra_extensions) if ext is not None]
     # serverInfo.name is the connector's public identity — it is what MCP
     # clients (Claude, Cursor) and graders display. A hardcoded
     # "elliot-runtime" made every published connector anonymous. Transport
@@ -681,7 +684,7 @@ def create_runtime_server(
         cfg.name or "elliot-runtime",
         instructions=instructions,
         middleware=[session_meta_middleware],
-        extensions=[apps_ext] if apps_ext is not None else None,
+        extensions=extensions or None,
         cache_hints=_default_cache_hints(),
     )
 

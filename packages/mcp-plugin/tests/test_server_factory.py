@@ -147,3 +147,38 @@ def test_missing_required_arg_surfaces_validation_code(session: ElliotSession):
         # elliot_query_sql requires `sql`
         asyncio.run(server._tool_manager.call_tool("elliot_query_sql", {}))
     assert "VALIDATION_MISSING_FIELD" in str(ei.value)
+
+
+class TestEmbedderKnobs:
+    """The keyword knobs Elliot Cloud uses instead of poking SDK privates."""
+
+    def test_instructions_override(self, session) -> None:  # type: ignore[no-untyped-def]
+        from elliot_mcp_plugin.server import create_elliot_server
+
+        mcp = create_elliot_server(session, instructions="Cloud builder instructions.")
+        assert mcp.instructions == "Cloud builder instructions."
+
+    def test_hide_tools_removes_from_registry(self, session) -> None:  # type: ignore[no-untyped-def]
+        from elliot_mcp_plugin.server import create_elliot_server
+
+        mcp = create_elliot_server(session, hide_tools=["elliot_start_runtime"])
+        names = {t.name for t in mcp._tool_manager.list_tools()}
+        assert "elliot_start_runtime" not in names
+        assert "elliot_list_tools" in names
+
+    def test_register_skill_prompts_serves_prompts(self, session) -> None:  # type: ignore[no-untyped-def]
+        from elliot_mcp_plugin.server import create_elliot_server
+
+        mcp = create_elliot_server(session, register_skill_prompts=True)
+        assert len(mcp._prompt_manager._prompts) > 0
+
+    def test_resource_override_swaps_text(self, session) -> None:  # type: ignore[no-untyped-def]
+        import asyncio
+
+        from elliot_mcp_plugin.server import create_elliot_server
+
+        mcp = create_elliot_server(
+            session, resource_overrides={"elliot://docs/install": "CLOUD INSTALL DOC"}
+        )
+        contents = asyncio.run(mcp.read_resource("elliot://docs/install"))
+        assert list(contents)[0].content == "CLOUD INSTALL DOC"

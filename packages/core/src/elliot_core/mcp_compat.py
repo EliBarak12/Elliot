@@ -48,10 +48,12 @@ __all__ = [
     "MCPServer",
     "ToolError",
     "TransportSecuritySettings",
+    "apply_tool_annotations",
     "build_http_app",
     "capability_names",
     "create_server",
     "get_client_identity",
+    "override_resource_text",
     "register_legacy_set_level",
     "session_meta_middleware",
     "types",
@@ -265,6 +267,49 @@ async def session_meta_middleware(ctx: Any, call_next: Callable[[Any], Awaitable
         except Exception:  # noqa: BLE001 - echo must never break a response
             log.debug("session_meta.echo_failed", exc_info=True)
     return result
+
+
+def apply_tool_annotations(
+    mcp: MCPServer, policy: Callable[[str], types.ToolAnnotations | None]
+) -> None:
+    """Stamp annotations onto registered tools by name.
+
+    ``policy(name)`` returns the annotations for a tool or ``None`` to leave
+    it untouched. Used by embedders (Elliot Cloud) that classify the builder
+    tools post-registration; touching the private tool registry stays HERE so
+    the next SDK bump has one place to fix.
+    """
+    for tool in mcp._tool_manager.list_tools():
+        annotations = policy(tool.name)
+        if annotations is not None:
+            tool.annotations = annotations
+
+
+def override_resource_text(mcp: MCPServer, uri: str, text: str) -> None:
+    """Replace a registered resource's content by URI, keeping its identity.
+
+    Embedders use this to swap environment-specific docs (e.g. the install
+    doc, which points at localhost in the local build). The original entry
+    may be a function-backed resource, so the override swaps the registry
+    entry for a ``TextResource`` carrying the same name/description. Unknown
+    URIs log and no-op rather than raise — config drift must not stop the
+    server.
+    """
+    from mcp.server.mcpserver.resources import TextResource
+
+    registry = mcp._resource_manager._resources
+    existing = registry.get(uri)
+    if existing is None:
+        log.warning("compat.override_resource.unknown", uri=uri)
+        return
+    registry[uri] = TextResource(
+        uri=uri,
+        name=existing.name,
+        title=getattr(existing, "title", None),
+        description=existing.description,
+        mime_type=existing.mime_type,
+        text=text,
+    )
 
 
 def register_legacy_set_level(

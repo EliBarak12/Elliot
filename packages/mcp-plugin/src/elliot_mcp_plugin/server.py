@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 import mcp.types as types
@@ -189,13 +190,25 @@ def _local_instructions() -> str:
     )
 
 
-def create_elliot_server(session: Any) -> FastMCP:
+def create_elliot_server(
+    session: Any,
+    *,
+    instructions: str | None = None,
+    hide_tools: Iterable[str] = (),
+    register_skill_prompts: bool = False,
+    resource_overrides: dict[str, str] | None = None,
+) -> FastMCP:
     """Create a FastMCP server with all Elliot tool groups and resources registered.
 
-    Skills are NOT registered as MCP prompts here: locally the agent's plugin
-    loader delivers them as SKILL.md files. The hosted Elliot Cloud builder
-    registers them as prompts (and overrides the instructions / install doc)
-    post-build in its own layer — see the cloud runtime.
+    The keyword knobs exist for embedders (Elliot Cloud) that previously
+    reached into SDK privates to customise the server post-build:
+    ``instructions`` replaces the local default server instructions;
+    ``hide_tools`` removes local-only tools (runtime process control, trace
+    hooks) from the registry entirely; ``register_skill_prompts`` serves the
+    plugin skills as MCP prompts (locally the agent's plugin loader delivers
+    them as SKILL.md files instead, which is why the default is off);
+    ``resource_overrides`` swaps a registered resource's text by URI (e.g.
+    the install doc, which points at localhost in the local build).
     """
     from elliot_mcp_plugin.resources import register_resources
     from elliot_mcp_plugin.tools.audit_tools import register_audit_tools
@@ -212,7 +225,7 @@ def create_elliot_server(session: Any) -> FastMCP:
 
     # Transport options (path, statelessness) moved to the HTTP app builder in
     # SDK v2 — see main.py, which mounts the app at "/" with stateless_http=True.
-    mcp = FastMCP("elliot", instructions=_local_instructions())
+    mcp = FastMCP("elliot", instructions=instructions or _local_instructions())
     register_source_tools(mcp, session)
     register_sql_tools(mcp, session)
     register_tool_tools(mcp, session)
@@ -225,6 +238,23 @@ def create_elliot_server(session: Any) -> FastMCP:
     register_audit_tools(mcp, session)
     register_trace_tools(mcp, session)
     register_resources(mcp)
+    if register_skill_prompts:
+        from elliot_mcp_plugin.prompts import register_prompts
+
+        register_prompts(mcp, session)
+    for tool_name in hide_tools:
+        # Public v2 API — a hidden tool leaves the registry entirely, so it is
+        # absent from tools/list AND uncallable (unlike the destructive filter
+        # below, which is per-client).
+        try:
+            mcp.remove_tool(tool_name)
+        except Exception:  # noqa: BLE001 - unknown names are embedder config drift
+            log.warning("server.hide_tools.unknown", tool=tool_name)
+    if resource_overrides:
+        from elliot_core.mcp_compat import override_resource_text
+
+        for uri, text in resource_overrides.items():
+            override_resource_text(mcp, uri, text)
     _hide_destructive_tools_from_other_agents(mcp)
     return mcp
 

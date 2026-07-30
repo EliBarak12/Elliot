@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 from mcp import types
-from mcp.server.caching import CacheHint
+from mcp.server.caching import CacheableMethod, CacheHint
 from mcp.server.mcpserver import Context, Extension, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
@@ -39,6 +39,7 @@ FastMCP = MCPServer
 
 __all__ = [
     "CacheHint",
+    "CacheableMethod",
     "ClientIdentity",
     "Context",
     "Extension",

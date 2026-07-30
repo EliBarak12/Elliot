@@ -12,6 +12,7 @@ import time
 import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated, Any
 
 import structlog
@@ -33,6 +34,7 @@ from elliot_core.agent_identity import (
     merge_client_info,
     set_current_agent_identity,
 )
+from elliot_core.apps import build_apps_extension, tool_ui_meta, ui_resource_uri
 from elliot_core.auth_middleware import ApiKeyMiddleware, enforce_auth_configured
 from elliot_core.danger_zone import is_destructive
 from elliot_core.error_middleware import register_error_handlers
@@ -42,6 +44,8 @@ from elliot_core.http_middleware import (
     UserIdentityMiddleware,
 )
 from elliot_core.mcp_compat import (
+    CacheableMethod,
+    CacheHint,
     Context,
     FastMCP,
     MCPDeprecationWarning,
@@ -612,6 +616,18 @@ def _suggest(tool_id: str, avg_tokens: float, max_tokens: float) -> str | None:
     return None
 
 
+def _default_cache_hints() -> dict[CacheableMethod, CacheHint]:
+    """2026-07-28 cacheable-list hints. Connector tool sets change rarely
+    (republish/mtime reload), so a short TTL saves clients re-listing on
+    every turn; scope stays private — a capability URL is a secret, so a
+    shared intermediary cache must never store its listings."""
+    return {
+        "tools/list": CacheHint(ttl_ms=60_000, scope="private"),
+        "resources/list": CacheHint(ttl_ms=60_000, scope="private"),
+        "prompts/list": CacheHint(ttl_ms=300_000, scope="private"),
+    }
+
+
 def create_runtime_server(
     config: Any,
     executor: ToolExecutor,
@@ -619,6 +635,7 @@ def create_runtime_server(
     tracker: SessionTracker | None = None,
     store: ObservationStore | None = None,
     executor_pool: ExecutorPool | None = None,
+    connector_dir: Path | None = None,
 ) -> FastMCP:
     """
     Build a FastMCP server whose tool list mirrors the connector's ToolDefinitions.
@@ -648,6 +665,12 @@ def create_runtime_server(
             "(outcome 'success', 'failure', or 'partial') so the connector author "
             "can see what to improve."
         )
+    # The MCP Apps extension must exist BEFORE the server is constructed —
+    # the SDK consumes extensions in MCPServer.__init__. It registers each
+    # UI-enabled tool's ui:// resource and advertises
+    # io.modelcontextprotocol/ui in the server capabilities; hosts without
+    # Apps support simply ignore the extra metadata (text results unchanged).
+    apps_ext = build_apps_extension(cfg, connector_dir=connector_dir)
     # serverInfo.name is the connector's public identity — it is what MCP
     # clients (Claude, Cursor) and graders display. A hardcoded
     # "elliot-runtime" made every published connector anonymous. Transport
@@ -658,6 +681,8 @@ def create_runtime_server(
         cfg.name or "elliot-runtime",
         instructions=instructions,
         middleware=[session_meta_middleware],
+        extensions=[apps_ext] if apps_ext is not None else None,
+        cache_hints=_default_cache_hints(),
     )
 
     task_store = get_task_store()
@@ -668,6 +693,12 @@ def create_runtime_server(
         if not getattr(tool_def, "enabled", True):
             log.info("runtime.tool.disabled", connector=connector_slug, tool=tool_def.id)
             continue
+        tool_ui = getattr(tool_def, "ui", None)
+        ui_meta = (
+            tool_ui_meta(tool_ui, ui_resource_uri(connector_slug, tool_def.id))
+            if tool_ui is not None and tool_ui.enabled
+            else None
+        )
         _register_tool(
             mcp,
             executor,
@@ -679,6 +710,7 @@ def create_runtime_server(
             connector_slug=connector_slug,
             executor_pool=executor_pool,
             task_tool_name=task_tool_name,
+            ui_meta=ui_meta,
         )
 
     _register_resources(mcp, cfg, executor, json)
@@ -1046,6 +1078,7 @@ def _register_tool(
     connector_slug: str | None = None,
     executor_pool: ExecutorPool | None = None,
     task_tool_name: str = "elliot_get_task",
+    ui_meta: dict[str, Any] | None = None,
 ) -> None:
     from elliot_core.errors import ElliotError, to_mcp_error_content
     from elliot_core.types import ToolDefinition
@@ -1295,6 +1328,7 @@ def _register_tool(
         title=td.name,
         description=_tool_registration_description(td),
         annotations=annotations,
+        meta=ui_meta,
     )(_handler)
 
 
@@ -1992,7 +2026,13 @@ def create_app(
     pool = ExecutorPool(config, secrets, vault=vault)
 
     mcp = create_runtime_server(
-        config, executor, audit=audit, tracker=tracker, store=store, executor_pool=pool
+        config,
+        executor,
+        audit=audit,
+        tracker=tracker,
+        store=store,
+        executor_pool=pool,
+        connector_dir=Path(connector_path).resolve().parent if connector_path else None,
     )
 
     # path="/" so that mounting at /mcp exposes the MCP endpoint at /mcp/

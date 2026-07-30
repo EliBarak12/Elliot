@@ -340,10 +340,16 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
                         )
                     )
             dest.parent.mkdir(parents=True, exist_ok=True)
+            # An exported spec must be self-contained: swap any custom MCP
+            # Apps template *paths* for their file contents so publishing the
+            # JSON (e.g. to Elliot Cloud) carries the view with it.
+            from elliot_core.apps.template_builder import inline_custom_html
+
+            export_config = inline_custom_html(session.connector, project_root)
             # Atomic write — never leave a half-written connector file on disk
             # if the write is interrupted (audit Low 33).
             tmp = dest.with_name(dest.name + ".tmp")
-            tmp.write_text(serialize_connector(session.connector))
+            tmp.write_text(serialize_connector(export_config))
             os.replace(tmp, dest)
             log.info("connector.exported", path=str(dest))
 

@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Elliot tokens deferring to the host's MCP Apps style variables.
+   The host (Claude / ChatGPT / Studio preview) supplies --color-* and
+   --font-* per the ext spec; every token falls back to Elliot's own light
+   palette so the view renders correctly in a bare iframe too. Dark fallbacks
+   activate from the host context's theme (data-theme set in AppShell). */
+:root {
+  --background: var(--color-background-primary, #ffffff);
+  --foreground: var(--color-text-primary, #16181d);
+  --muted: var(--color-background-secondary, #f4f4f5);
+  --muted-foreground: var(--color-text-secondary, #6b7280);
+  --border: var(--color-border-primary, #e4e4e7);
+  --card: var(--color-background-primary, #ffffff);
+  --primary: var(--color-ring-primary, #c02434);
+  --primary-foreground: #ffffff;
+  --destructive: var(--color-text-danger, #dc2626);
+  --success: var(--color-text-success, #16a34a);
+  --warning: var(--color-text-warning, #d97706);
+  --radius: var(--border-radius-md, 0.5rem);
+}
+
+:root[data-theme="dark"] {
+  --background: var(--color-background-primary, #17181c);
+  --foreground: var(--color-text-primary, #ededef);
+  --muted: var(--color-background-secondary, #232529);
+  --muted-foreground: var(--color-text-secondary, #9ca3af);
+  --border: var(--color-border-primary, #2e3035);
+  --card: var(--color-background-primary, #1b1d21);
+  --primary: var(--color-ring-primary, #e05260);
+  --primary-foreground: #ffffff;
+  --destructive: var(--color-text-danger, #f87171);
+  --success: var(--color-text-success, #4ade80);
+  --warning: var(--color-text-warning, #fbbf24);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(
+    --font-sans,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif
+  );
+  font-size: var(--font-text-md-size, 0.875rem);
+  -webkit-font-smoothing: antialiased;
+}
+
+code,
+.font-mono {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}

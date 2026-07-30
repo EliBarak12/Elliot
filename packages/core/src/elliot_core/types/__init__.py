@@ -19,6 +19,7 @@ from elliot_core.types.tool import (
     SkillStep,
     ToolDefinition,
     ToolResult,
+    ToolUIConfig,
 )
 
 __all__ = [
@@ -39,5 +40,6 @@ __all__ = [
     "SkillStep",
     "SourceConfig",
     "ToolDefinition",
+    "ToolUIConfig",
     "ToolResult",
 ]

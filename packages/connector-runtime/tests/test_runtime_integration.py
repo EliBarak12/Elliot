@@ -1862,3 +1862,81 @@ def test_meta_carried_handle_upgrades_minted_one(app) -> None:
         # The response header reflects the _meta-upgraded handle, not a
         # freshly minted one.
         assert resp2.headers["Elliot-Session-Id"] == handle
+
+
+# ── MCP Apps: ui:// views for tools with a UI config ─────────────────────────
+
+
+async def test_apps_extension_serves_ui_view_and_stamps_tool_meta() -> None:
+    """A tool with a ToolUIConfig gets (a) _meta.ui.resourceUri on its listing
+    entry, (b) a ui:// resource with mime text/html;profile=mcp-app whose
+    document carries the injected per-tool config, and (c) the
+    io.modelcontextprotocol/ui extension advertised — the full ext-apps
+    contract a host needs to render the view."""
+    from mcp.client import Client
+
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import ConnectorConfig
+
+    class _Eng:
+        def query(self, sql, params):  # type: ignore[no-untyped-def]
+            return [{"id": 1, "name": "Rex"}]
+
+    cfg = ConnectorConfig.model_validate(
+        {
+            "name": "Pets",
+            "slug": "pets",
+            "version": "1.0.0",
+            "sources": [{"id": "s", "name": "s", "type": "file", "url": "x"}],
+            "tools": [
+                {
+                    "id": "list_animals",
+                    "name": "List animals",
+                    "description": "Return all animals",
+                    "category": "READ",
+                    "sql": "SELECT * FROM animals",
+                    "parameters": [],
+                    "ui": {"preset": "table", "mapping": {"columns": "id,name"}},
+                }
+            ],
+            "skills": [],
+        }
+    )
+    mcp = create_runtime_server(cfg, ToolExecutor(cfg, secrets={}, engine=_Eng()))  # type: ignore[arg-type]
+
+    async with Client(mcp, mode="auto") as client:
+        tools = await client.list_tools()
+        tool = next(t for t in tools.tools if t.name == "list_animals")
+        assert tool.meta is not None
+        assert tool.meta["ui"]["resourceUri"] == "ui://pets/list_animals"
+
+        resources = await client.list_resources()
+        ui_resources = [r for r in resources.resources if str(r.uri).startswith("ui://")]
+        assert [str(r.uri) for r in ui_resources] == ["ui://pets/list_animals"]
+        assert ui_resources[0].mime_type == "text/html;profile=mcp-app"
+
+        content = await client.read_resource("ui://pets/list_animals")
+        doc = content.contents[0]
+        assert doc.mime_type == "text/html;profile=mcp-app"  # type: ignore[union-attr]
+        assert '"tool_id":' in doc.text and "list_animals" in doc.text  # type: ignore[union-attr]
+        assert "elliot-ui-config" in doc.text  # type: ignore[union-attr]
+
+
+async def test_tools_without_ui_have_no_ui_meta() -> None:
+    """A connector with no UI configs serves exactly as before — no _meta.ui,
+    no ui:// resources, no Apps extension."""
+    from mcp.client import Client
+
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import ConnectorConfig
+
+    cfg = ConnectorConfig.model_validate(MINIMAL_CONNECTOR)
+    mcp = create_runtime_server(cfg, ToolExecutor(cfg, secrets={}))
+    async with Client(mcp, mode="legacy") as client:
+        tools = await client.list_tools()
+        tool = next(t for t in tools.tools if t.name == "list_animals")
+        assert not (tool.meta or {}).get("ui")
+        resources = await client.list_resources()
+        assert not [r for r in resources.resources if str(r.uri).startswith("ui://")]

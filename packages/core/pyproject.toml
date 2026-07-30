@@ -40,4 +40,11 @@ packages = ["src/elliot_core"]
 # resource layer served zero connector templates while the server instructions
 # still advertised them. Force-include the directory so the templates travel
 # with the wheel as package data.
-artifacts = ["src/elliot_core/templates/*.json"]
+artifacts = [
+    "src/elliot_core/templates/*.json",
+    # The MCP Apps preset bundle (built by packages/ui-kit, committed) must
+    # travel as package data for the same reason as the connector templates:
+    # a wheel-installed core (Elliot Cloud) serves ui:// views from it.
+    "src/elliot_core/apps/assets/*.html",
+    "src/elliot_core/apps/assets/*.json",
+]

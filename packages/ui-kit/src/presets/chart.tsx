@@ -34,8 +34,16 @@ interface ChartShape {
   max: number;
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
+/** Numeric value, coercing numeric STRINGS — CSV sources and most DB drivers
+ * serialize decimals as strings, and a chart that can't read "312.25" would
+ * be useless against real connector data. */
+function toNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
 }
 
 /** mapping.x / mapping.y first; otherwise first non-numeric field labels the
@@ -43,7 +51,7 @@ function isFiniteNumber(value: unknown): value is number {
 function resolveShape(rows: Row[], mapping: Record<string, string>): ChartShape | null {
   if (rows.length === 0) return null;
   const keys = Object.keys(rows[0]);
-  const numeric = keys.filter((k) => rows.some((r) => isFiniteNumber(r[k])));
+  const numeric = keys.filter((k) => rows.some((r) => toNumber(r[k]) !== null));
   const mappedX = mappingList(mapping["x"])[0];
   const mappedY = mappingList(mapping["y"]).filter((f) => numeric.includes(f));
   const xField = mappedX && keys.includes(mappedX) ? mappedX : keys.find((k) => !numeric.includes(k));
@@ -55,9 +63,9 @@ function resolveShape(rows: Row[], mapping: Record<string, string>): ChartShape 
   const points = rows.map((row, i) => ({
     label: xField ? formatCell(row[xField]) : String(i + 1),
     row,
-    values: yFields.map((f) => (isFiniteNumber(row[f]) ? row[f] : null)),
+    values: yFields.map((f) => toNumber(row[f])),
   }));
-  const values = points.flatMap((p) => p.values).filter(isFiniteNumber);
+  const values = points.flatMap((p) => p.values).filter((v): v is number => v !== null);
   if (values.length === 0) return null;
   const min = Math.min(0, ...values);
   const max = Math.max(...values, min + 1e-9);

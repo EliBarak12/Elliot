@@ -103,8 +103,10 @@ export function TablePreset({ config, data, onContext }: PresetProps) {
                 key={i}
                 onClick={() => selectRow(i, row)}
                 className={cn(
-                  "border-b border-border/60 border-l-2 border-l-transparent cursor-pointer transition-colors hover:bg-muted/40",
-                  selected === i && "bg-muted/70 border-l-primary"
+                  "border-b border-border/60 border-l-2 cursor-pointer transition-colors hover:bg-muted/40",
+                  // cn() is a plain join (no tailwind-merge), so the two
+                  // border-color utilities must never coexist on the row.
+                  selected === i ? "bg-muted/70 border-l-primary" : "border-l-transparent"
                 )}
               >
                 {columns.map((col) => (

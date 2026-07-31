@@ -175,12 +175,15 @@ export function AppResultView({
   args,
   resultData,
   draftUi,
+  draftBranding,
 }: {
   toolId: string;
   args: Record<string, unknown>;
   /** The elliot_preview_tool payload ({rows, count, ...}) to render. */
   resultData: unknown;
   draftUi?: Record<string, unknown> | null;
+  /** Unsaved ConnectorBranding-shaped draft; omitted → session branding. */
+  draftBranding?: Record<string, unknown> | null;
 }) {
   const [html, setHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -191,6 +194,7 @@ export function AppResultView({
     setError(null);
     const fetchArgs: Record<string, unknown> = { tool_id: toolId };
     if (draftUi) fetchArgs.ui = draftUi;
+    if (draftBranding) fetchArgs.branding = draftBranding;
     callToolResult("elliot_preview_tool_ui", fetchArgs)
       .then((res) => {
         if (cancelled) return;
@@ -204,7 +208,7 @@ export function AppResultView({
     return () => {
       cancelled = true;
     };
-  }, [toolId, draftUi]);
+  }, [toolId, draftUi, draftBranding]);
 
   if (error) {
     return <p className="text-xs text-destructive p-2">Could not load the view: {error}</p>;

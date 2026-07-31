@@ -76,7 +76,13 @@ def _build_ui_documents(
         if ui is None or not ui.enabled or not getattr(t, "enabled", True):
             continue
         uri = ui_resource_uri(config.slug, t.id)
-        html = build_tool_app_html(t, ui, connector_slug=config.slug, connector_dir=connector_dir)
+        html = build_tool_app_html(
+            t,
+            ui,
+            connector_slug=config.slug,
+            connector_dir=connector_dir,
+            branding=config.branding,
+        )
         docs[uri] = (ui.title or t.name, html)
     return docs
 

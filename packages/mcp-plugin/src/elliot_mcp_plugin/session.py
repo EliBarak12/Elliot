@@ -9,7 +9,7 @@ import structlog
 from elliot_core import ConnectorBuilder, SQLiteEngine, ToolRegistry, WorkspaceStore
 from elliot_core.audit.models import AuditTranscript, ProductIntent
 from elliot_core.sql import safe_ident
-from elliot_core.types.connector import ConnectorConfig, ProductContext
+from elliot_core.types.connector import ConnectorBranding, ConnectorConfig, ProductContext
 from elliot_core.types.source import SourceConfig
 from elliot_core.types.tool import SkillDefinition, ToolDefinition
 from elliot_mcp_plugin.oauth_login import BuildOAuthLogin
@@ -30,6 +30,10 @@ class ElliotSession:
         # session.json or the connector file.
         self.oauth_logins: dict[str, BuildOAuthLogin] = {}
         self.product_context: ProductContext | None = None
+        # Connector-level brand identity (accent colors + logo) applied to
+        # every MCP Apps view. Lives on the session so it survives rebuilds
+        # and flows into each ConnectorConfig produced by build_connector.
+        self.branding: ConnectorBranding | None = None
         self.runtime_process: subprocess.Popen[Any] | None = None
         self.runtime_log_path: Path | None = None
         self.tool_sql: dict[str, str] = {}
@@ -54,6 +58,8 @@ class ElliotSession:
             return
         if data.get("product_context"):
             self.product_context = ProductContext(**data["product_context"])
+        if data.get("branding"):
+            self.branding = ConnectorBranding.model_validate(data["branding"])
         for s in data.get("sources", []):
             src = SourceConfig.model_validate(s)
             self.sources[src.id] = src
@@ -81,6 +87,7 @@ class ElliotSession:
                 "product_context": (
                     self.product_context.model_dump() if self.product_context else None
                 ),
+                "branding": (self.branding.model_dump() if self.branding else None),
                 "sources": [s.model_dump() for s in self.sources.values()],
                 "tools": [t.model_dump() for t in self.registry.get_all()],
                 "skills": [s.model_dump() for s in self.registry.get_all_skills()],
@@ -200,6 +207,7 @@ class ElliotSession:
         self.sources.clear()
         self.tool_sql = {}
         self.product_context = None
+        self.branding = None
         self.connector = None
         self.build_id = ""
         self.product_intent = None

@@ -13,7 +13,7 @@ from elliot_core.apps.template_builder import (
     tool_ui_meta,
     ui_resource_uri,
 )
-from elliot_core.types import ConnectorConfig, ToolDefinition, ToolUIConfig
+from elliot_core.types import ConnectorBranding, ConnectorConfig, ToolDefinition, ToolUIConfig
 from elliot_core.types.source import SourceConfig
 
 
@@ -119,6 +119,96 @@ class TestAppsExtension:
         assert resource.meta is not None
         assert resource.meta["ui"]["csp"]["connectDomains"] == ["https://api.shop.example"]
         assert resource.meta["ui"]["prefersBorder"] is True
+
+
+class TestBranding:
+    def test_branding_is_injected_into_view_config(self) -> None:
+        tool = _tool(preset="table")
+        branding = ConnectorBranding(
+            accent="#c02434", accent_dark="#ff6b7a", logo="data:image/svg+xml;base64,PHN2Zz4="
+        )
+        html = build_tool_app_html(tool, tool.ui, connector_slug="shop", branding=branding)  # type: ignore[arg-type]
+        match = re.search(
+            r'<script type="application/json" id="elliot-ui-config">(.*?)</script>',
+            html,
+            re.DOTALL,
+        )
+        assert match
+        config = json.loads(match.group(1))
+        assert config["branding"] == {
+            "accent": "#c02434",
+            "accent_dark": "#ff6b7a",
+            "logo": "data:image/svg+xml;base64,PHN2Zz4=",
+        }
+
+    def test_no_branding_means_no_config_key(self) -> None:
+        tool = _tool(preset="table")
+        html = build_tool_app_html(tool, tool.ui, connector_slug="shop")  # type: ignore[arg-type]
+        match = re.search(
+            r'<script type="application/json" id="elliot-ui-config">(.*?)</script>',
+            html,
+            re.DOTALL,
+        )
+        assert match
+        assert "branding" not in json.loads(match.group(1))
+
+    def test_empty_branding_is_not_injected(self) -> None:
+        tool = _tool(preset="table")
+        html = build_tool_app_html(
+            tool,
+            tool.ui,  # type: ignore[arg-type]
+            branding=ConnectorBranding(),
+        )
+        match = re.search(
+            r'<script type="application/json" id="elliot-ui-config">(.*?)</script>',
+            html,
+            re.DOTALL,
+        )
+        assert match
+        assert "branding" not in json.loads(match.group(1))
+
+    def test_https_logo_origin_declared_in_resource_csp(self) -> None:
+        tool = _tool(preset="table")
+        cfg = _connector(tool).model_copy(
+            update={
+                "branding": ConnectorBranding(
+                    accent="#123456", logo="https://cdn.shop.example/img/logo.png"
+                )
+            }
+        )
+        ext = build_apps_extension(cfg)
+        assert ext is not None
+        resource = next(iter(ext.resources())).resource
+        assert resource.meta is not None
+        assert resource.meta["ui"]["csp"]["resourceDomains"] == ["https://cdn.shop.example"]
+
+    def test_data_logo_needs_no_resource_domains(self) -> None:
+        tool = _tool(preset="table")
+        cfg = _connector(tool).model_copy(
+            update={"branding": ConnectorBranding(logo="data:image/png;base64,AAAA")}
+        )
+        ext = build_apps_extension(cfg)
+        assert ext is not None
+        resource = next(iter(ext.resources())).resource
+        # No connect domains and a data: logo → no CSP block at all.
+        assert resource.meta is None or "csp" not in resource.meta.get("ui", {})
+
+    def test_accent_validation_rejects_non_hex(self) -> None:
+        import pytest
+
+        with pytest.raises(ValueError, match="hex color"):
+            ConnectorBranding(accent="red")
+
+    def test_logo_validation_rejects_http_and_javascript(self) -> None:
+        import pytest
+
+        with pytest.raises(ValueError, match="data:image"):
+            ConnectorBranding(logo="http://insecure.example/logo.png")
+        with pytest.raises(ValueError, match="data:image"):
+            ConnectorBranding(logo="javascript:alert(1)")
+
+    def test_short_hex_accepted(self) -> None:
+        assert ConnectorBranding(accent="#f00").accent == "#f00"
 
 
 class TestExportInlining:

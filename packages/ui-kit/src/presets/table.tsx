@@ -103,8 +103,8 @@ export function TablePreset({ config, data, onContext }: PresetProps) {
                 key={i}
                 onClick={() => selectRow(i, row)}
                 className={cn(
-                  "border-b border-border/60 cursor-pointer transition-colors hover:bg-muted/40",
-                  selected === i && "bg-muted/70"
+                  "border-b border-border/60 border-l-2 border-l-transparent cursor-pointer transition-colors hover:bg-muted/40",
+                  selected === i && "bg-muted/70 border-l-primary"
                 )}
               >
                 {columns.map((col) => (

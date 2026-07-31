@@ -212,13 +212,24 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 for tool in tools_with_sql
             ]
 
+            # Session-level branding (elliot_set_branding) rides into the
+            # config; fall back to what the previous build carried so a
+            # rebuild never silently drops the brand.
+            effective_branding = session.branding or (
+                session.connector.branding if session.connector else None
+            )
             config = session.builder.set_meta(
                 name=name,
                 slug=slug,
                 version=effective_version,
                 description=description,
                 instructions=effective_instructions,
-            ).build(sources=sources_named, tools=tools_remapped, skills=selected_skills)
+            ).build(
+                sources=sources_named,
+                tools=tools_remapped,
+                skills=selected_skills,
+                branding=effective_branding,
+            )
 
             session.connector = config
             session.build_id = _connector_build_id(config)

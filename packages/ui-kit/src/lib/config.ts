@@ -1,3 +1,13 @@
+/** Connector-level brand identity (ConnectorBranding on the Python side). */
+export interface ElliotBranding {
+  /** Hex accent for highlights/selection/focus; text+background stay host-themed. */
+  accent?: string | null;
+  /** Accent override on dark host themes; falls back to `accent`. */
+  accent_dark?: string | null;
+  /** data:image/... URI or https URL rendered in the view header. */
+  logo?: string | null;
+}
+
 /** The per-tool configuration elliot_core.apps.template_builder injects into
  * the `#elliot-ui-config` script tag of the served ui:// document. */
 export interface ElliotUiConfig {
@@ -7,6 +17,7 @@ export interface ElliotUiConfig {
   /** Preset-specific field wiring, e.g. {columns: "id,name"} — see ToolUIConfig. */
   mapping: Record<string, string>;
   category: "READ" | "WRITE" | "ACTION";
+  branding?: ElliotBranding | null;
 }
 
 const FALLBACK: ElliotUiConfig = {

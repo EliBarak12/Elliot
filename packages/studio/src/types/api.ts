@@ -22,6 +22,15 @@ export interface SourceConfig {
   data_path: string | null;
 }
 
+/** Connector-level brand identity for MCP Apps views (ConnectorBranding on
+ * the Python side). Accent drives highlights/selection; logo renders in each
+ * view's header; text/background always follow the host theme. */
+export interface ConnectorBranding {
+  accent?: string | null;
+  accent_dark?: string | null;
+  logo?: string | null;
+}
+
 /** MCP Apps view config for a tool (ToolUIConfig on the Python side). */
 export interface ToolUiConfig {
   enabled: boolean;
@@ -76,4 +85,5 @@ export interface ConnectorConfig {
   sources: SourceConfig[];
   tools: ToolDefinition[];
   skills: SkillDefinition[];
+  branding?: ConnectorBranding | null;
 }

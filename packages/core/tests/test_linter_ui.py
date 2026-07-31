@@ -92,3 +92,30 @@ def test_declared_csp_origin_is_clean() -> None:
 def test_disabled_ui_is_not_linted() -> None:
     codes = _codes(_connector(_tool(ToolUIConfig(enabled=False, preset="chart"))))
     assert not {c for c in codes if c.startswith("UI_")}
+
+
+def test_oversized_data_logo_warns() -> None:
+    from elliot_core.types.connector import ConnectorBranding
+
+    cfg = _connector(_tool(ToolUIConfig(preset="table", mapping={"columns": "id"})))
+    cfg = cfg.model_copy(
+        update={"branding": ConnectorBranding(logo="data:image/png;base64," + "A" * (70 * 1024))}
+    )
+    issues = lint_connector(cfg)
+    match = [i for i in issues if i.code == "UI_BRANDING_LOGO_TOO_LARGE"]
+    assert match and match[0].severity == "WARN" and match[0].tool_id is None
+
+
+def test_small_data_logo_and_https_logo_are_clean() -> None:
+    from elliot_core.types.connector import ConnectorBranding
+
+    cfg = _connector(_tool(ToolUIConfig(preset="table", mapping={"columns": "id"})))
+    small = cfg.model_copy(
+        update={"branding": ConnectorBranding(logo="data:image/svg+xml;base64,PHN2Zz4=")}
+    )
+    assert "UI_BRANDING_LOGO_TOO_LARGE" not in {i.code for i in lint_connector(small)}
+    # An https logo is a URL, never inlined — size rule does not apply.
+    huge_url = cfg.model_copy(
+        update={"branding": ConnectorBranding(logo="https://cdn.example/" + "a" * 100 + ".png")}
+    )
+    assert "UI_BRANDING_LOGO_TOO_LARGE" not in {i.code for i in lint_connector(huge_url)}

@@ -1,4 +1,4 @@
-from elliot_core.types.connector import ConnectorConfig
+from elliot_core.types.connector import ConnectorBranding, ConnectorConfig
 from elliot_core.types.source import (
     AuthConfig,
     FetchResult,
@@ -23,6 +23,7 @@ from elliot_core.types.tool import (
 )
 
 __all__ = [
+    "ConnectorBranding",
     "ApiRequestMapping",
     "AuthConfig",
     "ConnectorConfig",

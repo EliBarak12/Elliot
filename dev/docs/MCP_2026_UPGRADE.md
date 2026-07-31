@@ -88,6 +88,16 @@ sequenceDiagram
 - Studio: tool editor "Interactive view" section + `AppPreviewHost` (a real
   ext-apps host: AppBridge over postMessage, nested `tools/call` proxied
   through `elliot_preview_tool`); Playground App|JSON toggle.
+- Branding: `ConnectorConfig.branding` (`ConnectorBranding` — hex `accent`,
+  `accent_dark`, `logo` as data: URI or https URL) is injected into every
+  view's config; the ui-kit sets `--primary` from it (inline root style, so
+  it outranks host variables) and renders the logo in the view header, while
+  text/background stay host-themed. Authored via `elliot_set_branding` /
+  `elliot_get_branding` (session-persisted, applied on build + preview) or
+  the Studio Connector page's Branding card. https logo origins are
+  auto-declared in the resource CSP (`resourceDomains`); data: logos are
+  always allowed by the host default `img-src 'self' data:`. Lint:
+  `UI_BRANDING_LOGO_TOO_LARGE` (>64 KiB inline logo, WARN).
 
 ## 3. What deliberately did NOT change
 

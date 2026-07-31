@@ -11,7 +11,7 @@ from typing import Any
 import structlog
 from mcp.server.apps import Apps, ResourceCsp
 
-from elliot_core.types.connector import ConnectorConfig
+from elliot_core.types.connector import ConnectorBranding, ConnectorConfig
 from elliot_core.types.tool import ToolDefinition, ToolUIConfig
 
 log = structlog.get_logger(__name__)
@@ -89,6 +89,7 @@ def build_tool_app_html(
     *,
     connector_slug: str | None = None,
     connector_dir: Path | None = None,
+    branding: ConnectorBranding | None = None,
 ) -> str:
     """The HTML document served at this tool's ui:// URI."""
     if ui.preset == "custom":
@@ -96,13 +97,19 @@ def build_tool_app_html(
         if custom is not None:
             return custom
         # Degrade to the preset shell (auto) rather than serving nothing.
-    config = {
+    config: dict[str, Any] = {
         "tool_id": tool.id,
         "title": ui.title or tool.name,
         "preset": ui.preset if ui.preset != "custom" else "auto",
         "mapping": ui.mapping,
         "category": tool.category,
     }
+    if branding is not None and (branding.accent or branding.logo):
+        config["branding"] = {
+            "accent": branding.accent,
+            "accent_dark": branding.accent_dark,
+            "logo": branding.logo,
+        }
     _ = connector_slug  # part of the stable signature; the config is per-tool
     return _inject_config(_load_preset_shell(), config)
 
@@ -157,7 +164,19 @@ def build_apps_extension(cfg: ConnectorConfig, *, connector_dir: Path | None = N
         if ui is None or not ui.enabled:
             continue
         uri = ui_resource_uri(cfg.slug, tool.id)
-        html = build_tool_app_html(tool, ui, connector_slug=cfg.slug, connector_dir=connector_dir)
+        html = build_tool_app_html(
+            tool,
+            ui,
+            connector_slug=cfg.slug,
+            connector_dir=connector_dir,
+            branding=cfg.branding,
+        )
+        # An https logo needs its origin declared for the host CSP's img-src;
+        # data: URIs are always allowed and need nothing.
+        resource_domains: list[str] = []
+        logo = cfg.branding.logo if cfg.branding else None
+        if logo and logo.startswith("https://"):
+            resource_domains.append("https://" + logo.removeprefix("https://").split("/", 1)[0])
         apps.add_html_resource(
             uri,
             html,
@@ -165,8 +184,11 @@ def build_apps_extension(cfg: ConnectorConfig, *, connector_dir: Path | None = N
             title=ui.title or tool.name,
             description=f"Interactive view for the {tool.id} tool.",
             csp=(
-                ResourceCsp(connect_domains=list(ui.csp_connect_domains))
-                if ui.csp_connect_domains
+                ResourceCsp(
+                    connect_domains=list(ui.csp_connect_domains) or None,
+                    resource_domains=resource_domains or None,
+                )
+                if ui.csp_connect_domains or resource_domains
                 else None
             ),
             prefers_border=ui.prefer_border,

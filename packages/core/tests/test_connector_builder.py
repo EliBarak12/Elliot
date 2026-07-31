@@ -6,6 +6,7 @@ import pytest
 
 from elliot_core.connector.builder import ConnectorBuilder
 from elliot_core.errors import ElliotError
+from elliot_core.types.connector import ConnectorBranding
 from elliot_core.types.source import SourceConfig
 from elliot_core.types.tool import ToolDefinition
 
@@ -22,6 +23,27 @@ def _tool() -> ToolDefinition:
         category="READ",
         source_ids=["src"],
     )
+
+
+def test_build_carries_branding():
+    branding = ConnectorBranding(accent="#c02434", logo="https://cdn.example/logo.svg")
+    config = (
+        ConnectorBuilder()
+        .set_meta(name="Test", version="1.0.0", slug="test")
+        .build(sources=[_source()], tools=[_tool()], branding=branding)
+    )
+    assert config.branding is not None
+    assert config.branding.accent == "#c02434"
+    assert config.branding.logo == "https://cdn.example/logo.svg"
+
+
+def test_build_defaults_to_no_branding():
+    config = (
+        ConnectorBuilder()
+        .set_meta(name="Test", version="1.0.0", slug="test")
+        .build(sources=[_source()], tools=[_tool()])
+    )
+    assert config.branding is None
 
 
 def test_build_without_set_meta_raises():

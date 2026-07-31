@@ -5,7 +5,7 @@ import {
   type App,
   type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps/react";
-import type { ElliotUiConfig } from "./lib/config";
+import type { ElliotBranding, ElliotUiConfig } from "./lib/config";
 import { parseToolResult, resolveAutoPreset, type ToolData } from "./lib/data";
 import { DetailPreset } from "./presets/detail";
 import { MarkdownPreset } from "./presets/markdown";
@@ -20,10 +20,20 @@ export interface PresetProps {
   onContext: (text: string, structured?: Record<string, unknown>) => void;
 }
 
-function applyTheme(ctx: McpUiHostContext | undefined) {
+function applyTheme(ctx: McpUiHostContext | undefined, branding?: ElliotBranding | null) {
   const theme = ctx?.theme;
   if (theme === "dark" || theme === "light") {
     document.documentElement.setAttribute("data-theme", theme);
+  }
+  // The brand accent outranks the host's accent (it IS the product's
+  // identity) while text/background stay host-themed for legibility. Inline
+  // root style wins over both the stylesheet fallbacks and host variables.
+  const accent =
+    theme === "dark"
+      ? (branding?.accent_dark ?? branding?.accent)
+      : branding?.accent;
+  if (accent) {
+    document.documentElement.style.setProperty("--primary", accent);
   }
 }
 
@@ -48,15 +58,15 @@ export function AppShell({ config }: { config: ElliotUiConfig }) {
         setCancelled(typeof params?.reason === "string" ? params.reason : "cancelled");
       };
       created.onhostcontextchanged = (params) => {
-        applyTheme(params as McpUiHostContext);
+        applyTheme(params as McpUiHostContext, config.branding);
       };
     },
   });
 
   useHostStyles(app);
   useEffect(() => {
-    applyTheme(app?.getHostContext());
-  }, [app]);
+    applyTheme(app?.getHostContext(), config.branding);
+  }, [app, config.branding]);
 
   const onContext = useCallback(
     (text: string, structured?: Record<string, unknown>) => {
@@ -78,7 +88,7 @@ export function AppShell({ config }: { config: ElliotUiConfig }) {
 
   if (cancelled) {
     return (
-      <Frame title={config.title}>
+      <Frame title={config.title} logo={config.branding?.logo}>
         <p className="text-sm text-muted-foreground p-4">Tool call cancelled: {cancelled}</p>
       </Frame>
     );
@@ -86,7 +96,7 @@ export function AppShell({ config }: { config: ElliotUiConfig }) {
 
   if (!data) {
     return (
-      <Frame title={config.title}>
+      <Frame title={config.title} logo={config.branding?.logo}>
         <div className="p-4 space-y-2" aria-label="Waiting for tool result">
           <div className="h-3.5 w-2/3 rounded bg-muted animate-pulse" />
           <div className="h-3.5 w-1/2 rounded bg-muted animate-pulse" />
@@ -115,7 +125,7 @@ export function AppShell({ config }: { config: ElliotUiConfig }) {
   }
 
   return (
-    <Frame title={config.title} toolInput={toolInput}>
+    <Frame title={config.title} toolInput={toolInput} logo={config.branding?.logo}>
       {body}
       {data.truncated && data.truncationNote && (
         <p className="px-4 pb-3 text-2xs text-warning">{data.truncationNote}</p>
@@ -127,10 +137,12 @@ export function AppShell({ config }: { config: ElliotUiConfig }) {
 function Frame({
   title,
   toolInput,
+  logo,
   children,
 }: {
   title: string;
   toolInput?: Record<string, unknown> | null;
+  logo?: string | null;
   children: React.ReactNode;
 }) {
   const inputSummary =
@@ -141,8 +153,17 @@ function Frame({
       : null;
   return (
     <div className="min-h-full bg-background text-foreground">
-      <header className="flex items-baseline justify-between gap-3 border-b border-border px-4 py-2.5">
-        <h1 className="text-sm font-semibold truncate">{title}</h1>
+      <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
+        <span className="flex items-center gap-2 min-w-0">
+          {logo && (
+            <img
+              src={logo}
+              alt=""
+              className="h-5 w-auto max-w-[7rem] shrink-0 rounded-sm object-contain"
+            />
+          )}
+          <h1 className="text-sm font-semibold truncate">{title}</h1>
+        </span>
         {inputSummary && (
           <span className="font-mono text-2xs text-muted-foreground truncate" title={inputSummary}>
             {inputSummary}

@@ -627,6 +627,40 @@ def _lint_tool_ui(config: ConnectorConfig) -> list[LintIssue]:
     return issues
 
 
+# An inline logo is embedded into EVERY tool's view document, so its cost is
+# multiplied by the number of UI-enabled tools; 64 KiB fits any reasonable
+# header mark (SVG or compressed PNG at 2x).
+_UI_BRANDING_LOGO_MAX_BYTES = 64 * 1024
+
+
+def _lint_branding(config: ConnectorConfig) -> list[LintIssue]:
+    """Branding sanity: format is schema-enforced (hex accent, data:/https
+    logo), so lint only guards the size of inline data: logos."""
+    issues: list[LintIssue] = []
+    branding = config.branding
+    if branding is None or not branding.logo:
+        return issues
+    logo = branding.logo
+    if logo.startswith("data:") and len(logo.encode("utf-8")) > _UI_BRANDING_LOGO_MAX_BYTES:
+        issues.append(
+            LintIssue(
+                severity="WARN",
+                code="UI_BRANDING_LOGO_TOO_LARGE",
+                tool_id=None,
+                message=(
+                    f"branding.logo data: URI is {len(logo.encode('utf-8')) // 1024} KiB "
+                    f"(cap {_UI_BRANDING_LOGO_MAX_BYTES // 1024} KiB) — it is inlined into "
+                    "every tool's view document, so hosts re-download it per view."
+                ),
+                suggestion=(
+                    "Shrink the logo (SVG or a ≤128px PNG) or host it on https and "
+                    "reference the URL instead."
+                ),
+            )
+        )
+    return issues
+
+
 # Placeholders in a path template, e.g. ``/users/{user_id}`` -> ``user_id``.
 _PATH_PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
 
@@ -712,6 +746,7 @@ def lint_connector(
 
     # ── MCP Apps view configs (ui:// templates the host will render) ──────────
     issues.extend(_lint_tool_ui(config))
+    issues.extend(_lint_branding(config))
 
     seen_ids: set[str] = set()
     for tool in config.tools:

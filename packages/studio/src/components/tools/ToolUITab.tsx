@@ -13,10 +13,14 @@ const PRESETS: Array<{ id: ToolUiConfig["preset"]; label: string; pending?: bool
   { id: "table", label: "Table" },
   { id: "detail", label: "Detail" },
   { id: "metric", label: "Metrics" },
+  { id: "chart", label: "Chart" },
   { id: "markdown", label: "Markdown" },
-  { id: "chart", label: "Chart", pending: true },
+  { id: "custom", label: "Custom HTML" },
   { id: "form", label: "Form", pending: true },
 ];
+
+// The engine caps custom templates at 256 KiB (UI_CUSTOM_HTML_TOO_LARGE).
+const CUSTOM_HTML_MAX_BYTES = 256 * 1024;
 
 export const DEFAULT_UI_CONFIG: ToolUiConfig = {
   enabled: true,
@@ -29,17 +33,24 @@ export const DEFAULT_UI_CONFIG: ToolUiConfig = {
   visibility: ["model", "app"],
 };
 
-/** Which mapping slot each preset reads (comma-separated field names). */
-function mappingSlot(preset: ToolUiConfig["preset"]): { key: string; label: string } | null {
+/** Which mapping slots each preset reads (comma-separated field names). */
+function mappingSlots(
+  preset: ToolUiConfig["preset"]
+): Array<{ key: string; label: string; hint?: string }> {
   switch (preset) {
     case "table":
-      return { key: "columns", label: "Columns" };
+      return [{ key: "columns", label: "Columns" }];
     case "detail":
-      return { key: "fields", label: "Fields" };
+      return [{ key: "fields", label: "Fields" }];
     case "metric":
-      return { key: "value_fields", label: "Value fields" };
+      return [{ key: "value_fields", label: "Value fields" }];
+    case "chart":
+      return [
+        { key: "x", label: "X field", hint: "label axis; first text field otherwise" },
+        { key: "y", label: "Y fields", hint: "numeric; 1 → bars, several → lines" },
+      ];
     default:
-      return null;
+      return [];
   }
 }
 
@@ -62,7 +73,7 @@ export function ToolUITab({ toolId, value, onChange, returnFields }: Props) {
 
   const ui = value ?? DEFAULT_UI_CONFIG;
   const enabled = value !== null && ui.enabled;
-  const slot = mappingSlot(ui.preset);
+  const slots = mappingSlots(ui.preset);
   const fieldHints = useMemo(
     () => returnFields.map((f) => f.alias || f.field).filter(Boolean),
     [returnFields]
@@ -137,11 +148,13 @@ export function ToolUITab({ toolId, value, onChange, returnFields }: Props) {
                 className="mt-1 h-8 text-sm"
               />
             </div>
-            {slot && (
-              <div>
+            {slots.map((slot) => (
+              <div key={slot.key}>
                 <label className="text-xs font-medium text-muted-foreground">
                   {slot.label}{" "}
-                  <span className="font-normal opacity-60">(comma-separated field names)</span>
+                  <span className="font-normal opacity-60">
+                    ({slot.hint ?? "comma-separated field names"})
+                  </span>
                 </label>
                 <Input
                   value={ui.mapping[slot.key] ?? ""}
@@ -152,8 +165,49 @@ export function ToolUITab({ toolId, value, onChange, returnFields }: Props) {
                   className="mt-1 h-8 text-sm font-mono"
                 />
               </div>
-            )}
+            ))}
           </div>
+
+          {ui.preset === "custom" && (
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">
+                Custom HTML{" "}
+                <span className="font-normal opacity-60">
+                  (a full document speaking the MCP Apps postMessage protocol — ask your agent to
+                  read the <code>elliot://docs/custom-apps</code> resource for a working skeleton)
+                </span>
+              </label>
+              <textarea
+                value={ui.custom_html ?? ""}
+                onChange={(e) => update({ custom_html: e.target.value || null })}
+                placeholder="<!doctype html> …"
+                spellCheck={false}
+                className="mt-1 h-40 w-full rounded-md border border-border bg-background p-2 font-mono text-xs"
+              />
+              {(() => {
+                const bytes = new Blob([ui.custom_html ?? ""]).size;
+                if (!ui.custom_html) {
+                  return (
+                    <p className="text-2xs text-warning">
+                      No template yet — the runtime falls back to the Auto preset until one is set.
+                    </p>
+                  );
+                }
+                return (
+                  <p
+                    className={
+                      bytes > CUSTOM_HTML_MAX_BYTES
+                        ? "text-2xs text-destructive"
+                        : "text-2xs text-muted-foreground"
+                    }
+                  >
+                    {Math.round(bytes / 1024)} KiB of {CUSTOM_HTML_MAX_BYTES / 1024} KiB
+                    {bytes > CUSTOM_HTML_MAX_BYTES ? " — too large, the runtime will refuse it." : ""}
+                  </p>
+                );
+              })()}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <div>

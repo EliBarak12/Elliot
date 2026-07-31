@@ -182,3 +182,23 @@ class TestEmbedderKnobs:
         )
         contents = asyncio.run(mcp.read_resource("elliot://docs/install"))
         assert list(contents)[0].content == "CLOUD INSTALL DOC"
+
+    def test_custom_apps_guide_resource_serves_the_contract(self, session) -> None:  # type: ignore[no-untyped-def]
+        import asyncio
+
+        from elliot_mcp_plugin.server import create_elliot_server
+
+        mcp = create_elliot_server(session)
+        contents = asyncio.run(mcp.read_resource("elliot://docs/custom-apps"))
+        body = list(contents)[0].content
+        # The guide must carry the full authoring contract: the protocol
+        # methods a custom template speaks, and a copyable skeleton.
+        for needle in (
+            "ui/initialize",
+            "ui/notifications/tool-result",
+            "ui/update-model-context",
+            "csp_connect_domains",
+            "<!doctype html>",
+            'preset": "custom',
+        ):
+            assert needle in body, f"guide is missing {needle!r}"

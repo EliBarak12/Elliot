@@ -51,8 +51,15 @@ def test_mapping_unknown_field_warns() -> None:
 
 
 def test_pending_preset_warns() -> None:
-    codes = _codes(_connector(_tool(ToolUIConfig(preset="chart"))))
+    codes = _codes(_connector(_tool(ToolUIConfig(preset="form", mapping={}), category="WRITE")))
     assert "UI_PRESET_UNAVAILABLE" in codes
+
+
+def test_chart_preset_is_shipped() -> None:
+    codes = _codes(
+        _connector(_tool(ToolUIConfig(preset="chart", mapping={"x": "id", "y": "total"})))
+    )
+    assert "UI_PRESET_UNAVAILABLE" not in codes
 
 
 def test_form_on_read_tool_warns() -> None:

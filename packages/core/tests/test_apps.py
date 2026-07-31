@@ -74,6 +74,19 @@ class TestTemplateBuilding:
         assert config["mapping"] == {"columns": "id,total"}
         assert config["title"] == "List orders"
 
+    def test_chart_preset_passes_through(self) -> None:
+        tool = _tool(preset="chart", mapping={"x": "customer", "y": "total"})
+        html = build_tool_app_html(tool, tool.ui, connector_slug="shop")  # type: ignore[arg-type]
+        match = re.search(
+            r'<script type="application/json" id="elliot-ui-config">(.*?)</script>',
+            html,
+            re.DOTALL,
+        )
+        assert match
+        config = json.loads(match.group(1))
+        assert config["preset"] == "chart"
+        assert config["mapping"] == {"x": "customer", "y": "total"}
+
     def test_config_json_cannot_break_out_of_script_tag(self) -> None:
         tool = _tool(preset="table", title="</script><script>alert(1)</script>")
         html = build_tool_app_html(tool, tool.ui, connector_slug="shop")  # type: ignore[arg-type]

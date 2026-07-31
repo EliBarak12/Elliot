@@ -503,7 +503,7 @@ def _lint_scaffold_names(config: ConnectorConfig) -> list[LintIssue]:
 _UI_ORIGIN_RE = re.compile(r"https?://[a-zA-Z0-9.-]+")
 # Presets declared in the schema but not yet shipped in the built asset —
 # the runtime serves them as "auto" until the ui-kit grows them.
-_UI_PRESETS_PENDING = {"chart", "form"}
+_UI_PRESETS_PENDING = {"form"}
 _UI_CUSTOM_HTML_MAX_BYTES = 256 * 1024
 
 

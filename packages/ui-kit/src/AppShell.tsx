@@ -7,6 +7,7 @@ import {
 } from "@modelcontextprotocol/ext-apps/react";
 import type { ElliotBranding, ElliotUiConfig } from "./lib/config";
 import { parseToolResult, resolveAutoPreset, type ToolData } from "./lib/data";
+import { ChartPreset } from "./presets/chart";
 import { DetailPreset } from "./presets/detail";
 import { MarkdownPreset } from "./presets/markdown";
 import { MetricPreset } from "./presets/metric";
@@ -114,6 +115,9 @@ export function AppShell({ config }: { config: ElliotUiConfig }) {
       break;
     case "metric":
       body = <MetricPreset {...shared} />;
+      break;
+    case "chart":
+      body = <ChartPreset {...shared} />;
       break;
     case "markdown":
       body = <MarkdownPreset {...shared} />;

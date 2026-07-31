@@ -57,7 +57,7 @@ describe("ToolUITab", () => {
     );
   });
 
-  it("pending presets are not selectable", () => {
+  it("pending presets are not selectable, shipped ones are", () => {
     const onChange = vi.fn();
     render(
       <ToolUITab
@@ -67,7 +67,39 @@ describe("ToolUITab", () => {
         returnFields={[]}
       />
     );
-    const chart = screen.getByText("Chart").closest("button");
-    expect(chart).toBeDisabled();
+    expect(screen.getByText("Form").closest("button")).toBeDisabled();
+    expect(screen.getByText("Chart").closest("button")).not.toBeDisabled();
+    fireEvent.click(screen.getByText("Chart"));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ preset: "chart" }));
+  });
+
+  it("chart preset exposes x and y mapping slots", () => {
+    render(
+      <ToolUITab
+        toolId="list_orders"
+        value={{ ...DEFAULT_UI_CONFIG, preset: "chart" }}
+        onChange={vi.fn()}
+        returnFields={[]}
+      />
+    );
+    expect(screen.getByText("X field")).toBeTruthy();
+    expect(screen.getByText("Y fields")).toBeTruthy();
+  });
+
+  it("custom preset exposes the HTML editor", () => {
+    const onChange = vi.fn();
+    render(
+      <ToolUITab
+        toolId="list_orders"
+        value={{ ...DEFAULT_UI_CONFIG, preset: "custom" }}
+        onChange={onChange}
+        returnFields={[]}
+      />
+    );
+    const editor = screen.getByPlaceholderText("<!doctype html> …");
+    fireEvent.change(editor, { target: { value: "<html>mine</html>" } });
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ custom_html: "<html>mine</html>" })
+    );
   });
 });

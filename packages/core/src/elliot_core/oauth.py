@@ -25,6 +25,7 @@ from urllib.parse import urlencode
 import httpx
 import structlog
 
+from elliot_core.secrets import host_env_secrets_allowed
 from elliot_core.types import OAuth2Config
 
 log = structlog.get_logger(__name__)
@@ -77,13 +78,7 @@ def oauth_tls_verify() -> bool:
     turn off certificate verification for credential exchanges, which would
     expose every tenant's OAuth tokens to a man-in-the-middle.
     """
-    cloud = os.environ.get("ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    if cloud:
+    if not host_env_secrets_allowed():
         return True
     return os.environ.get("ELLIOT_OAUTH_INSECURE", "") != "1"
 

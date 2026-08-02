@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from elliot_core.errors import ElliotError, SourceFetchError
+from elliot_core.secrets import _PLACEHOLDER, SecretResolutionError, host_env_secrets_allowed
+from elliot_core.sql import safe_ident
 from elliot_core.sqlite.query_runner import validate_tool_sql
 from elliot_core.types.source import FetchResult, SourceConfig
 
@@ -19,27 +21,48 @@ _engine_cache_lock = threading.Lock()
 
 
 def _resolve_dsn(config: SourceConfig, secrets: dict[str, str]) -> str:
-    url = config.url or ""
-    if url.startswith("{{ env:") and url.endswith(" }}"):
-        import os
+    """Resolve the source's connection URL, expanding a ``{{ env:VAR }}`` placeholder.
 
-        env_var = url[7:-3].strip()
-        url = secrets.get(env_var) or os.environ.get(env_var, "")
+    Only the strict placeholder grammar (:data:`elliot_core.secrets._PLACEHOLDER`,
+    uppercase name, no space after the colon) is expanded — a loose look-alike
+    such as ``{{ env: DATABASE_URL }}`` is treated as a literal (broken) DSN,
+    never resolved from the host environment. Resolution consults the supplied
+    ``secrets`` map first and falls back to ``os.environ`` only when
+    :func:`~elliot_core.secrets.host_env_secrets_allowed` permits it — the
+    multi-tenant cloud sets ``ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS=1`` so a tenant
+    connector can never read the platform's own ``DATABASE_URL``.
+    """
+    url = config.url or ""
+    match = _PLACEHOLDER.fullmatch(url)
+    if match:
+        env_var = match.group(1)
+        resolved = secrets.get(env_var)
+        if resolved:
+            return resolved
+        if host_env_secrets_allowed():
+            import os
+
+            resolved = os.environ.get(env_var)
+            if resolved:
+                return resolved
+        raise SecretResolutionError(env_var)
     return url
 
 
 def _quote_table(name: str, *, dialect: str) -> str:
-    """Quote a table identifier using the dialect's identifier quote.
+    """Validate and quote a table identifier for the dialect.
 
-    Postgres + SQLite use double-quotes; MySQL/MariaDB use backticks. The
-    quote character also serves as the escape mechanism — doubling it
-    embeds a literal quote — so we apply that defensively even though
-    Elliot's tool registry won't usually accept identifiers containing
-    one.
+    The name is routed through :func:`elliot_core.sql.safe_ident` — the single
+    origin for identifier interpolation — which raises the standard
+    ``INVALID_IDENTIFIER`` error on anything that is not a plain identifier
+    (quotes, whitespace, ``;``, leading digit, over-long). Postgres + SQLite
+    use the returned double-quoted form; MySQL/MariaDB use backticks around
+    the already-validated name.
     """
+    quoted = safe_ident(name)
     if dialect == "mysql":
-        return "`" + name.replace("`", "``") + "`"
-    return '"' + name.replace('"', '""') + '"'
+        return f"`{name}`"
+    return quoted
 
 
 def query_database(config: SourceConfig, secrets: dict[str, str]) -> FetchResult:

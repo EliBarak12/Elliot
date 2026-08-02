@@ -11,6 +11,26 @@ from elliot_core.errors import ElliotError
 _PLACEHOLDER = re.compile(r"\{\{\s*env:([A-Z0-9_]+)\s*\}\}")
 
 
+def host_env_secrets_allowed() -> bool:
+    """Whether a ``{{ env:NAME }}`` secret may fall back to the host process env.
+
+    Local single-user Elliot keeps connector secrets in its own process
+    environment, so reading ``os.environ`` is the intended resolution path.
+
+    The multi-tenant cloud is different: it resolves each tenant's secrets into
+    a closed map and sets ``ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS=1`` so a tenant
+    connector can never declare ``{{ env:DATABASE_URL }}`` (or
+    ``AWS_SECRET_ACCESS_KEY``, or the platform's own encryption key) and have
+    the server inject its own environment into a tenant's request.
+    """
+    return os.environ.get("ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 class SecretResolutionError(ElliotError):
     """Raised when a required env var placeholder cannot be resolved.
 

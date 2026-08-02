@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, CheckCircle2, Palette, Upload, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, ImageIcon, Palette, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -83,23 +83,10 @@ export function BrandingCard() {
   const [accent, setAccent] = useState("");
   const [accentDark, setAccentDark] = useState("");
   const [logo, setLogo] = useState("");
-  // The img src for the preview. NEVER assigned from typed input — only from
-  // browser-constructed object URLs (uploads) and API-returned values (saved
-  // branding, validated server-side). Text typed into the URL field previews
-  // only after a successful save, from the server's echo. This keeps DOM text
-  // out of the src sink entirely (CodeQL js/xss-through-dom).
-  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ type: "ok" | "error"; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  const swapPreview = (next: string | null) => {
-    setPreviewSrc((prev) => {
-      if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
-      return next;
-    });
-  };
 
   useEffect(() => {
     void (async () => {
@@ -110,7 +97,6 @@ export function BrandingCard() {
           setAccent(body.branding.accent ?? "");
           setAccentDark(body.branding.accent_dark ?? "");
           setLogo(body.branding.logo ?? "");
-          setPreviewSrc(body.branding.logo ?? null);
         }
       } catch (err) {
         // Plugin not connected yet is expected on a fresh session.
@@ -130,7 +116,6 @@ export function BrandingCard() {
         return;
       }
       setLogo(dataUri);
-      swapPreview(URL.createObjectURL(file));
       setStatus(null);
     };
     reader.readAsDataURL(file);
@@ -158,8 +143,6 @@ export function BrandingCard() {
         error?: string | { message?: string };
       };
       if (body.status === "ok") {
-        // Preview from the server's echo — the saved, schema-validated value.
-        swapPreview(body.branding?.logo ?? null);
         setStatus({
           type: "ok",
           message:
@@ -212,20 +195,22 @@ export function BrandingCard() {
         <div className="space-y-1.5">
           <Label htmlFor="branding-logo">Logo</Label>
           <div className="flex items-center gap-3 flex-wrap">
-            {previewSrc && (
-              <span className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2 py-1">
-                <img
-                  src={previewSrc}
-                  alt="Connector logo"
-                  className="h-6 w-auto max-w-[8rem] object-contain"
-                />
+            {logo && (
+              // Deliberately NOT an inline <img>: rendering author-supplied
+              // strings into an image src is an XSS-shaped sink (CodeQL
+              // js/xss-through-dom). The visual check lives in the tool-view
+              // preview, which renders the logo inside the sandboxed iframe.
+              <span className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2 py-1 text-xs">
+                <ImageIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="max-w-[14rem] truncate font-mono text-2xs">
+                  {logo.startsWith("data:")
+                    ? `attached image · ${Math.max(1, Math.round(logoBytes / 1024))} KiB`
+                    : logo}
+                </span>
                 <button
                   type="button"
                   aria-label="Remove logo"
-                  onClick={() => {
-                    setLogo("");
-                    swapPreview(null);
-                  }}
+                  onClick={() => setLogo("")}
                   className="rounded p-0.5 opacity-60 hover:opacity-100 hover:bg-muted"
                 >
                   <X className="h-3.5 w-3.5" />
@@ -257,12 +242,7 @@ export function BrandingCard() {
             <Input
               id="branding-logo"
               value={logo.startsWith("data:") ? "" : logo}
-              onChange={(e) => {
-                setLogo(e.target.value.trim());
-                // Typed text never feeds the preview; it renders after save,
-                // from the server's validated echo.
-                swapPreview(null);
-              }}
+              onChange={(e) => setLogo(e.target.value.trim())}
               placeholder="or paste an https:// image URL"
               className="h-8 flex-1 min-w-48 text-sm"
             />
@@ -270,9 +250,7 @@ export function BrandingCard() {
           <p className={logoTooLarge ? "text-2xs text-warning" : "text-2xs text-muted-foreground"}>
             {logoTooLarge
               ? `Logo is ${Math.round(logoBytes / 1024)} KiB — it is inlined into every view; use a small SVG/PNG (≤64 KiB) or an https URL.`
-              : logo && !previewSrc
-                ? "URL set — the preview appears after you save."
-                : "Shown in each view's header. Small SVG or PNG works best; uploads are embedded as data: URIs."}
+              : "Shown in each view's header — save, then use any tool's view preview to see it rendered. Uploads are embedded as data: URIs."}
           </p>
         </div>
 

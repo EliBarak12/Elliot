@@ -13,6 +13,20 @@ const LOGO_WARN_BYTES = 64 * 1024;
 
 const HEX_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
+/** Only render a preview for values the backend schema accepts anyway: a
+ * data:image/ URI or an https URL (canonicalized through URL parsing). Keeps
+ * pasted text like javascript: URLs out of the img src sink (js/xss-through-dom). */
+function safeLogoSrc(value: string): string | null {
+  if (value.startsWith("data:image/")) return value;
+  try {
+    const url = new URL(value);
+    if (url.protocol === "https:") return url.href;
+  } catch {
+    // Not a parseable URL — no preview.
+  }
+  return null;
+}
+
 /** <input type="color"> only accepts #rrggbb — expand #rgb, fall back on invalid. */
 function toColorInputValue(hex: string, fallback: string): string {
   if (!HEX_RE.test(hex)) return fallback;
@@ -121,6 +135,7 @@ export function BrandingCard() {
     reader.readAsDataURL(file);
   };
 
+  const logoSrc = safeLogoSrc(logo);
   const logoBytes = logo.startsWith("data:") ? new Blob([logo]).size : 0;
   const logoTooLarge = logoBytes > LOGO_WARN_BYTES;
   const hexInvalid =
@@ -191,9 +206,9 @@ export function BrandingCard() {
         <div className="space-y-1.5">
           <Label htmlFor="branding-logo">Logo</Label>
           <div className="flex items-center gap-3 flex-wrap">
-            {logo && (
+            {logoSrc && (
               <span className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2 py-1">
-                <img src={logo} alt="Connector logo" className="h-6 w-auto max-w-[8rem] object-contain" />
+                <img src={logoSrc} alt="Connector logo" className="h-6 w-auto max-w-[8rem] object-contain" />
                 <button
                   type="button"
                   aria-label="Remove logo"

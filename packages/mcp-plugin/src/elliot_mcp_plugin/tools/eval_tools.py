@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from mcp.server.fastmcp import FastMCP
 from pydantic import ValidationError
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
@@ -21,6 +20,7 @@ from elliot_core.eval_runner import EvalRunner
 from elliot_core.eval_types import EvalCase as YamlEvalCase
 from elliot_core.eval_types import EvalSuite as YamlEvalSuite
 from elliot_core.eval_types import load_eval_suite as load_yaml_eval_suite
+from elliot_core.mcp_compat import FastMCP
 from elliot_core.tools.executor import ToolExecutor
 from elliot_mcp_plugin.session import ElliotSession
 

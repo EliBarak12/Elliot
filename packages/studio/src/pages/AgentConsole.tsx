@@ -179,6 +179,20 @@ function SessionRow({ session }: { session: AgentSession }) {
             hook
           </Badge>
         )}
+        {session.agent_identity?.protocol_version && (
+          <Badge variant="outline" className="text-2xs shrink-0 tabular-nums">
+            {session.agent_identity.protocol_version}
+          </Badge>
+        )}
+        {session.session_id.startsWith("es_") && (
+          <Badge
+            variant="secondary"
+            className="text-2xs shrink-0"
+            title="Exact journey — the client echoed Elliot's session handle across stateless requests"
+          >
+            linked
+          </Badge>
+        )}
         <span className="text-2xs text-muted-foreground tabular-nums">{time}</span>
         <div className="ml-auto flex items-center gap-3 shrink-0">
           {signals.length > 0 && (

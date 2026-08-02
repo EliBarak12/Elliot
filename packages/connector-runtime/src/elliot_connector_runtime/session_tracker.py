@@ -510,3 +510,129 @@ class SessionTracker:
                 merged[session.session_id] = session.to_dict()
         ordered = sorted(merged.values(), key=lambda d: d.get("started_at", 0.0), reverse=True)
         return ordered[:n]
+
+
+# ── Stateless-fragment stitching ──────────────────────────────────────────────
+# On a stateless transport (the only kind the 2026-07-28 MCP revision has),
+# each request may arrive as its own one-shot "session" fragment. Cooperating
+# clients echo Elliot's server-minted handle (see elliot_core.session_handle),
+# so their fragments share a session id and group exactly; everything else is
+# stitched by agent identity + idle gap. Shared by the local runtime's
+# /v1/sessions and Elliot Cloud's observability (which previously carried its
+# own copy of this logic).
+
+STITCH_IDLE_GAP_S = 900.0  # 15 min between calls ends a logical session
+
+
+def _identity_key(identity: dict[str, Any] | None) -> tuple[str | None, str | None]:
+    ident = identity or {}
+    return (ident.get("client"), ident.get("model"))
+
+
+# (ts, parent_session_id, identity, agent_hint, event_dict)
+_Flat = tuple[float, str, dict[str, Any] | None, str | None, dict[str, Any]]
+
+
+def stitch_stateless_fragments(
+    raw: list[dict[str, Any]], *, idle_gap_s: float = STITCH_IDLE_GAP_S
+) -> list[dict[str, Any]]:
+    """Stitch wire-observed session fragments into per-agent journeys.
+
+    Hook-sourced sessions arrive whole and pass through untouched. Fragments
+    that share an explicit Elliot session handle (``es_…`` or any
+    client-supplied correlation id that repeated) merge exactly — regardless
+    of the idle gap, because a shared handle IS the journey. Remaining
+    single-shot fragments are flattened, sorted by time, and grouped into
+    runs of the same agent identity within ``idle_gap_s``. Each group is
+    rebuilt as a real ``AgentSession`` so totals, behaviour signals and the
+    summary come from the same code the live tracker uses. The earliest
+    fragment's id becomes the logical session's stable id, so a trace URL
+    keeps resolving as more calls extend the run.
+    """
+    from elliot_core.session_handle import is_minted_handle
+
+    kept: list[dict[str, Any]] = []
+    by_handle: dict[str, list[dict[str, Any]]] = {}
+    loose: list[dict[str, Any]] = []
+
+    sid_counts: dict[str, int] = {}
+    wire: list[dict[str, Any]] = []
+    for s in raw:
+        if (s.get("source") or "mcp") == "hook":
+            kept.append(s)
+            continue
+        wire.append(s)
+        sid = str(s.get("session_id") or "")
+        sid_counts[sid] = sid_counts.get(sid, 0) + 1
+
+    for s in wire:
+        sid = str(s.get("session_id") or "")
+        # An Elliot-minted handle is exact by construction; any other id that
+        # recurs across fragments was a deliberate client correlation id.
+        if sid and (is_minted_handle(sid) or sid_counts.get(sid, 0) > 1):
+            by_handle.setdefault(sid, []).append(s)
+        else:
+            loose.append(s)
+
+    def _flatten(fragments: list[dict[str, Any]]) -> list[_Flat]:
+        flat: list[_Flat] = []
+        for s in fragments:
+            sid = str(s.get("session_id") or "")
+            ident = s.get("agent_identity") if isinstance(s.get("agent_identity"), dict) else None
+            hint = s.get("agent_hint")
+            base_ts = float(s.get("started_at") or 0.0)
+            for e in s.get("events") or []:
+                ts = float(e.get("ts") or base_ts)
+                flat.append((ts, sid, ident, hint, e))
+        flat.sort(key=lambda t: t[0])
+        return flat
+
+    def _rebuild(run: list[_Flat], session_id: str | None = None) -> dict[str, Any]:
+        first = run[0]
+        events = [
+            SessionEvent(
+                ts=float(e.get("ts") or 0.0),
+                type=e.get("type") or "tool_call",
+                tool_id=e.get("tool_id"),
+                arguments=e.get("arguments") if isinstance(e.get("arguments"), dict) else None,
+                result_rows=e.get("result_rows"),
+                result_token_estimate=e.get("result_token_estimate"),
+                duration_ms=float(e.get("duration_ms") or 0.0),
+                error=e.get("error"),
+                error_code=e.get("error_code"),
+                result_preview=e.get("result_preview"),
+                reasoning=e.get("reasoning"),
+            )
+            for (_ts, _sid, _ident, _hint, e) in run
+        ]
+        session = AgentSession(
+            session_id=session_id or first[1],
+            started_at=first[0],
+            agent_hint=first[3],
+            agent_identity=first[2],
+            events=events,
+            last_activity=run[-1][0],
+            source="mcp",
+        )
+        return session.to_dict()
+
+    for sid, fragments in by_handle.items():
+        flat = _flatten(fragments)
+        if flat:
+            kept.append(_rebuild(flat, session_id=sid))
+
+    runs: list[list[_Flat]] = []
+    for item in _flatten(loose):
+        if runs:
+            prev = runs[-1][-1]
+            same_identity = _identity_key(item[2]) == _identity_key(prev[2])
+            within_gap = item[0] - prev[0] <= idle_gap_s
+            if same_identity and within_gap:
+                runs[-1].append(item)
+                continue
+        runs.append([item])
+    for run in runs:
+        kept.append(_rebuild(run))
+
+    kept.sort(key=lambda d: float(d.get("started_at") or 0.0), reverse=True)
+    return kept

@@ -8,8 +8,8 @@ import json
 from pathlib import Path
 
 import pytest
-from mcp.server.fastmcp import FastMCP
 
+from elliot_core.mcp_compat import FastMCP
 from elliot_mcp_plugin.session import ElliotSession
 
 pytestmark = pytest.mark.integration

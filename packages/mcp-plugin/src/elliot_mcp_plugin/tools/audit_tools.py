@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Annotated
 
 import structlog
-from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from elliot_core.audit import (
@@ -28,6 +27,7 @@ from elliot_core.audit import (
 from elliot_core.audit.llm_judge import LlmJudgment
 from elliot_core.audit.models import AuditTranscript
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.mcp_compat import FastMCP
 from elliot_mcp_plugin.session import ElliotSession
 
 log = structlog.get_logger(__name__)

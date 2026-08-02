@@ -499,6 +499,168 @@ def _lint_scaffold_names(config: ConnectorConfig) -> list[LintIssue]:
     return issues
 
 
+# Origins referenced by a custom MCP Apps template, for the CSP check.
+_UI_ORIGIN_RE = re.compile(r"https?://[a-zA-Z0-9.-]+")
+# Presets declared in the schema but not yet shipped in the built asset —
+# the runtime serves them as "auto" until the ui-kit grows them.
+_UI_PRESETS_PENDING = {"form"}
+_UI_CUSTOM_HTML_MAX_BYTES = 256 * 1024
+
+
+def _lint_tool_ui(config: ConnectorConfig) -> list[LintIssue]:
+    """Check each tool's MCP Apps view config against what will actually
+    render: mapped fields must exist, custom templates must exist and fit the
+    size budget, and external origins a custom template calls must be
+    declared for the host's Content-Security-Policy."""
+    issues: list[LintIssue] = []
+    for tool in config.tools:
+        ui = getattr(tool, "ui", None)
+        if ui is None or not ui.enabled:
+            continue
+        if ui.preset in _UI_PRESETS_PENDING:
+            issues.append(
+                LintIssue(
+                    severity="WARN",
+                    code="UI_PRESET_UNAVAILABLE",
+                    tool_id=tool.id,
+                    message=(
+                        f"Tool '{tool.id}' requests the '{ui.preset}' view preset, which is "
+                        "declared but not yet shipped — hosts will render the auto preset."
+                    ),
+                    suggestion="Use table/detail/metric/markdown, or a custom template.",
+                )
+            )
+        declared_fields = {
+            (rf.alias or rf.field) for rf in getattr(tool, "return_fields", []) or []
+        }
+        if declared_fields:
+            for key, value in ui.mapping.items():
+                unknown = [
+                    name
+                    for name in (part.strip() for part in value.split(","))
+                    if name and name not in declared_fields
+                ]
+                if unknown:
+                    issues.append(
+                        LintIssue(
+                            severity="WARN",
+                            code="UI_MAPPING_UNKNOWN_FIELD",
+                            tool_id=tool.id,
+                            message=(
+                                f"Tool '{tool.id}' UI mapping '{key}' references "
+                                f"{unknown} — not among the tool's returned fields, so the "
+                                "view will render empty cells."
+                            ),
+                            suggestion=(
+                                "Reference returned field names (aliases count): "
+                                + ", ".join(sorted(declared_fields))
+                            ),
+                        )
+                    )
+        if ui.preset == "form" and tool.category == "READ":
+            issues.append(
+                LintIssue(
+                    severity="WARN",
+                    code="UI_FORM_PRESET_MISUSE",
+                    tool_id=tool.id,
+                    message=(
+                        f"Tool '{tool.id}' is a READ tool with the 'form' preset — forms "
+                        "are for WRITE/ACTION tools that take user input."
+                    ),
+                    suggestion="Use table/detail for READ results.",
+                )
+            )
+        if ui.preset == "custom":
+            if not ui.custom_html:
+                issues.append(
+                    LintIssue(
+                        severity="ERROR",
+                        code="UI_CUSTOM_HTML_MISSING",
+                        tool_id=tool.id,
+                        message=(
+                            f"Tool '{tool.id}' declares preset 'custom' but no custom_html "
+                            "template — there is nothing to render."
+                        ),
+                        suggestion=(
+                            "Set custom_html to a template path (or switch to a built-in preset)."
+                        ),
+                    )
+                )
+            elif ui.custom_html.lstrip().startswith("<"):
+                html = ui.custom_html
+                if len(html.encode("utf-8")) > _UI_CUSTOM_HTML_MAX_BYTES:
+                    issues.append(
+                        LintIssue(
+                            severity="ERROR",
+                            code="UI_CUSTOM_HTML_TOO_LARGE",
+                            tool_id=tool.id,
+                            message=(
+                                f"Tool '{tool.id}' custom template exceeds "
+                                f"{_UI_CUSTOM_HTML_MAX_BYTES // 1024} KiB — hosts download "
+                                "the view per render; keep it lean."
+                            ),
+                            suggestion="Trim the template or move heavy assets behind csp_connect_domains.",
+                        )
+                    )
+                declared_origins = set(ui.csp_connect_domains)
+                undeclared = sorted(
+                    {
+                        origin
+                        for origin in _UI_ORIGIN_RE.findall(html)
+                        if not any(dom in origin for dom in declared_origins)
+                    }
+                )
+                if undeclared:
+                    issues.append(
+                        LintIssue(
+                            severity="WARN",
+                            code="UI_CSP_UNDECLARED_DOMAIN",
+                            tool_id=tool.id,
+                            message=(
+                                f"Tool '{tool.id}' custom template references {undeclared} "
+                                "but csp_connect_domains does not declare them — the host's "
+                                "Content-Security-Policy will block those requests."
+                            ),
+                            suggestion="List every external origin in ui.csp_connect_domains.",
+                        )
+                    )
+    return issues
+
+
+# An inline logo is embedded into EVERY tool's view document, so its cost is
+# multiplied by the number of UI-enabled tools; 64 KiB fits any reasonable
+# header mark (SVG or compressed PNG at 2x).
+_UI_BRANDING_LOGO_MAX_BYTES = 64 * 1024
+
+
+def _lint_branding(config: ConnectorConfig) -> list[LintIssue]:
+    """Branding sanity: format is schema-enforced (hex accent, data:/https
+    logo), so lint only guards the size of inline data: logos."""
+    issues: list[LintIssue] = []
+    branding = config.branding
+    if branding is None or not branding.logo:
+        return issues
+    logo = branding.logo
+    if logo.startswith("data:") and len(logo.encode("utf-8")) > _UI_BRANDING_LOGO_MAX_BYTES:
+        issues.append(
+            LintIssue(
+                severity="WARN",
+                code="UI_BRANDING_LOGO_TOO_LARGE",
+                tool_id=None,
+                message=(
+                    f"branding.logo data: URI is {len(logo.encode('utf-8')) // 1024} KiB "
+                    f"(cap {_UI_BRANDING_LOGO_MAX_BYTES // 1024} KiB) — it is inlined into "
+                    "every tool's view document, so hosts re-download it per view."
+                ),
+                suggestion=(
+                    "Shrink the logo (SVG or a ≤128px PNG) or host it on https and "
+                    "reference the URL instead."
+                ),
+            )
+        )
+    return issues
+
+
 # Placeholders in a path template, e.g. ``/users/{user_id}`` -> ``user_id``.
 _PATH_PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
 
@@ -581,6 +743,10 @@ def lint_connector(
 
     # ── scaffold/placeholder tool names left in a shipped connector ───────────
     issues.extend(_lint_scaffold_names(config))
+
+    # ── MCP Apps view configs (ui:// templates the host will render) ──────────
+    issues.extend(_lint_tool_ui(config))
+    issues.extend(_lint_branding(config))
 
     seen_ids: set[str] = set()
     for tool in config.tools:

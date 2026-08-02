@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from mcp.server.fastmcp import FastMCP
 
+from elliot_core.mcp_compat import FastMCP
 from elliot_mcp_plugin.server import create_elliot_server
 from elliot_mcp_plugin.session import ElliotSession
 
@@ -140,10 +140,65 @@ def test_missing_required_arg_surfaces_validation_code(session: ElliotSession):
     so agents can branch on the code instead of parsing a raw pydantic dump (F-006)."""
     import asyncio
 
-    from mcp.server.fastmcp.exceptions import ToolError
+    from elliot_core.mcp_compat import ToolError
 
     server = create_elliot_server(session)
     with pytest.raises(ToolError) as ei:
         # elliot_query_sql requires `sql`
         asyncio.run(server._tool_manager.call_tool("elliot_query_sql", {}))
     assert "VALIDATION_MISSING_FIELD" in str(ei.value)
+
+
+class TestEmbedderKnobs:
+    """The keyword knobs Elliot Cloud uses instead of poking SDK privates."""
+
+    def test_instructions_override(self, session) -> None:  # type: ignore[no-untyped-def]
+        from elliot_mcp_plugin.server import create_elliot_server
+
+        mcp = create_elliot_server(session, instructions="Cloud builder instructions.")
+        assert mcp.instructions == "Cloud builder instructions."
+
+    def test_hide_tools_removes_from_registry(self, session) -> None:  # type: ignore[no-untyped-def]
+        from elliot_mcp_plugin.server import create_elliot_server
+
+        mcp = create_elliot_server(session, hide_tools=["elliot_start_runtime"])
+        names = {t.name for t in mcp._tool_manager.list_tools()}
+        assert "elliot_start_runtime" not in names
+        assert "elliot_list_tools" in names
+
+    def test_register_skill_prompts_serves_prompts(self, session) -> None:  # type: ignore[no-untyped-def]
+        from elliot_mcp_plugin.server import create_elliot_server
+
+        mcp = create_elliot_server(session, register_skill_prompts=True)
+        assert len(mcp._prompt_manager._prompts) > 0
+
+    def test_resource_override_swaps_text(self, session) -> None:  # type: ignore[no-untyped-def]
+        import asyncio
+
+        from elliot_mcp_plugin.server import create_elliot_server
+
+        mcp = create_elliot_server(
+            session, resource_overrides={"elliot://docs/install": "CLOUD INSTALL DOC"}
+        )
+        contents = asyncio.run(mcp.read_resource("elliot://docs/install"))
+        assert list(contents)[0].content == "CLOUD INSTALL DOC"
+
+    def test_custom_apps_guide_resource_serves_the_contract(self, session) -> None:  # type: ignore[no-untyped-def]
+        import asyncio
+
+        from elliot_mcp_plugin.server import create_elliot_server
+
+        mcp = create_elliot_server(session)
+        contents = asyncio.run(mcp.read_resource("elliot://docs/custom-apps"))
+        body = list(contents)[0].content
+        # The guide must carry the full authoring contract: the protocol
+        # methods a custom template speaks, and a copyable skeleton.
+        for needle in (
+            "ui/initialize",
+            "ui/notifications/tool-result",
+            "ui/update-model-context",
+            "csp_connect_domains",
+            "<!doctype html>",
+            'preset": "custom',
+        ):
+            assert needle in body, f"guide is missing {needle!r}"

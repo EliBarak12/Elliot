@@ -90,17 +90,15 @@ def _wait(url: str, timeout: float = 20.0) -> None:
 
 
 async def _mcp_list_and_fetch(access: str) -> tuple[list[str], dict[str, Any]]:
-    from mcp.client.session import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
+    import httpx2
+    from mcp.client import Client
+    from mcp.client.streamable_http import streamable_http_client
 
-    headers = {"Authorization": f"Bearer {access}"}
-    async with (
-        streamablehttp_client(MCP_URL, headers=headers) as (r, w, _),
-        ClientSession(r, w) as session,
-    ):
-        await session.initialize()
-        tools = await session.list_tools()
-        res = await session.call_tool("list_messages", {})
+    http_client = httpx2.AsyncClient(headers={"Authorization": f"Bearer {access}"})
+    transport = streamable_http_client(MCP_URL, http_client=http_client)
+    async with http_client, Client(transport, mode="legacy") as client:
+        tools = await client.list_tools()
+        res = await client.call_tool("list_messages", {})
         text = res.content[0].text if res.content else "{}"  # type: ignore[union-attr]
         return [t.name for t in tools.tools], json.loads(text)
 

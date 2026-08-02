@@ -314,14 +314,16 @@ async def test_connector_schema_resource_redacts_secrets() -> None:
     assert "api.example.com" in body
 
 
-async def test_argument_validation_failures_are_recorded() -> None:
-    """FastMCP rejects a bad-argument call (missing required param) before the
+@pytest.mark.parametrize("mode", ["legacy", "auto"])
+async def test_argument_validation_failures_are_recorded(mode: str) -> None:
+    """The SDK rejects a bad-argument call (missing required param) before the
     handler runs, so it would otherwise never reach the observation store — but
     'agents keep calling my tool with the wrong params' must be visible to the
-    owner, not vanish into a 0% error rate."""
+    owner, not vanish into a 0% error rate. Exercised on both the 2025
+    handshake path (legacy) and the 2026 stateless path (auto)."""
     import tempfile
 
-    from mcp.shared.memory import create_connected_server_and_client_session
+    from mcp.client import Client
 
     from elliot_connector_runtime.executor import ToolExecutor
     from elliot_connector_runtime.observation_store import ObservationStore
@@ -364,11 +366,10 @@ async def test_argument_validation_failures_are_recorded() -> None:
         store=store,
     )
 
-    async with create_connected_server_and_client_session(mcp._mcp_server) as client:
-        await client.initialize()
+    async with Client(mcp, mode=mode) as client:  # type: ignore[arg-type]
         await client.call_tool("get_thing", {"thing_id": 1})  # valid
         res = await client.call_tool("get_thing", {})  # missing required param
-        assert res.isError
+        assert res.is_error
 
     calls = store.recent_tool_calls(50)
     assert len(calls) == 2, "both the valid call and the validation failure must be recorded"
@@ -385,7 +386,7 @@ async def test_runtime_advertises_logging_and_streams_structured_telemetry() -> 
     accept ``logging/setLevel`` instead of failing with 'Method not found'."""
     import asyncio
 
-    from mcp.shared.memory import create_connected_server_and_client_session
+    from mcp.client import Client
 
     from elliot_connector_runtime.executor import ToolExecutor
     from elliot_connector_runtime.server import create_runtime_server
@@ -419,11 +420,8 @@ async def test_runtime_advertises_logging_and_streams_structured_telemetry() -> 
     async def on_log(params):  # type: ignore[no-untyped-def]
         captured.append(params)
 
-    async with create_connected_server_and_client_session(
-        mcp._mcp_server, logging_callback=on_log
-    ) as client:
-        init = await client.initialize()
-        assert init.capabilities.logging is not None, "logging capability not advertised"
+    async with Client(mcp, mode="legacy", logging_callback=on_log) as client:
+        assert client.server_capabilities.logging is not None, "logging capability not advertised"
         # Must not raise McpError 'Method not found'.
         await client.set_logging_level("debug")
         await client.call_tool("list_x", {})
@@ -483,13 +481,13 @@ async def test_tool_input_schema_carries_param_description_and_enum() -> None:
     )
     mcp = create_runtime_server(cfg, ToolExecutor(cfg, secrets={}))
     tool = next(t for t in await mcp.list_tools() if t.name == "find_orders")
-    props = tool.inputSchema["properties"]
+    props = tool.input_schema["properties"]
 
     assert props["status"]["description"] == "The order status to filter by."
     assert props["status"]["enum"] == ["open", "closed", "refunded"]
     assert props["limit"]["description"] == "Max rows to return (default 50)."
     # Required/optional split must be preserved through the Annotated wrapping.
-    assert tool.inputSchema["required"] == ["status"]
+    assert tool.input_schema["required"] == ["status"]
 
 
 def test_redact_secret_blocks_masks_nested_auth_and_headers() -> None:
@@ -711,10 +709,9 @@ def test_mcp_tool_call_writes_observability(tmp_path: Path) -> None:
         tool = mcp._tool_manager.get_tool("list_animals")
         assert tool is not None
 
-        # Run the wrapped handler. ctx.get_context() will raise outside an MCP
-        # session — the handler catches that and continues with session_id=None.
-        # To still exercise the observability writes, we provide a session via
-        # a temporary monkey patch.
+        # Run the wrapped handler directly. The SDK normally injects the
+        # request Context via the handler's ctx parameter; supply a minimal
+        # stub so observability can correlate on request_id.
         class _Ctx:
             request_id = "test-req-123"
 
@@ -727,8 +724,7 @@ def test_mcp_tool_call_writes_observability(tmp_path: Path) -> None:
         def _get_ctx():  # type: ignore[no-untyped-def]
             return _Ctx()
 
-        mcp.get_context = _get_ctx  # type: ignore[assignment]
-        asyncio.run(tool.fn())  # call with no kwargs (list_animals takes none)
+        asyncio.run(tool.fn(ctx=_Ctx()))  # list_animals takes no tool args
 
         # Audit log written
         entries = audit.tail(10)
@@ -806,10 +802,8 @@ def test_mcp_tool_call_records_non_elliot_error(tmp_path: Path) -> None:
             async def warning(self, *a, **k):  # type: ignore[no-untyped-def]
                 pass
 
-        mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
-
         with pytest.raises(ValueError):
-            asyncio.run(tool.fn())
+            asyncio.run(tool.fn(ctx=_Ctx()))
 
         # The failed call must appear in the audit log with an error set.
         entries = audit.tail(10)
@@ -927,8 +921,6 @@ def test_feedback_tool_registered_and_records(tmp_path: Path) -> None:
         async def warning(self, *a, **k):  # type: ignore[no-untyped-def]
             pass
 
-    mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
-
     # Built-in tools are namespaced under the connector slug ("pets").
     assert mcp._tool_manager.get_tool("submit_feedback") is None
     tool = mcp._tool_manager.get_tool("pets_submit_feedback")
@@ -985,7 +977,6 @@ def test_feedback_tool_rejects_invalid_outcome(tmp_path: Path) -> None:
         async def warning(self, *a, **k):  # type: ignore[no-untyped-def]
             pass
 
-    mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
     tool = mcp._tool_manager.get_tool("pets_submit_feedback")
     assert tool is not None
 
@@ -1119,8 +1110,6 @@ def test_agent_identity_recorded_via_middleware(tmp_path: Path) -> None:
         async def warning(self, *a, **k):  # type: ignore[no-untyped-def]
             pass
 
-    mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
-
     identity = AgentIdentity(
         client="claude-code",
         client_version="1.42.0",
@@ -1131,7 +1120,7 @@ def test_agent_identity_recorded_via_middleware(tmp_path: Path) -> None:
     try:
         tool = mcp._tool_manager.get_tool("list_animals")
         assert tool is not None
-        asyncio.run(tool.fn())
+        asyncio.run(tool.fn(ctx=_Ctx()))
     finally:
         reset_current_agent_identity(token)
 
@@ -1197,8 +1186,6 @@ def test_destructive_tool_requires_confirmation_when_enabled(
         async def warning(self, *a, **k):  # type: ignore[no-untyped-def]
             pass
 
-    mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
-
     tool = mcp._tool_manager.get_tool("delete_animal")
     assert tool is not None
 
@@ -1253,8 +1240,6 @@ def test_read_tool_does_not_require_confirmation_even_when_enabled(
 
         async def warning(self, *a, **k):  # type: ignore[no-untyped-def]
             pass
-
-    mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
 
     tool = mcp._tool_manager.get_tool("list_animals")
     assert tool is not None
@@ -1354,11 +1339,9 @@ def test_explicit_destructive_flag_flows_to_annotations_and_gate(
         async def warning(self, *a, **k):  # type: ignore[no-untyped-def]
             pass
 
-    mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
-
     tool = mcp._tool_manager.get_tool("issue_refund")
     assert tool is not None
-    assert tool.annotations.destructiveHint is True
+    assert tool.annotations.destructive_hint is True
     assert "confirm" in _inspect.signature(tool.fn).parameters
     with pytest.raises(ValueError, match="CONFIRMATION_REQUIRED"):
         asyncio.run(tool.fn(order_id=1))
@@ -1429,22 +1412,20 @@ def test_additive_write_is_not_gated_and_hint_tracks_verb(
         async def warning(self, *a, **k):  # type: ignore[no-untyped-def]
             pass
 
-    mcp.get_context = lambda: _Ctx()  # type: ignore[assignment]
-
     create = mcp._tool_manager.get_tool("create_animal")
     delete = mcp._tool_manager.get_tool("delete_animal")
     assert create is not None and delete is not None
 
     # Additive write: no confirm gate, runs straight through, non-destructive.
     assert "confirm" not in _inspect.signature(create.fn).parameters
-    assert create.annotations.destructiveHint is False
-    assert create.annotations.readOnlyHint is False
+    assert create.annotations.destructive_hint is False
+    assert create.annotations.read_only_hint is False
     asyncio.run(create.fn(name="Ada"))
     assert ran.get("create_animal") == {"name": "Ada"}
 
     # Destructive write: gated and flagged, exactly as before.
     assert "confirm" in _inspect.signature(delete.fn).parameters
-    assert delete.annotations.destructiveHint is True
+    assert delete.annotations.destructive_hint is True
     with pytest.raises(ValueError, match="CONFIRMATION_REQUIRED"):
         asyncio.run(delete.fn(id=1))
 
@@ -1494,7 +1475,7 @@ async def test_deterministic_skill_runs_as_one_mcp_call() -> None:
     """
     import json as _json
 
-    from mcp.shared.memory import create_connected_server_and_client_session
+    from mcp.client import Client
 
     from elliot_connector_runtime.executor import ToolExecutor
     from elliot_connector_runtime.server import create_runtime_server
@@ -1565,10 +1546,9 @@ async def test_deterministic_skill_runs_as_one_mcp_call() -> None:
     tool_names = {t.name for t in await mcp.list_tools()}
     assert {"find_user", "count_orders", "user_order_summary"} <= tool_names
 
-    async with create_connected_server_and_client_session(mcp._mcp_server) as client:
-        await client.initialize()
+    async with Client(mcp, mode="legacy") as client:
         res = await client.call_tool("user_order_summary", {"email": "a@b.com"})
-        assert not res.isError
+        assert not res.is_error
         payload = _json.loads(res.content[0].text)  # type: ignore[union-attr]
 
     # The chain ran: the final step (order count) is the primary answer in
@@ -1676,7 +1656,7 @@ async def test_skill_with_a_destructive_step_is_flagged_destructive() -> None:
     )
     mcp = create_runtime_server(cfg, ToolExecutor(cfg, secrets={}))
     tool = next(t for t in await mcp.list_tools() if t.name == "purge_stale")
-    assert tool.annotations is not None and tool.annotations.destructiveHint is True
+    assert tool.annotations is not None and tool.annotations.destructive_hint is True
     # The danger is also stated in the description an agent reads and a human
     # confirms — not only carried as the machine flag — and it names the step.
     assert "Danger zone" in (tool.description or "")
@@ -1722,7 +1702,7 @@ async def test_skill_call_is_recorded_in_the_observation_store() -> None:
     reflects skill activity, not just individual tool calls (principle 4)."""
     import tempfile
 
-    from mcp.shared.memory import create_connected_server_and_client_session
+    from mcp.client import Client
 
     from elliot_connector_runtime.executor import ToolExecutor
     from elliot_connector_runtime.observation_store import ObservationStore
@@ -1769,9 +1749,194 @@ async def test_skill_call_is_recorded_in_the_observation_store() -> None:
         store=store,
     )
 
-    async with create_connected_server_and_client_session(mcp._mcp_server) as client:
-        await client.initialize()
+    async with Client(mcp, mode="legacy") as client:
         res = await client.call_tool("do_it", {})
-        assert not res.isError
+        assert not res.is_error
 
     assert any(c.get("tool_id") == "do_it" for c in store.recent_tool_calls(50))
+
+
+# ── 2026-07-28: Elliot session handles on the stateless wire ─────────────────
+
+
+_MODERN_HEADERS = {
+    "Accept": "application/json, text/event-stream",
+    "MCP-Protocol-Version": "2026-07-28",
+}
+_MODERN_META = {
+    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    "io.modelcontextprotocol/clientCapabilities": {},
+    "io.modelcontextprotocol/clientInfo": {"name": "probe26", "version": "1"},
+}
+
+
+def _modern_call(client: TestClient, req_id: int, extra_headers: dict | None = None) -> tuple:
+    resp = client.post(
+        "/mcp/",
+        json={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "method": "tools/call",
+            "params": {"name": "list_animals", "arguments": {}, "_meta": _MODERN_META},
+        },
+        headers={
+            **_MODERN_HEADERS,
+            # 2026-07-28 header-based routing: Mcp-Name MUST match params.name
+            # on tools/call, else the server answers HeaderMismatch (-32020).
+            "Mcp-Method": "tools/call",
+            "Mcp-Name": "list_animals",
+            **(extra_headers or {}),
+        },
+    )
+    body = resp.text
+    if "data:" in body:
+        data = json.loads(next(ln for ln in body.splitlines() if ln.startswith("data:"))[5:])
+    else:
+        data = json.loads(body)
+    return resp, data
+
+
+@respx.mock
+def test_session_handle_minted_and_echoed_on_stateless_wire(app) -> None:
+    """A handle-less 2026 request gets a server-minted es_ handle echoed in
+    both the Elliot-Session-Id response header and the result _meta — the
+    spec-recommended 'server-minted handle' replacing protocol sessions."""
+    respx.get("https://api.example.com/animals").mock(
+        return_value=httpx.Response(200, json={"items": [{"id": 1, "name": "Rex"}]})
+    )
+    with TestClient(app) as client:
+        resp, data = _modern_call(client, 1)
+        assert resp.status_code == 200
+        header_handle = resp.headers.get("Elliot-Session-Id")
+        assert header_handle and header_handle.startswith("es_")
+        meta = data["result"].get("_meta") or {}
+        assert meta.get("io.elliot/session") == header_handle
+
+
+@respx.mock
+def test_echoed_handle_groups_calls_into_one_session(app) -> None:
+    """Two stateless calls echoing the same Elliot-Session-Id land in ONE
+    logical session (exact grouping — no heuristics), visible on /v1/sessions."""
+    respx.get("https://api.example.com/animals").mock(
+        return_value=httpx.Response(200, json={"items": [{"id": 1, "name": "Rex"}]})
+    )
+    with TestClient(app) as client:
+        resp1, _ = _modern_call(client, 1)
+        handle = resp1.headers["Elliot-Session-Id"]
+        resp2, _ = _modern_call(client, 2, {"Elliot-Session-Id": handle})
+        assert resp2.headers["Elliot-Session-Id"] == handle
+
+        sessions = client.get("/v1/sessions?n=10").json()
+        mine = [s for s in sessions if s["session_id"] == handle]
+        assert len(mine) == 1, f"expected one stitched session, got {sessions}"
+        assert mine[0]["total_tool_calls"] == 2
+
+        raw = client.get("/v1/sessions?n=10&stitched=0").json()
+        assert any(s["session_id"] == handle for s in raw)
+
+
+@respx.mock
+def test_meta_carried_handle_upgrades_minted_one(app) -> None:
+    """A client that echoes the handle via request _meta (instead of the
+    header) still lands in the same session — _meta upgrades a minted handle."""
+    respx.get("https://api.example.com/animals").mock(
+        return_value=httpx.Response(200, json={"items": [{"id": 1, "name": "Rex"}]})
+    )
+    with TestClient(app) as client:
+        resp1, _ = _modern_call(client, 1)
+        handle = resp1.headers["Elliot-Session-Id"]
+        resp2 = client.post(
+            "/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "list_animals",
+                    "arguments": {},
+                    "_meta": {**_MODERN_META, "io.elliot/session": handle},
+                },
+            },
+            headers={**_MODERN_HEADERS, "Mcp-Method": "tools/call", "Mcp-Name": "list_animals"},
+        )
+        # The response header reflects the _meta-upgraded handle, not a
+        # freshly minted one.
+        assert resp2.headers["Elliot-Session-Id"] == handle
+
+
+# ── MCP Apps: ui:// views for tools with a UI config ─────────────────────────
+
+
+async def test_apps_extension_serves_ui_view_and_stamps_tool_meta() -> None:
+    """A tool with a ToolUIConfig gets (a) _meta.ui.resourceUri on its listing
+    entry, (b) a ui:// resource with mime text/html;profile=mcp-app whose
+    document carries the injected per-tool config, and (c) the
+    io.modelcontextprotocol/ui extension advertised — the full ext-apps
+    contract a host needs to render the view."""
+    from mcp.client import Client
+
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import ConnectorConfig
+
+    class _Eng:
+        def query(self, sql, params):  # type: ignore[no-untyped-def]
+            return [{"id": 1, "name": "Rex"}]
+
+    cfg = ConnectorConfig.model_validate(
+        {
+            "name": "Pets",
+            "slug": "pets",
+            "version": "1.0.0",
+            "sources": [{"id": "s", "name": "s", "type": "file", "url": "x"}],
+            "tools": [
+                {
+                    "id": "list_animals",
+                    "name": "List animals",
+                    "description": "Return all animals",
+                    "category": "READ",
+                    "sql": "SELECT * FROM animals",
+                    "parameters": [],
+                    "ui": {"preset": "table", "mapping": {"columns": "id,name"}},
+                }
+            ],
+            "skills": [],
+        }
+    )
+    mcp = create_runtime_server(cfg, ToolExecutor(cfg, secrets={}, engine=_Eng()))  # type: ignore[arg-type]
+
+    async with Client(mcp, mode="auto") as client:
+        tools = await client.list_tools()
+        tool = next(t for t in tools.tools if t.name == "list_animals")
+        assert tool.meta is not None
+        assert tool.meta["ui"]["resourceUri"] == "ui://pets/list_animals"
+
+        resources = await client.list_resources()
+        ui_resources = [r for r in resources.resources if str(r.uri).startswith("ui://")]
+        assert [str(r.uri) for r in ui_resources] == ["ui://pets/list_animals"]
+        assert ui_resources[0].mime_type == "text/html;profile=mcp-app"
+
+        content = await client.read_resource("ui://pets/list_animals")
+        doc = content.contents[0]
+        assert doc.mime_type == "text/html;profile=mcp-app"  # type: ignore[union-attr]
+        assert '"tool_id":' in doc.text and "list_animals" in doc.text  # type: ignore[union-attr]
+        assert "elliot-ui-config" in doc.text  # type: ignore[union-attr]
+
+
+async def test_tools_without_ui_have_no_ui_meta() -> None:
+    """A connector with no UI configs serves exactly as before — no _meta.ui,
+    no ui:// resources, no Apps extension."""
+    from mcp.client import Client
+
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import ConnectorConfig
+
+    cfg = ConnectorConfig.model_validate(MINIMAL_CONNECTOR)
+    mcp = create_runtime_server(cfg, ToolExecutor(cfg, secrets={}))
+    async with Client(mcp, mode="legacy") as client:
+        tools = await client.list_tools()
+        tool = next(t for t in tools.tools if t.name == "list_animals")
+        assert not (tool.meta or {}).get("ui")
+        resources = await client.list_resources()
+        assert not [r for r in resources.resources if str(r.uri).startswith("ui://")]

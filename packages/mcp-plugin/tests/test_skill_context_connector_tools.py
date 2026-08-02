@@ -8,8 +8,8 @@ import json
 from pathlib import Path
 
 import pytest
-from mcp.server.fastmcp import FastMCP
 
+from elliot_core.mcp_compat import FastMCP
 from elliot_mcp_plugin.session import ElliotSession
 from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
 from elliot_mcp_plugin.tools.context_tools import register_context_tools
@@ -375,3 +375,82 @@ def test_create_skill_missing_alias_gives_clear_error(
     payload = result.get("text") or result.get("error") or ""
     assert "alias" in payload
     assert "INVALID_SKILL" in payload
+
+
+# ---------------------------------------------------------------------------
+# branding tools
+# ---------------------------------------------------------------------------
+
+
+def test_set_and_get_branding_round_trips_through_session_json(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    result = _tool(mcp, "elliot_set_branding")(
+        accent="#c02434", accent_dark="#ff6b7a", logo="data:image/svg+xml;base64,PHN2Zz4="
+    )
+    assert result["status"] == "ok"
+    assert result["branding"]["accent"] == "#c02434"
+
+    got = _tool(mcp, "elliot_get_branding")()
+    assert got["branding"]["accent_dark"] == "#ff6b7a"
+
+    # A fresh session over the same workspace restores it from session.json.
+    reloaded = ElliotSession(cwd=str(tmp_path))
+    reloaded.load()
+    assert reloaded.branding is not None
+    assert reloaded.branding.accent == "#c02434"
+    assert reloaded.branding.logo == "data:image/svg+xml;base64,PHN2Zz4="
+
+
+def test_set_branding_merges_fields_and_clear_resets(mcp: FastMCP, session: ElliotSession):
+    _tool(mcp, "elliot_set_branding")(accent="#112233")
+    # Adding a logo keeps the accent (merge, not replace).
+    result = _tool(mcp, "elliot_set_branding")(logo="https://cdn.example/logo.png")
+    assert result["branding"]["accent"] == "#112233"
+    assert result["branding"]["logo"] == "https://cdn.example/logo.png"
+    # clear=True with a new field starts from scratch.
+    result = _tool(mcp, "elliot_set_branding")(clear=True, accent="#445566")
+    assert result["branding"] == {"accent": "#445566", "accent_dark": None, "logo": None}
+    # clear alone removes branding entirely.
+    result = _tool(mcp, "elliot_set_branding")(clear=True)
+    assert result["branding"] is None
+    assert session.branding is None
+
+
+def test_set_branding_rejects_bad_values(mcp: FastMCP, session: ElliotSession):
+    result = _tool(mcp, "elliot_set_branding")(accent="red")
+    assert "error" in result or "text" in result
+    assert session.branding is None
+    result = _tool(mcp, "elliot_set_branding")(logo="http://insecure.example/logo.png")
+    assert "error" in result or "text" in result
+    assert session.branding is None
+
+
+def test_build_connector_carries_session_branding(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    _load_and_create_tool(mcp, session, tmp_path)
+    _tool(mcp, "elliot_set_branding")(accent="#c02434")
+    result = _tool(mcp, "elliot_build_connector")(name="Branded", slug="branded", version="1.0.0")
+    assert result["status"] == "built"
+    assert session.connector is not None
+    assert session.connector.branding is not None
+    assert session.connector.branding.accent == "#c02434"
+    # A rebuild without touching branding keeps it.
+    _tool(mcp, "elliot_build_connector")(name="Branded", slug="branded", version="1.0.1")
+    assert session.connector.branding is not None
+
+
+def test_preview_tool_ui_applies_session_and_draft_branding(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    # NB: avoid #c02434 here — it is the ui-kit stylesheet's own fallback
+    # accent, so it appears in every built document regardless of branding.
+    tool_id = _load_and_create_tool(mcp, session, tmp_path)
+    _tool(mcp, "elliot_set_branding")(accent="#123abc")
+    res = _tool(mcp, "elliot_preview_tool_ui")(tool_id=tool_id)
+    assert "#123abc" in res["html"]
+    # A draft branding argument overrides the saved session branding.
+    res = _tool(mcp, "elliot_preview_tool_ui")(tool_id=tool_id, branding={"accent": "#00ff00"})
+    assert "#00ff00" in res["html"]
+    assert "#123abc" not in res["html"]

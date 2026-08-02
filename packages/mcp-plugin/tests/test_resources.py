@@ -5,16 +5,17 @@ from __future__ import annotations
 import json
 
 import pytest
-from mcp.server.fastmcp import FastMCP
 
+from elliot_core.mcp_compat import FastMCP
 from elliot_mcp_plugin.resources import register_resources
 
 
 def test_register_resources_returns_count():
     mcp = FastMCP("test")
     count = register_resources(mcp)
-    # 4 inline docs (principles, error-codes, install, authentication) + 4 templates
-    assert count == 8
+    # 5 inline docs (principles, error-codes, install, authentication,
+    # custom-apps) + 4 templates
+    assert count == 9
 
 
 def test_resource_uris_use_elliot_scheme():

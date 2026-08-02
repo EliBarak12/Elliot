@@ -7,8 +7,8 @@ import inspect
 from pathlib import Path
 
 import pytest
-from mcp.server.fastmcp import FastMCP
 
+from elliot_core.mcp_compat import FastMCP
 from elliot_mcp_plugin.session import ElliotSession
 from elliot_mcp_plugin.tools.tool_tools import register_tool_tools
 

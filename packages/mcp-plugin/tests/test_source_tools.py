@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 import respx
-from mcp.server.fastmcp import FastMCP
 
 from elliot_core.errors import ElliotError
+from elliot_core.mcp_compat import FastMCP
 from elliot_core.types.source import SourceConfig
 from elliot_core.types.tool import ToolDefinition
 from elliot_mcp_plugin.session import ElliotSession

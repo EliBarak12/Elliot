@@ -1,4 +1,4 @@
-from elliot_core.types.connector import ConnectorConfig
+from elliot_core.types.connector import ConnectorBranding, ConnectorConfig
 from elliot_core.types.source import (
     AuthConfig,
     FetchResult,
@@ -19,9 +19,11 @@ from elliot_core.types.tool import (
     SkillStep,
     ToolDefinition,
     ToolResult,
+    ToolUIConfig,
 )
 
 __all__ = [
+    "ConnectorBranding",
     "ApiRequestMapping",
     "AuthConfig",
     "ConnectorConfig",
@@ -39,5 +41,6 @@ __all__ = [
     "SkillStep",
     "SourceConfig",
     "ToolDefinition",
+    "ToolUIConfig",
     "ToolResult",
 ]

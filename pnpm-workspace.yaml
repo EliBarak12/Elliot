@@ -1,5 +1,6 @@
 packages:
   - 'packages/studio'
+  - 'packages/ui-kit'
   - 'website'
 allowBuilds:
   esbuild: false

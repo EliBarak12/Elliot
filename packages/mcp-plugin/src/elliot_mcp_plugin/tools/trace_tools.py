@@ -16,9 +16,9 @@ from __future__ import annotations
 import os
 
 import structlog
-from mcp.server.fastmcp import FastMCP
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.mcp_compat import FastMCP
 from elliot_core.trace import SUPPORTED_HARNESSES
 from elliot_core.trace.installer import (
     default_settings_path,

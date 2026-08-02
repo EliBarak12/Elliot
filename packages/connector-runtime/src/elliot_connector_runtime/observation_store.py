@@ -38,6 +38,13 @@ class _AgentSession(_Base):
     # elicitation, experimental).
     agent_protocol_version = Column(String(32))
     agent_capabilities = Column(String(255))
+    # How the session's id was established on the stateless wire:
+    # header | meta (client echoed Elliot's handle) | legacy (2025
+    # Mcp-Session-Id) | minted (server-minted, client never echoed).
+    handle_source = Column(String(16))
+    # Whether calls in this session came from the model or an MCP App view
+    # ("model" | "app" | "unknown") — best-effort, host-dependent.
+    origin = Column(String(16))
     connector_slug = Column(String(128))
     total_tool_calls = Column(Integer, default=0)
     total_tokens_estimated = Column(Integer, default=0)
@@ -147,6 +154,8 @@ class ObservationStore:
             ("user_agent", "VARCHAR(512)"),
             ("agent_protocol_version", "VARCHAR(32)"),
             ("agent_capabilities", "VARCHAR(255)"),
+            ("handle_source", "VARCHAR(16)"),
+            ("origin", "VARCHAR(16)"),
         ]
         with self._engine.begin() as conn:
             for col_name, col_type in additions:
@@ -317,10 +326,13 @@ class ObservationStore:
         agent_hint: str | None = None,
         connector_slug: str | None = None,
         agent_identity: dict[str, Any] | None = None,
+        handle_source: str | None = None,
+        origin: str | None = None,
     ) -> None:
         identity = agent_identity or {}
         with Session(self._engine) as db:
-            if db.query(_AgentSession).filter_by(session_id=session_id).first() is None:
+            existing = db.query(_AgentSession).filter_by(session_id=session_id).first()
+            if existing is None:
                 caps = identity.get("capabilities")
                 db.add(
                     _AgentSession(
@@ -335,8 +347,15 @@ class ObservationStore:
                         user_agent=identity.get("user_agent"),
                         agent_protocol_version=identity.get("protocol_version"),
                         agent_capabilities=",".join(caps) if caps else None,
+                        handle_source=handle_source,
+                        origin=origin,
                     )
                 )
+                db.commit()
+            elif handle_source and existing.handle_source != handle_source:
+                # A later request upgraded the handle's provenance (e.g. the
+                # client started echoing a minted handle → "meta"/"header").
+                existing.handle_source = handle_source  # type: ignore[assignment]
                 db.commit()
 
     def close_session(self, session_id: str) -> None:

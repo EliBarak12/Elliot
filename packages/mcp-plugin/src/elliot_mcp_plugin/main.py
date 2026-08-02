@@ -11,7 +11,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from elliot_core.auth_middleware import ApiKeyMiddleware, enforce_auth_configured
-from elliot_core.http_middleware import AgentIdentityMiddleware
+from elliot_core.http_middleware import AgentIdentityMiddleware, ElliotSessionMiddleware
+from elliot_core.mcp_compat import build_http_app
 from elliot_mcp_plugin import __version__
 from elliot_mcp_plugin.server import create_elliot_server
 from elliot_mcp_plugin.session import ElliotSession
@@ -21,8 +22,12 @@ log = structlog.get_logger(__name__)
 session = ElliotSession(cwd=os.environ.get("ELLIOT_WORKSPACE", "."))
 
 mcp = create_elliot_server(session)
-# Initialize the session manager by calling streamable_http_app once at module level
-_mcp_app = mcp.streamable_http_app()
+# Initialize the session manager by building the HTTP app once at module
+# level. Transport options live on the app builder in SDK v2 (not the server
+# constructor): the app is mounted under /mcp so its internal path is "/", and
+# stateless serves both 2026-07-28 stateless clients and 2025-era handshake
+# clients without minting transport sessions.
+_mcp_app = build_http_app(mcp, path="/", stateless=True)
 
 
 @asynccontextmanager
@@ -46,6 +51,8 @@ app = FastAPI(lifespan=lifespan)
 # (OPTIONS) is answered before the auth check runs.
 app.add_middleware(ApiKeyMiddleware)
 app.add_middleware(AgentIdentityMiddleware)
+# App-level session handle on the stateless transport (mint + echo).
+app.add_middleware(ElliotSessionMiddleware)
 _studio_origin = os.environ.get("ELLIOT_STUDIO_ORIGIN", "http://localhost:5173")
 app.add_middleware(
     CORSMiddleware,
@@ -60,8 +67,13 @@ app.add_middleware(
         # so the server can negotiate protocol version. Browser preflight will
         # fail without it in the allow-list — Studio cannot reach :3000/mcp.
         "Mcp-Protocol-Version",
+        # 2026-07-28 header-based routing + Elliot's own session handle.
+        "Mcp-Method",
+        "Mcp-Name",
+        "Elliot-Session-Id",
     ],
     allow_methods=["GET", "POST", "OPTIONS", "DELETE"],
+    expose_headers=["Elliot-Session-Id"],
 )
 
 

@@ -21,6 +21,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Separator } from "@/components/ui/separator";
 import { callTool } from "@/lib/mcp-client";
+import { BrandingCard } from "@/components/connector/BrandingCard";
 import { useTools } from "@/hooks/useTools";
 import { useSkills } from "@/hooks/useSkills";
 import { cn } from "@/lib/utils";
@@ -395,6 +396,8 @@ export default function ConnectorPage() {
           </div>
         </CardContent>
       </Card>
+
+      <BrandingCard />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card>

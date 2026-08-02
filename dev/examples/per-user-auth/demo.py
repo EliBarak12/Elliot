@@ -75,30 +75,27 @@ def _wait(url: str, timeout: float = 20.0) -> None:
 
 
 async def _mcp_call(user: str, tool: str, args: dict[str, Any]) -> tuple[bool, str]:
-    from mcp.client.session import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
+    import httpx2
+    from mcp.client import Client
+    from mcp.client.streamable_http import streamable_http_client
 
-    headers = {"X-Elliot-User": user}
-    async with (
-        streamablehttp_client(MCP_URL, headers=headers) as (read, write, _),
-        ClientSession(read, write) as session,
-    ):
-        await session.initialize()
-        res = await session.call_tool(tool, args)
+    http_client = httpx2.AsyncClient(headers={"X-Elliot-User": user})
+    transport = streamable_http_client(MCP_URL, http_client=http_client)
+    async with http_client, Client(transport, mode="legacy") as client:
+        res = await client.call_tool(tool, args)
         text = res.content[0].text if res.content else ""  # type: ignore[union-attr]
-        return bool(res.isError), text
+        return bool(res.is_error), text
 
 
 async def _mcp_list_tools() -> list[tuple[str, str]]:
-    from mcp.client.session import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
+    import httpx2
+    from mcp.client import Client
+    from mcp.client.streamable_http import streamable_http_client
 
-    async with (
-        streamablehttp_client(MCP_URL, headers={"X-Elliot-User": "alice"}) as (r, w, _),
-        ClientSession(r, w) as session,
-    ):
-        await session.initialize()
-        tools = await session.list_tools()
+    http_client = httpx2.AsyncClient(headers={"X-Elliot-User": "alice"})
+    transport = streamable_http_client(MCP_URL, http_client=http_client)
+    async with http_client, Client(transport, mode="legacy") as client:
+        tools = await client.list_tools()
         return [(t.name, t.description or "") for t in tools.tools]
 
 

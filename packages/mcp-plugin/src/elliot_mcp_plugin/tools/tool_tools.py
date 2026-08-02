@@ -6,10 +6,10 @@ import re
 from typing import Annotated, Any
 
 import structlog
-from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.mcp_compat import FastMCP
 from elliot_core.naming import is_valid_identifier, slugify_identifier
 from elliot_core.sql import extract_sql_params, has_select_star, referenced_base_tables
 from elliot_core.sqlite.query_runner import validate_tool_sql
@@ -729,6 +729,55 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             session.save()
             log.info("tool.deleted", tool_id=tool_id)
             return {"status": "deleted", "tool_id": tool_id}
+        except Exception as exc:
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+
+    @mcp.tool()
+    def elliot_preview_tool_ui(
+        tool_id: str,
+        ui: dict | None = None,  # type: ignore[type-arg]
+        branding: dict | None = None,  # type: ignore[type-arg]
+    ) -> dict:  # type: ignore[type-arg]
+        """Build the MCP Apps HTML view for a tool — exactly what agents get at
+        ``ui://<slug>/<tool_id>`` — so Studio can render it in its sandboxed
+        preview. Pass ``ui`` (a ToolUIConfig-shaped dict) to preview a DRAFT
+        view config without saving it to the tool first, and ``branding``
+        (a ConnectorBranding-shaped dict) to preview draft accent/logo
+        branding; otherwise the session's saved branding applies.
+        """
+        try:
+            from pathlib import Path
+
+            from elliot_core.apps import build_tool_app_html, ui_resource_uri
+            from elliot_core.types.connector import ConnectorBranding
+            from elliot_core.types.tool import ToolUIConfig
+
+            tool = session.registry.get(tool_id)
+            if tool is None:
+                return {"error": f"Tool not found: {tool_id}"}
+            ui_cfg = ToolUIConfig.model_validate(ui) if ui else (tool.ui or ToolUIConfig())
+            branding_cfg = (
+                ConnectorBranding.model_validate(branding)
+                if branding is not None
+                else session.branding
+            )
+            slug = session.connector.slug if session.connector else None
+            connector_dir = Path(session.workspace._dir).resolve().parent
+            html = build_tool_app_html(
+                tool,
+                ui_cfg,
+                connector_slug=slug,
+                connector_dir=connector_dir,
+                branding=branding_cfg,
+            )
+            return {
+                "tool_id": tool_id,
+                "uri": ui_resource_uri(slug, tool_id),
+                "html": html,
+                "preset": ui_cfg.preset,
+            }
+        except ElliotError as exc:
+            return to_mcp_error_content(exc)
         except Exception as exc:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 

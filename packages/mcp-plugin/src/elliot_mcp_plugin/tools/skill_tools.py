@@ -6,9 +6,9 @@ import uuid
 from typing import Any
 
 import structlog
-from mcp.server.fastmcp import FastMCP
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.mcp_compat import FastMCP
 from elliot_core.naming import is_valid_identifier, slugify_identifier
 from elliot_core.tools.skill_runner import execute_skill
 from elliot_core.tools.validator import validate_skill_definition

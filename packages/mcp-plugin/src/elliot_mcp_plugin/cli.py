@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
 
 import structlog
 
@@ -25,7 +26,8 @@ def main() -> None:
     try:
         config = load_connector(args.connector)
         secrets = load_secrets()
-        asyncio.run(run_stdio(config, secrets))
+        connector_dir = Path(args.connector).resolve().parent if args.connector else None
+        asyncio.run(run_stdio(config, secrets, connector_dir=connector_dir))
     except KeyboardInterrupt:
         sys.exit(0)
     except Exception as exc:

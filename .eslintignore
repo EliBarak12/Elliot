@@ -1,3 +1,4 @@
 dist/
 node_modules/
 *.config.ts
+packages/core/src/elliot_core/apps/assets/

@@ -41,12 +41,12 @@ def test_build_tool_list_name_and_description():
 
 def test_build_tool_list_param_in_schema():
     tools = build_tool_list(_CONFIG)
-    assert "limit" in tools[0].inputSchema["properties"]
+    assert "limit" in tools[0].input_schema["properties"]
 
 
 def test_build_tool_list_optional_param_not_in_required():
     tools = build_tool_list(_CONFIG)
-    assert "limit" not in tools[0].inputSchema.get("required", [])
+    assert "limit" not in tools[0].input_schema.get("required", [])
 
 
 def test_create_server_returns_server():

@@ -18,7 +18,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 import structlog
-from mcp.server.fastmcp import FastMCP
+
+from elliot_core.mcp_compat import FastMCP
 
 log = structlog.get_logger(__name__)
 
@@ -277,6 +278,113 @@ of what you just received — use it to decide whether to narrow the next call.
 """
 
 
+_CUSTOM_APPS_MD = """# Custom MCP Apps Views — Author Your Own Tool UI
+
+Every Elliot tool can ship an interactive view (MCP Apps ext, 2026-01-26).
+The built-in presets (`table`, `detail`, `metric`, `chart`, `markdown`) cover
+most tools; when a tool needs a bespoke UI, set the tool's ui config to a
+fully custom document:
+
+```json
+{"ui": {"enabled": true, "preset": "custom", "custom_html": "<!doctype html>…"}}
+```
+
+Save it via `elliot_update_tool(tool_id, patch={"ui": …})` and check the
+result with `elliot_preview_tool_ui(tool_id)`. Rules:
+
+- The document is served VERBATIM at `ui://<slug>/<tool_id>` — Elliot injects
+  nothing (no branding, no config), you control everything.
+- Budget: 256 KiB, self-contained (hosts sandbox the iframe; the default CSP
+  allows no external requests — declare any API origins you call in
+  `ui.csp_connect_domains`, and lint enforces this).
+- Speak the MCP Apps postMessage protocol yourself (skeleton below): call
+  `ui/initialize`, announce `ui/notifications/initialized`, then render on
+  `ui/notifications/tool-result`. Use `ui/update-model-context` to tell the
+  model what the user did — that is what makes a view agentic rather than
+  decorative.
+- Follow the host theme: style with the host CSS variables
+  (`--color-background-primary`, `--color-text-primary`, `--color-border-primary`,
+  `--font-sans`, …) and give every one a fallback for hosts that inject none.
+
+## Working skeleton (copy into `custom_html`, then make it yours)
+
+```html
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: light dark;
+    --bg: #ffffff; --fg: #16181d; --border: #e4e4e7; --accent: #c02434; }
+  :root[data-theme="dark"] { --bg: #17181c; --fg: #ededef; --border: #2e3035; }
+  body { margin: 0; padding: 14px;
+    font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+    background: var(--color-background-primary, var(--bg));
+    color: var(--color-text-primary, var(--fg)); }
+  .card { border: 1px solid var(--color-border-primary, var(--border));
+    border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; }
+  .card:hover { border-color: var(--color-ring-primary, var(--accent)); }
+  .k { opacity: .65; font-size: 12px; margin-right: 6px; }
+</style>
+</head>
+<body>
+<div id="root">Waiting for the tool result…</div>
+<script>
+(() => {
+  let nextId = 0;
+  const pending = new Map();
+  const send = (msg) => parent.postMessage(msg, "*");
+  const request = (method, params) => new Promise((resolve) => {
+    const id = ++nextId;
+    pending.set(id, resolve);
+    send({ jsonrpc: "2.0", id, method, params });
+  });
+
+  window.addEventListener("message", (event) => {
+    const msg = event.data;
+    if (!msg || msg.jsonrpc !== "2.0") return;
+    if (msg.id !== undefined && pending.has(msg.id)) {
+      pending.get(msg.id)(msg.result); pending.delete(msg.id); return;
+    }
+    if (msg.method === "ui/notifications/tool-result") render(msg.params);
+  });
+
+  function render(params) {
+    const rows = (params.structuredContent && params.structuredContent.rows) || [];
+    const root = document.getElementById("root");
+    root.innerHTML = "";
+    rows.forEach((row) => {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.innerHTML = Object.entries(row)
+        .map(([k, v]) => `<span class="k">${k}</span>${String(v)}`)
+        .join("<br>");
+      card.onclick = () => request("ui/update-model-context", {
+        content: [{ type: "text", text: "The user selected: " + JSON.stringify(row) }],
+        structuredContent: { selected: row },
+      });
+      root.appendChild(card);
+    });
+    send({ jsonrpc: "2.0", method: "ui/notifications/size-changed",
+           params: { height: document.documentElement.scrollHeight } });
+  }
+
+  request("ui/initialize", {
+    protocolVersion: "2026-01-26",
+    appInfo: { name: "my-custom-view", version: "1.0.0" },
+    appCapabilities: {},
+  }).then((result) => {
+    const theme = result && result.hostContext && result.hostContext.theme;
+    if (theme) document.documentElement.dataset.theme = theme;
+    send({ jsonrpc: "2.0", method: "ui/notifications/initialized" });
+  });
+})();
+</script>
+</body>
+</html>
+```
+"""
+
 _INSTALL_MD = """# Installing Elliot in Your Project
 
 Elliot is an MCP server. Your agent connects to it over HTTP and gains access
@@ -459,6 +567,14 @@ def register_resources(mcp: FastMCP) -> int:
         "install",
         "How to install Elliot into Claude Code, Codex, Cursor, VS Code, or Windsurf.",
         _INSTALL_MD,
+    )
+    _add_text(
+        "elliot://docs/custom-apps",
+        "custom-apps",
+        "How to author a fully custom MCP Apps view for a tool (preset "
+        "'custom'): the postMessage contract, CSP and size rules, and a "
+        "complete working HTML skeleton to copy into ui.custom_html.",
+        _CUSTOM_APPS_MD,
     )
 
     templates_dir = _load_templates_dir()

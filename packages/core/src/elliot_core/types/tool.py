@@ -106,6 +106,46 @@ class QueryResult(BaseModel):
     truncation_reason: Literal["result_cap", "source_cap", "token_budget"] | None = None
 
 
+class ToolUIConfig(BaseModel):
+    """Per-tool MCP Apps view (ext spec 2026-01-26, ``io.modelcontextprotocol/ui``).
+
+    Declares the interactive UI a host (Claude, ChatGPT, Cursor, Studio's
+    preview) renders for this tool's results in a sandboxed iframe. Either a
+    built-in shadcn-styled preset shipped with Elliot, or the author's own
+    single-file HTML. Hosts that don't support the Apps extension ignore the
+    metadata entirely — the tool's text/structured results are the fallback,
+    so declaring a UI never costs a non-supporting agent anything.
+    """
+
+    model_config = _strict
+
+    enabled: bool = True
+    # Which built-in template renders the result. "auto" resolves at serve
+    # time by result shape (rows → table, single record → detail). "custom"
+    # serves the author's own HTML from ``custom_html``.
+    preset: Literal["auto", "table", "detail", "metric", "chart", "form", "markdown", "custom"] = (
+        "auto"
+    )
+    # Title shown in the view header; defaults to the tool name.
+    title: str | None = None
+    # Preset-specific field wiring, e.g. {"columns": "id,name,status"} for
+    # table or {"value_fields": "revenue,orders"} for metric. Values reference
+    # the tool's returned field names; lint checks them (UI_MAPPING_UNKNOWN_FIELD).
+    mapping: dict[str, str] = {}
+    # Path to the author's own HTML template, relative to the connector file.
+    # Inlined at export time (capped — see lint UI_CUSTOM_HTML_TOO_LARGE) so a
+    # published spec is self-contained; may hold the inlined HTML itself after
+    # export.
+    custom_html: str | None = None
+    # Origins the view's fetch/XHR may reach; anything not listed is blocked
+    # by the host's Content-Security-Policy (ext-spec ``csp.connectDomains``).
+    csp_connect_domains: list[str] = []
+    # Ask the host to draw a visual boundary around the view.
+    prefer_border: bool = True
+    # Who may call this tool: the model, the app view, or both (default).
+    visibility: list[Literal["model", "app"]] = ["model", "app"]
+
+
 class ToolDefinition(BaseModel):
     model_config = _strict
 
@@ -161,6 +201,10 @@ class ToolDefinition(BaseModel):
     # Defaults True so every spec written before this field keeps serving every
     # tool it declares.
     enabled: bool = True
+
+    # Optional MCP Apps view for this tool's results (None → text-only tool,
+    # exactly as before this field existed).
+    ui: ToolUIConfig | None = None
 
 
 class SkillStep(BaseModel):

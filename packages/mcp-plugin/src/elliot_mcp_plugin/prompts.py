@@ -22,7 +22,8 @@ from typing import Any
 
 import structlog
 import yaml
-from mcp.server.fastmcp import FastMCP
+
+from elliot_core.mcp_compat import FastMCP
 
 log = structlog.get_logger(__name__)
 

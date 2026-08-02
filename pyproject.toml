@@ -48,6 +48,12 @@ warn_return_any = false
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 addopts = "--import-mode=importlib --tb=short"
+filterwarnings = [
+    # Elliot intentionally keeps serving the deprecated logging capability for
+    # 2025-era MCP clients (see _emit_runtime_log / register_legacy_set_level);
+    # the SDK's per-call deprecation chatter is expected, not a regression.
+    "ignore::mcp.shared.exceptions.MCPDeprecationWarning",
+]
 markers = [
     "e2e: end-to-end tests requiring live services (deselect with '-m not e2e')",
     "integration: integration tests (deselect with '-m not integration')",

@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import structlog
-from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from elliot_core.errors import ElliotError, to_mcp_error_content
+from elliot_core.mcp_compat import FastMCP
 from elliot_core.paths import PathEscape, safe_join
 from elliot_core.sources.api_fetcher import _resolve_secret, fetch_endpoint
 from elliot_core.sources.db_connector import query_database

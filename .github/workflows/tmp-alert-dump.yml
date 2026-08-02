@@ -1,0 +1,37 @@
+# TEMPORARY — dumps this branch's open code-scanning alerts to the job log so
+# the PR's CodeQL failure can be identified and fixed. Removed right after.
+name: Alert dump (temporary)
+on:
+  push:
+    branches: [claude/elliot-mcp-stateless-sessions-b12cul]
+permissions:
+  security-events: read
+  contents: read
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: List open code scanning alerts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for REF in "refs/heads/claude/elliot-mcp-stateless-sessions-b12cul" "refs/pull/142/merge"; do
+            echo "===== alerts for $REF ====="
+            curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/code-scanning/alerts?ref=$REF&state=open&per_page=100" \
+            | python3 -c '
+          import json, sys
+          alerts = json.load(sys.stdin)
+          if isinstance(alerts, dict):
+              print("API message:", alerts.get("message"))
+          else:
+              print(len(alerts), "open alert(s)")
+              for a in alerts:
+                  rule = a.get("rule", {})
+                  inst = a.get("most_recent_instance", {})
+                  loc = inst.get("location", {})
+                  print("-", rule.get("id"), "| sev:", rule.get("security_severity_level") or rule.get("severity"),
+                        "|", str(loc.get("path")) + ":" + str(loc.get("start_line")) + "-" + str(loc.get("end_line")),
+                        "|", (inst.get("message", {}).get("text") or "")[:300].replace("\n", " "))
+          '
+          done

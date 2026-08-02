@@ -13,20 +13,6 @@ const LOGO_WARN_BYTES = 64 * 1024;
 
 const HEX_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
-/** Only render a preview for values the backend schema accepts anyway: a
- * data:image/ URI or an https URL (canonicalized through URL parsing). Keeps
- * pasted text like javascript: URLs out of the img src sink (js/xss-through-dom). */
-function safeLogoSrc(value: string): string | null {
-  if (value.startsWith("data:image/")) return value;
-  try {
-    const url = new URL(value);
-    if (url.protocol === "https:") return url.href;
-  } catch {
-    // Not a parseable URL — no preview.
-  }
-  return null;
-}
-
 /** <input type="color"> only accepts #rrggbb — expand #rgb, fall back on invalid. */
 function toColorInputValue(hex: string, fallback: string): string {
   if (!HEX_RE.test(hex)) return fallback;
@@ -97,10 +83,23 @@ export function BrandingCard() {
   const [accent, setAccent] = useState("");
   const [accentDark, setAccentDark] = useState("");
   const [logo, setLogo] = useState("");
+  // The img src for the preview. NEVER assigned from typed input — only from
+  // browser-constructed object URLs (uploads) and API-returned values (saved
+  // branding, validated server-side). Text typed into the URL field previews
+  // only after a successful save, from the server's echo. This keeps DOM text
+  // out of the src sink entirely (CodeQL js/xss-through-dom).
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ type: "ok" | "error"; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const swapPreview = (next: string | null) => {
+    setPreviewSrc((prev) => {
+      if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
+      return next;
+    });
+  };
 
   useEffect(() => {
     void (async () => {
@@ -111,6 +110,7 @@ export function BrandingCard() {
           setAccent(body.branding.accent ?? "");
           setAccentDark(body.branding.accent_dark ?? "");
           setLogo(body.branding.logo ?? "");
+          setPreviewSrc(body.branding.logo ?? null);
         }
       } catch (err) {
         // Plugin not connected yet is expected on a fresh session.
@@ -130,12 +130,12 @@ export function BrandingCard() {
         return;
       }
       setLogo(dataUri);
+      swapPreview(URL.createObjectURL(file));
       setStatus(null);
     };
     reader.readAsDataURL(file);
   };
 
-  const logoSrc = safeLogoSrc(logo);
   const logoBytes = logo.startsWith("data:") ? new Blob([logo]).size : 0;
   const logoTooLarge = logoBytes > LOGO_WARN_BYTES;
   const hexInvalid =
@@ -152,8 +152,14 @@ export function BrandingCard() {
         ...(accentDark ? { accent_dark: accentDark } : {}),
         ...(logo ? { logo } : {}),
       });
-      const body = res as { status?: string; error?: string | { message?: string } };
+      const body = res as {
+        status?: string;
+        branding?: ConnectorBranding | null;
+        error?: string | { message?: string };
+      };
       if (body.status === "ok") {
+        // Preview from the server's echo — the saved, schema-validated value.
+        swapPreview(body.branding?.logo ?? null);
         setStatus({
           type: "ok",
           message:
@@ -206,13 +212,20 @@ export function BrandingCard() {
         <div className="space-y-1.5">
           <Label htmlFor="branding-logo">Logo</Label>
           <div className="flex items-center gap-3 flex-wrap">
-            {logoSrc && (
+            {previewSrc && (
               <span className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2 py-1">
-                <img src={logoSrc} alt="Connector logo" className="h-6 w-auto max-w-[8rem] object-contain" />
+                <img
+                  src={previewSrc}
+                  alt="Connector logo"
+                  className="h-6 w-auto max-w-[8rem] object-contain"
+                />
                 <button
                   type="button"
                   aria-label="Remove logo"
-                  onClick={() => setLogo("")}
+                  onClick={() => {
+                    setLogo("");
+                    swapPreview(null);
+                  }}
                   className="rounded p-0.5 opacity-60 hover:opacity-100 hover:bg-muted"
                 >
                   <X className="h-3.5 w-3.5" />
@@ -244,7 +257,12 @@ export function BrandingCard() {
             <Input
               id="branding-logo"
               value={logo.startsWith("data:") ? "" : logo}
-              onChange={(e) => setLogo(e.target.value.trim())}
+              onChange={(e) => {
+                setLogo(e.target.value.trim());
+                // Typed text never feeds the preview; it renders after save,
+                // from the server's validated echo.
+                swapPreview(null);
+              }}
               placeholder="or paste an https:// image URL"
               className="h-8 flex-1 min-w-48 text-sm"
             />
@@ -252,7 +270,9 @@ export function BrandingCard() {
           <p className={logoTooLarge ? "text-2xs text-warning" : "text-2xs text-muted-foreground"}>
             {logoTooLarge
               ? `Logo is ${Math.round(logoBytes / 1024)} KiB — it is inlined into every view; use a small SVG/PNG (≤64 KiB) or an https URL.`
-              : "Shown in each view's header. Small SVG or PNG works best; uploads are embedded as data: URIs."}
+              : logo && !previewSrc
+                ? "URL set — the preview appears after you save."
+                : "Shown in each view's header. Small SVG or PNG works best; uploads are embedded as data: URIs."}
           </p>
         </div>
 

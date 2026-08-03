@@ -126,6 +126,25 @@ def coerce_value(val: Any, typ: str) -> Any:
             if isinstance(parsed, dict):
                 return parsed
         raise ElliotError("INVALID_PARAM_TYPE", f"Expected object (map), got: {val!r}")
+    if typ == "array":
+        # A JSON list (e.g. a bulk-create's items). Accept a list as-is, or a
+        # JSON array string and parse it — clients that can only send strings
+        # (e.g. OpenAI strict function calling) still work. Anything else is an
+        # error so a wrong type doesn't silently serialize into the body.
+        if isinstance(val, list):
+            return val
+        if isinstance(val, str):
+            import json
+
+            try:
+                parsed = json.loads(val)
+            except (ValueError, TypeError) as exc:
+                raise ElliotError(
+                    "INVALID_PARAM_TYPE", f"Expected a JSON array, got: {val!r}"
+                ) from exc
+            if isinstance(parsed, list):
+                return parsed
+        raise ElliotError("INVALID_PARAM_TYPE", f"Expected array (list), got: {val!r}")
     if typ in ("string", "date"):
         # Reject silent int→str coercion: previously `country_summary({"iso": 99})`
         # turned 99 into "99", bound it to a string SQL param, matched nothing,

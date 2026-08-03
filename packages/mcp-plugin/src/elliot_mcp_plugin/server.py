@@ -275,11 +275,14 @@ _STUDIO_CLIENT_NAME = "elliot-studio"
 _DESTRUCTIVE_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "studio_remove_source",
-        # Deletion / log-wiping / harness-config changes are human-confirmed
-        # actions, triggered from Studio or Cloud — not reachable by arbitrary
-        # connected MCP clients. (Studio's own client identity still sees them.)
-        "elliot_delete_tool",
-        "elliot_delete_skill",
+        # Log-wiping / harness-config changes are human-confirmed actions,
+        # triggered from Studio or Cloud — not reachable by arbitrary connected
+        # MCP clients. (Studio's own client identity still sees them.)
+        # elliot_delete_tool / elliot_delete_skill are deliberately NOT here:
+        # hiding them while elliot_delete_source (which cascade-deletes tools!)
+        # stayed visible was backwards — an agent that can drop a whole source
+        # must be able to prune one tool or skill. Both are design-time edits
+        # to the draft, not runtime-destructive actions.
         "elliot_clear_audit_transcripts",
         "elliot_uninstall_trace_hook",
     }

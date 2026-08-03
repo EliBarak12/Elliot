@@ -212,9 +212,14 @@ def test_list_sources_includes_child_tables_after_rediscover(
     )
     listed = _tool(mcp, "elliot_list_sources")()
     src = listed["sources"][0]
-    related = {t["name"] for t in src["related_tables"]}
-    assert {"projects_invoices", "projects_invoices_line_items"} <= related
+    # Default listing is a token-diet summary: related tables come back as
+    # names; verbose mode restores the full child-table schemas.
+    assert {"projects_invoices", "projects_invoices_line_items"} <= set(src["related_tables"])
     assert src["schema_hint"]
+    full = _tool(mcp, "elliot_list_sources")(verbose=True)
+    vrelated = {t["name"]: t for t in full["sources"][0]["related_tables"]}
+    assert {"projects_invoices", "projects_invoices_line_items"} <= set(vrelated)
+    assert all(t["columns"] for t in vrelated.values())
 
 
 def test_discover_source_registers_in_session(mcp: FastMCP, session: ElliotSession, tmp_path: Path):

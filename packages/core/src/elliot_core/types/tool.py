@@ -14,10 +14,11 @@ class ParameterDefinition(BaseModel):
     model_config = _strict
 
     name: str
-    # "object" is a dynamic-key map (e.g. a cart's {product_id: qty}); it is
-    # forwarded as a nested JSON object into a request body (api_mapping
-    # body_params, or a forward_params_in="body" source), never bound into SQL.
-    type: Literal["string", "integer", "number", "boolean", "date", "object"]
+    # "object" is a dynamic-key map (e.g. a cart's {product_id: qty}) and
+    # "array" is a JSON list (e.g. a bulk-create's item list); both are
+    # forwarded as nested JSON into a request body (api_mapping body_params, or
+    # a forward_params_in="body" source), never bound into SQL.
+    type: Literal["string", "integer", "number", "boolean", "date", "object", "array"]
     required: bool = True
     description: str = ""
     default: Any | None = None

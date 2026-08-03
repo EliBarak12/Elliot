@@ -12,6 +12,7 @@ from elliot_core.mcp_compat import FastMCP
 from elliot_core.naming import is_valid_identifier, slugify_identifier
 from elliot_core.tools.skill_runner import execute_skill
 from elliot_core.tools.validator import validate_skill_definition
+from elliot_mcp_plugin.build_state import refresh_built_connector
 from elliot_mcp_plugin.session import ElliotSession
 
 log = structlog.get_logger(__name__)
@@ -112,11 +113,11 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 slug = "skill_" + uuid.uuid4().hex[:8]
             elif not is_valid_identifier(slug):
                 slug = f"s_{slug}"
+            # Same name → UPDATE the existing skill in place. The old behaviour
+            # silently minted `_2` / `_3` duplicates (LIVE_QA F3), leaving
+            # agents guessing which copy is real and no way to fix a skill.
             skill_id = slug
-            _suffix = 2
-            while session.registry.get_skill(skill_id) is not None:
-                skill_id = f"{slug}_{_suffix}"
-                _suffix += 1
+            existing = session.registry.get_skill(skill_id)
             normalized_steps = _normalize_skill_steps(steps or [])
             skill = validate_skill_definition(
                 {
@@ -136,6 +137,7 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
                         f"Step '{step.alias}' references unknown tool: '{step.tool_id}'",
                     )
             session.registry.add_skill(skill)
+            refresh_built_connector(session)
             session.save()
             # Surface the new skill as an MCP prompt immediately so it shows up
             # in prompts/list without a server restart (F-027). Best-effort: a
@@ -146,8 +148,9 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 register_session_skill_prompt(mcp, skill)
             except Exception:
                 log.warning("skill.prompt.register_failed", skill_id=skill.id, exc_info=True)
-            log.info("skill.created", skill_id=skill.id)
-            return {"skill_id": skill.id, "status": "created"}
+            status = "updated" if existing else "created"
+            log.info("skill.saved", skill_id=skill.id, status=status)
+            return {"skill_id": skill.id, "status": status}
         except ElliotError as exc:
             return to_mcp_error_content(exc)
         except Exception as exc:
@@ -155,27 +158,83 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
-    def elliot_list_skills() -> dict:  # type: ignore[type-arg]
-        """List all defined skills with their full definitions.
+    def elliot_list_skills(verbose: bool = False) -> dict:  # type: ignore[type-arg]
+        """List defined skills — compact by default, full with verbose.
 
-        Each entry includes id, name, description, steps, and input_parameters
-        so the Studio and any other client can render the skill without an
-        extra elliot_get_skill round-trip. The convenience field step_count
-        is also included for clients that only need a summary.
+        The default summary (id, truncated description, step count, input
+        names) is sized for an agent's context window. Pass ``verbose=true``
+        for complete definitions (steps, bindings, instructions) — the shape
+        Studio renders — or ``elliot_get_skill`` for one skill.
         """
         try:
             # Pick up skills the agent created since our last list — even
             # if the agent runs in a separate plugin process sharing the
             # same workspace.
             session.refresh_from_disk()
-            return {
-                "skills": [
-                    {**s.model_dump(), "step_count": len(s.steps)}
-                    for s in session.registry.get_all_skills()
-                ],
-                "count": len(session.registry.get_all_skills()),
-            }
+            all_skills = session.registry.get_all_skills()
+            if verbose:
+                skills = [{**s.model_dump(), "step_count": len(s.steps)} for s in all_skills]
+            else:
+                skills = []
+                for s in all_skills:
+                    desc = s.description.strip()
+                    skills.append(
+                        {
+                            "id": s.id,
+                            "name": s.name,
+                            "description": desc[:160] + ("…" if len(desc) > 160 else ""),
+                            "step_count": len(s.steps),
+                            "input_parameters": [p.name for p in s.input_parameters],
+                            "has_instructions": bool(s.instructions),
+                        }
+                    )
+            result: dict = {"skills": skills, "count": len(all_skills)}  # type: ignore[type-arg]
+            if not verbose and skills:
+                result["note"] = "Summary view. Pass verbose=true for full definitions."
+            return result
         except Exception as exc:
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+
+    @mcp.tool()
+    def elliot_update_skill(skill_id: str, patch: dict) -> dict:  # type: ignore[type-arg]
+        """Partially update a skill definition in place.
+
+        ``patch`` merges into the existing skill: any of ``description``,
+        ``steps`` (full replacement, same shape as elliot_create_skill),
+        ``input_parameters``, ``instructions``, ``when_to_use``. The updated
+        skill is re-validated (step tool_ids must exist), the MCP prompt is
+        re-registered, and the built connector refreshes automatically.
+        """
+        try:
+            existing = session.registry.get_skill(skill_id)
+            if existing is None:
+                return {"error": f"Skill not found: {skill_id}"}
+            merged = existing.model_dump() | dict(patch)
+            merged["id"] = skill_id
+            if "steps" in patch:
+                merged["steps"] = _normalize_skill_steps(patch.get("steps") or [])
+            skill = validate_skill_definition(merged)
+            for step in skill.steps:
+                if not session.registry.get(step.tool_id):
+                    raise ElliotError(
+                        "TOOL_NOT_FOUND",
+                        f"Step '{step.alias}' references unknown tool: '{step.tool_id}'",
+                    )
+            session.registry.add_skill(skill)
+            refresh_built_connector(session)
+            session.save()
+            try:
+                from elliot_mcp_plugin.prompts import register_session_skill_prompt
+
+                register_session_skill_prompt(mcp, skill)
+            except Exception:
+                log.warning("skill.prompt.register_failed", skill_id=skill.id, exc_info=True)
+            log.info("skill.updated", skill_id=skill.id)
+            return {"skill_id": skill.id, "status": "updated"}
+        except ElliotError as exc:
+            return to_mcp_error_content(exc)
+        except Exception as exc:
+            log.error("skill.update.failed", error=str(exc))
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
@@ -259,6 +318,7 @@ def register_skill_tools(mcp: FastMCP, session: ElliotSession) -> None:
             if session.registry.get_skill(skill_id) is None:
                 return {"error": f"Skill not found: {skill_id}"}
             session.registry.delete_skill(skill_id)
+            refresh_built_connector(session)
             session.save()
             log.info("skill.deleted", skill_id=skill_id)
             return {"status": "deleted", "skill_id": skill_id}

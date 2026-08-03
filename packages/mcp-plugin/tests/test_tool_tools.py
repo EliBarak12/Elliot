@@ -214,9 +214,13 @@ def test_list_tools_after_create(mcp: FastMCP, session: ElliotSession, tmp_path:
     result = _tool(mcp, "elliot_list_tools")()
     assert result["count"] == 1
     assert result["tools"][0]["id"] == "list_orders"
-    # SQL is stored in session.tool_sql, not on the model — the list endpoint
-    # must merge it in so the Studio editor can render the query.
-    assert result["tools"][0]["sql"] == 'SELECT * FROM "orders"'
+    # Default listing is a token-diet summary — SQL is only in verbose mode.
+    # It is stored in session.tool_sql, not on the model, so the verbose list
+    # must merge it in for the Studio editor to render the query.
+    assert "sql" not in result["tools"][0]
+    assert result["tools"][0]["has_sql"] is True
+    full = _tool(mcp, "elliot_list_tools")(verbose=True)
+    assert full["tools"][0]["sql"] == 'SELECT * FROM "orders"'
 
 
 # ---------------------------------------------------------------------------
@@ -819,3 +823,61 @@ def test_authored_action_tool_executes_in_runtime():
     sent_body = _json.loads(route.calls[0].request.content)
     assert sent_body == {"reason": "customer ask"}
     assert result.rows and result.rows[0]["ok"] is True
+
+
+def test_create_action_tool_accepts_array_param_in_body(mcp: FastMCP, session: ElliotSession):
+    _rest_source(session)
+    out = _tool(mcp, "elliot_create_action_tool")(
+        name="bulk_create_users",
+        description="Create several users in one call from a JSON list.",
+        source_id="shop",
+        method="POST",
+        parameters=[
+            {
+                "name": "items",
+                "type": "array",
+                "required": True,
+                "description": "JSON array of users; each item has fields: username, email.",
+            }
+        ],
+        body_params=["items"],
+    )
+    assert out.get("status") == "created"
+    tool = session.registry.get("bulk_create_users")
+    assert tool is not None
+    assert tool.parameters[0].type == "array"
+
+
+def test_create_action_tool_rejects_object_param_outside_body(mcp: FastMCP, session: ElliotSession):
+    _rest_source(session)
+    out = _tool(mcp, "elliot_create_action_tool")(
+        name="misrouted_object",
+        description="Object params cannot ride the query string.",
+        source_id="shop",
+        method="POST",
+        parameters=[
+            {"name": "payload", "type": "object", "required": True, "description": "JSON body."}
+        ],
+        query_params=["payload"],
+    )
+    text = str(out)
+    assert "UNSUPPORTED_PARAM_ROUTING" in text
+
+
+def test_create_action_tool_rejects_complex_param_with_form_body(
+    mcp: FastMCP, session: ElliotSession
+):
+    _rest_source(session)
+    out = _tool(mcp, "elliot_create_action_tool")(
+        name="form_with_array",
+        description="Form encoding cannot carry nested JSON.",
+        source_id="shop",
+        method="POST",
+        parameters=[
+            {"name": "items", "type": "array", "required": True, "description": "JSON list."}
+        ],
+        body_params=["items"],
+        body_format="form",
+    )
+    text = str(out)
+    assert "UNSUPPORTED_PARAM_ROUTING" in text

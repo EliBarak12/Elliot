@@ -182,8 +182,10 @@ def register_eval_tools(mcp: FastMCP, session: ElliotSession) -> None:
         """List discoverable eval suites — the ``suite_id`` values elliot_run_eval accepts.
 
         Scans ``<EVAL_DIR>`` (default ``.elliot/eval``) for ``.yaml`` / ``.yml`` /
-        ``.json`` files; each suite_id is the filename stem. Lets a UI populate a
-        suite dropdown instead of asking the user to guess a name.
+        ``.json`` files; each suite_id is the filename stem. An empty list is
+        normal on a fresh workspace (nothing is seeded): pass ``cases`` inline
+        to ``elliot_run_eval`` — the primary mode on Elliot Cloud — or write a
+        suite file first.
         """
         try:
             eval_dir = Path(EVAL_DIR)
@@ -205,18 +207,32 @@ def register_eval_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
     @mcp.tool()
     def elliot_quality_scan() -> dict:  # type: ignore[type-arg]
-        """Run a quality analysis on the current connector and return per-tool scores.
+        """Run a quality analysis on ALL current tools and return per-tool scores.
 
-        Each issue is tagged with the ``principle`` from Anthropic's mcp-builder
-        skill that it enforces, and the response includes the ``best_practices``
-        catalog so the Evaluation page can group results by best-practice area.
+        Scans the session's live registry — every tool, whether or not it made
+        it into the last build — so a stale or subset build snapshot can never
+        produce a misleading 100/100. Tools whose SQL references a table the
+        session never materialized score 0 with an error. Each issue is tagged
+        with the ``principle`` from Anthropic's mcp-builder skill that it
+        enforces, and the response includes the ``best_practices`` catalog so
+        the Evaluation page can group results by best-practice area.
         """
         try:
             log.info("quality.scan.start")
-            if session.connector is None:
-                raise ElliotError("NO_CONNECTOR", "No connector loaded in session")
+            from elliot_mcp_plugin.build_state import analysis_config, build_table_warnings
 
-            result = analyze_connector_quality(session.connector)
+            config = analysis_config(session)
+            if config is None:
+                raise ElliotError(
+                    "NO_CONNECTOR",
+                    "Nothing to scan yet — create at least one tool first.",
+                )
+
+            broken = {
+                str(w["tool_id"]): str(w["message"])
+                for w in build_table_warnings(session, session.registry.get_all())
+            }
+            result = analyze_connector_quality(config, broken_tools=broken)
 
             prev_results = load_results(Path(EVAL_RESULTS_DIR))
             last_score: float | None = prev_results[0].score if prev_results else None

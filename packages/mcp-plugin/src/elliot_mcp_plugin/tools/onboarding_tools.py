@@ -8,6 +8,7 @@ description and interviews them about how agents should use the product.
 from __future__ import annotations
 
 import json
+import re
 
 import structlog
 
@@ -82,39 +83,97 @@ def register_onboarding_tools(mcp: FastMCP, session: ElliotSession) -> None:
         return {"recorded": True, "intent": session.product_intent.model_dump()}
 
     @mcp.tool()
+    def elliot_getting_started() -> dict:  # type: ignore[type-arg]
+        """Return Elliot's getting-started guide: principles, workflow, recovery.
+
+        The same content as the ``getting_started`` MCP prompt, exposed as a
+        tool for clients that cannot fetch prompts programmatically. Call it
+        once at the start of a session before building.
+        """
+        try:
+            from elliot_mcp_plugin.prompts import load_skills
+
+            for skill in load_skills():
+                if "getting" in skill.name.lower().replace("-", "_"):
+                    return {"guide": skill.body, "source": skill.name}
+            return {
+                "error": (
+                    "getting-started guide not found in the skills directory — "
+                    "set ELLIOT_SKILLS_DIR or reinstall the plugin package."
+                )
+            }
+        except Exception as exc:
+            log.error("onboarding.getting_started.failed", error=str(exc), exc_info=True)
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+
+    @mcp.tool()
     def elliot_import_api_collection(collection: str) -> dict:  # type: ignore[type-arg]
         """Import the user's API description into a proposed connector.
 
-        Accepts an OpenAPI 3.x spec or a Postman Collection — pass a URL, or
-        the raw JSON. Returns proposed tools (with token-risk hints) for the
-        agent to review with the user before building. For freeform docs that
-        are neither format, normalise them into one of the two first.
+        Accepts an OpenAPI 3.x spec, a Swagger 2.0 spec (auto-converted), or a
+        Postman Collection — pass a URL, raw JSON, or pasted YAML. Returns
+        proposed tools (with token-risk hints) plus a ready ``auth`` block for
+        the agent to review with the user before building. For freeform docs
+        that are none of these formats, normalise them into one first.
         """
         try:
             collection = collection.strip()
-            data: dict | None = None  # type: ignore[type-arg]
-            if collection.startswith("{"):
-                data = json.loads(collection)
 
-            from elliot_core.openapi_analyzer import analyze_spec
+            from elliot_core.openapi_analyzer import analyze_spec, parse_spec_text
             from elliot_core.postman_analyzer import analyze_postman, is_postman_collection
 
-            if data is not None and is_postman_collection(data):
-                proposed = analyze_postman(data)
-                fmt = "postman"
-            elif data is not None and "openapi" in data:
-                proposed = analyze_spec(data)
-                fmt = "openapi"
-            elif data is not None:
-                raise ElliotError(
-                    "UNRECOGNISED_COLLECTION",
-                    "JSON is neither an OpenAPI 3.x spec ('openapi' key) nor a "
-                    "Postman Collection ('item' array). Convert it to one first.",
-                )
-            else:
-                # A bare URL — assume an OpenAPI spec endpoint.
+            if collection.startswith(("http://", "https://")):
+                # A URL — analyze_spec fetches it and resolves relative server
+                # URLs against it, so the proposed base_url comes out absolute.
                 proposed = analyze_spec(collection)
                 fmt = "openapi"
+            else:
+                data: dict | None = None  # type: ignore[type-arg]
+                if collection.startswith("{"):
+                    data = json.loads(collection)
+                else:
+                    # Pasted YAML (or JSON without a leading brace).
+                    try:
+                        data = parse_spec_text(collection)
+                    except Exception as exc:
+                        raise ElliotError(
+                            "UNRECOGNISED_COLLECTION",
+                            "Could not parse the pasted text as JSON or YAML. Pass a "
+                            "URL, an OpenAPI/Swagger spec, or a Postman Collection.",
+                        ) from exc
+                if is_postman_collection(data):
+                    proposed = analyze_postman(data)
+                    fmt = "postman"
+                elif "openapi" in data or "swagger" in data:
+                    proposed = analyze_spec(data)
+                    fmt = "openapi"
+                else:
+                    raise ElliotError(
+                        "UNRECOGNISED_COLLECTION",
+                        "The document is neither an OpenAPI 3.x / Swagger 2.0 spec "
+                        "('openapi'/'swagger' key) nor a Postman Collection ('item' "
+                        "array). Convert it to one first.",
+                    )
+
+            next_steps = (
+                "Review the proposed tools with the user, drop what agents "
+                "don't need, then create a draft."
+            )
+            first_source = proposed.sources[0] if proposed.sources else None
+            proposed_auth = getattr(first_source, "auth", None)
+            if proposed_auth:
+                placeholders = ", ".join(
+                    sorted(
+                        set(
+                            re.findall(r"\{\{\s*env:([A-Z0-9_]+)\s*\}\}", json.dumps(proposed_auth))
+                        )
+                    )
+                )
+                next_steps += (
+                    f" Auth detected ({proposed_auth.get('type')}): pass sources[0].auth as "
+                    "the auth block to elliot_discover_source"
+                    + (f" after creating secret(s): {placeholders}." if placeholders else ".")
+                )
 
             log.info(
                 "onboarding.collection.imported",
@@ -126,10 +185,7 @@ def register_onboarding_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 "status": "imported",
                 "format": fmt,
                 "proposed": proposed.model_dump(),
-                "next": (
-                    "Review the proposed tools with the user, drop what agents "
-                    "don't need, then create a draft."
-                ),
+                "next": next_steps,
             }
         except ElliotError as exc:
             return to_mcp_error_content(exc)

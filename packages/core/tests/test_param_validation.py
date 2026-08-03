@@ -189,3 +189,27 @@ def test_declared_only_returns_subset():
     # a rest_query_param that isn't also a declared parameter is excluded.
     out = validate_call_params(tool, {"q": "widget"}, declared_only=True)
     assert out == {"q": "widget"}
+
+
+def test_array_param_accepts_list():
+    # A bulk-create's item list is a valid param (routed into a JSON body).
+    tool = _tool(a={"name": "items", "type": "array", "required": True})
+    out = validate_call_params(tool, {"items": [{"username": "a"}, {"username": "b"}]})
+    assert out["items"] == [{"username": "a"}, {"username": "b"}]
+
+
+def test_array_param_parses_json_string():
+    # Clients limited to string args (e.g. OpenAI strict mode) still work.
+    tool = _tool(a={"name": "items", "type": "array", "required": True})
+    out = validate_call_params(tool, {"items": "[1, 2, 3]"})
+    assert out["items"] == [1, 2, 3]
+
+
+def test_array_param_rejects_non_array():
+    tool = _tool(a={"name": "items", "type": "array", "required": True})
+    with pytest.raises(ElliotError) as exc:
+        validate_call_params(tool, {"items": '{"not": "a list"}'})
+    assert exc.value.code == "INVALID_PARAM_TYPE"
+    with pytest.raises(ElliotError) as exc2:
+        validate_call_params(tool, {"items": 5})
+    assert exc2.value.code == "INVALID_PARAM_TYPE"

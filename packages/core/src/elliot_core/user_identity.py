@@ -12,6 +12,7 @@ OAuth token. For gateway/self-hosted setups it is carried in a signed
 from __future__ import annotations
 
 import contextvars
+from dataclasses import dataclass, field
 
 # Header a fronting gateway (or the MCP client config) sets to identify the
 # end user. Production deployments should derive this from a validated token
@@ -47,11 +48,97 @@ def parse_user_id(headers: dict[str, str]) -> str | None:
     return value or None
 
 
+@dataclass(frozen=True)
+class UserScope:
+    """Row-level access scope for managed ("elliot") sources.
+
+    The hosting layer (Elliot Cloud's runtime forwarder, a self-hosted
+    gateway) resolves sharing grants into this scope per request:
+
+    * ``readable_owner_ids`` — owners *beyond the user themself* whose rows
+      this user may read (they granted the user access).
+    * ``writable_owner_ids`` — owners beyond the user whose rows this user
+      may update/delete (a read+write grant).
+
+    The user always reads and writes their own rows; these lists only add to
+    that. When no scope is bound the managed store falls back to the plain
+    user id (single-owner scoping), and with no identity at all it runs
+    unscoped — the local single-user mode.
+    """
+
+    user_id: str
+    email: str | None = None
+    readable_owner_ids: tuple[str, ...] = field(default_factory=tuple)
+    writable_owner_ids: tuple[str, ...] = field(default_factory=tuple)
+
+
+_user_scope_var: contextvars.ContextVar[UserScope | None] = contextvars.ContextVar(
+    "elliot_user_scope", default=None
+)
+
+
+def set_current_user_scope(scope: UserScope | None) -> contextvars.Token[UserScope | None]:
+    """Bind the current user's managed-data scope; returns a token for reset."""
+    return _user_scope_var.set(scope)
+
+
+def reset_current_user_scope(token: contextvars.Token[UserScope | None]) -> None:
+    """Restore the previous user-scope binding."""
+    _user_scope_var.reset(token)
+
+
+def get_current_user_scope() -> UserScope | None:
+    """Return the managed-data scope bound to this request, if any."""
+    return _user_scope_var.get()
+
+
+def managed_owner_id() -> str:
+    """The owner id stamped onto rows the current caller inserts."""
+    scope = get_current_user_scope()
+    if scope is not None:
+        return scope.user_id
+    return get_current_user_id() or LOCAL_USER
+
+
+def managed_read_owner_ids() -> list[str] | None:
+    """Owner ids whose rows the current caller may READ, or None for unscoped.
+
+    None (no identity bound at all) means the local single-user mode: no
+    row filter is applied. With an identity but no explicit scope, reads are
+    limited to the caller's own rows.
+    """
+    scope = get_current_user_scope()
+    if scope is not None:
+        return [scope.user_id, *scope.readable_owner_ids]
+    user_id = get_current_user_id()
+    if user_id is not None:
+        return [user_id]
+    return None
+
+
+def managed_write_owner_ids() -> list[str] | None:
+    """Owner ids whose rows the current caller may UPDATE/DELETE, or None."""
+    scope = get_current_user_scope()
+    if scope is not None:
+        return [scope.user_id, *scope.writable_owner_ids]
+    user_id = get_current_user_id()
+    if user_id is not None:
+        return [user_id]
+    return None
+
+
 __all__ = [
     "LOCAL_USER",
     "USER_HEADER",
+    "UserScope",
     "get_current_user_id",
+    "get_current_user_scope",
+    "managed_owner_id",
+    "managed_read_owner_ids",
+    "managed_write_owner_ids",
     "parse_user_id",
     "reset_current_user_id",
+    "reset_current_user_scope",
     "set_current_user_id",
+    "set_current_user_scope",
 ]

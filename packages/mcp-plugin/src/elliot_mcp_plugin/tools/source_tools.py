@@ -770,6 +770,110 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
+    def elliot_create_data_source(
+        name: str,
+        columns: list[dict],  # type: ignore[type-arg]
+        description: str = "",
+        user_scoped: bool = True,
+    ) -> dict:  # type: ignore[type-arg]
+        """Create a managed data source — a table that lives INSIDE Elliot.
+
+        Unlike elliot_discover_source (which connects an EXISTING API/DB/file),
+        this provisions a brand-new writable table with Elliot as the system of
+        record. Use it to build a full app in Elliot Cloud: declare the schema
+        here, then add READ tools (elliot_create_tool) to query it and WRITE
+        tools (elliot_create_data_tool) to insert/update/delete rows.
+
+        Args:
+            name: table name (snake_case) — READ tool SQL references it as
+                ``FROM "<name>"``.
+            columns: declared schema. Each column is {"name": str,
+                "type"?: "string|integer|number|boolean|date" (default string),
+                "required"?: bool, "description"?: str}. Names may not start
+                with "_" — Elliot adds system columns automatically: ``_id``
+                (row handle for update/delete), ``_owner_id`` (the end user who
+                wrote the row), ``_created_at``, ``_updated_at``.
+            user_scoped: true (default) = each end user of the published
+                connector sees only their own rows plus rows shared with them
+                (grants are managed in Elliot Cloud). false = one app-wide
+                table every authenticated user shares.
+        """
+        try:
+            from elliot_core.naming import is_valid_identifier, slugify_identifier
+            from elliot_core.sqlite.managed_store import managed_flat_table
+            from elliot_core.types.source import ManagedColumn
+
+            table = slugify_identifier(name)
+            if not is_valid_identifier(table):
+                raise ElliotError(
+                    "INVALID_SOURCE",
+                    f"Could not derive a valid table name from {name!r}.",
+                )
+            if any(
+                s.type == "elliot" and (s.table_name or s.name) == table
+                for s in session.sources.values()
+            ):
+                raise ElliotError(
+                    "VALIDATION_ERROR",
+                    f"A managed source named '{table}' already exists in this session.",
+                )
+            if not columns:
+                raise ElliotError(
+                    "VALIDATION_ERROR",
+                    "columns must declare at least one column ({'name': ..., 'type': ...}).",
+                )
+            parsed = [ManagedColumn.model_validate(c) for c in columns]
+            for col in parsed:
+                if col.name.startswith("_"):
+                    raise ElliotError(
+                        "INVALID_SOURCE",
+                        f"Column name '{col.name}' is reserved — names may not start "
+                        "with '_' (system columns are added automatically).",
+                    )
+
+            source_id = str(uuid.uuid4())
+            cfg = SourceConfig(
+                id=source_id,
+                name=table,
+                type="elliot",
+                columns=parsed,
+                user_scoped=user_scoped,
+                table_name=table,
+                row_count=0,
+                config_snapshot={"description": description} if description else None,
+            )
+            # Load the (empty) table into the session engine so READ tool SQL
+            # authored against it validates and previews at design time.
+            session.engine.load_result(managed_flat_table(cfg, []))
+            session.sources[source_id] = cfg
+            session.save()
+            log.info(
+                "source.created.managed",
+                source_id=source_id,
+                table=table,
+                columns=len(parsed),
+                user_scoped=user_scoped,
+            )
+            return {
+                "source_id": source_id,
+                "table_name": table,
+                "columns": [c.name for c in parsed],
+                "system_columns": ["_id", "_owner_id", "_created_at", "_updated_at"],
+                "user_scoped": user_scoped,
+                "next_step": (
+                    "Create READ tools with elliot_create_tool (SQL over "
+                    f'FROM "{table}") and mutation tools with elliot_create_data_tool. '
+                    "Rows are stored in Elliot's per-connector managed store after "
+                    "publish; at design time the table previews empty."
+                ),
+            }
+        except ElliotError as exc:
+            return to_mcp_error_content(exc)
+        except Exception as exc:
+            log.error("source.create_managed.failed", error=str(exc), exc_info=True)
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+
+    @mcp.tool()
     def elliot_list_sources(verbose: bool = False) -> dict:  # type: ignore[type-arg]
         """List loaded sources — compact by default, full schemas with verbose.
 

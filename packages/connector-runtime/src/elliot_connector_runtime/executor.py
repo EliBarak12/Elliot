@@ -111,12 +111,17 @@ class ToolExecutor:
         secrets: dict[str, str],
         engine: SQLiteEngine | None = None,
         materialization_ttl_seconds: float = _DEFAULT_TTL_SECONDS,
+        managed_store: Any = None,
     ) -> None:
         self._config = config
         self._secrets = secrets
         self._sources: dict[str, SourceConfig] = {s.id: s for s in config.sources}
         self._injected_engine = engine
         self._engine: SQLiteEngine | None = engine
+        # Persistent store for managed ("elliot") sources; lazily opened at
+        # ELLIOT_MANAGED_DB when the connector declares one and none was
+        # injected by the host.
+        self._managed_store = managed_store
         # source_id -> monotonic timestamp of last successful materialization
         self._materialized_at: dict[str, float] = {}
         self._ttl = max(0.0, materialization_ttl_seconds)
@@ -179,7 +184,20 @@ class ToolExecutor:
         # with "no sql or filter_groups defined" — so no published WRITE tool
         # could ever execute.
         if tool.category in ("WRITE", "ACTION"):
+            # Managed-source mutation (data_mapping) vs REST mutation
+            # (api_mapping) — a tool carries exactly one of the two.
+            if tool.data_mapping is not None:
+                return await self._execute_data_write(tool, arguments)
             return await self._execute_write(tool, arguments)
+
+        # READ tools touching a managed source bypass the shared materialized
+        # engine: managed rows are row-scoped PER CALLER, so caching them in
+        # the executor-wide engine would leak one user's rows to the next.
+        # (Tests that inject a pre-loaded engine keep the plain query path.)
+        if self._injected_engine is None and any(
+            s.type == "elliot" for s in self._sources_needed_for(tool)
+        ):
+            return await self._execute_managed_read(tool, arguments)
 
         # DB filter push-down: when a tool's filters compile to a SELECT and
         # it needs exactly one Postgres/MySQL source, run that SELECT straight
@@ -854,6 +872,147 @@ class ToolExecutor:
             source_id=source.id,
             method=mapping.method,
             row_count=len(rows),
+        )
+        return self._capped_result(tool.id, rows)
+
+    # ── managed ("elliot") sources ─────────────────────────────────────────
+
+    def _managed(self) -> Any:
+        """The persistent managed-source store (lazily opened)."""
+        if self._managed_store is None:
+            from elliot_core.sqlite.managed_store import ManagedStore, managed_db_path
+
+            self._managed_store = ManagedStore(managed_db_path())
+        return self._managed_store
+
+    async def _execute_managed_read(
+        self,
+        tool: ToolDefinition,
+        arguments: dict[str, Any],
+    ) -> QueryResult:
+        """READ over managed source(s), scoped to the calling user.
+
+        Loads the caller's visible rows (own + shared-with-them) into a
+        per-call SQLite engine — never the shared materialized engine, whose
+        cache outlives the request and would leak rows across users — plus
+        any non-managed sources the tool joins against, then runs the tool's
+        SQL / compiled SELECT as usual.
+        """
+        from elliot_core.sqlite.managed_store import managed_flat_table, managed_table_name
+        from elliot_core.sqlite.query_runner import validate_tool_sql
+        from elliot_core.tools.query_builder import quote_ident
+        from elliot_core.user_identity import managed_read_owner_ids
+
+        needed = self._sources_needed_for(tool)
+        allowed = managed_read_owner_ids()
+
+        engine = SQLiteEngine()
+        try:
+            managed_sources = [s for s in needed if s.type == "elliot"]
+            for source in managed_sources:
+                rows = await asyncio.to_thread(self._managed().read_rows, source, allowed)
+                engine.load_result(managed_flat_table(source, rows))
+            for source in (s for s in needed if s.type != "elliot"):
+                fetched = await self._fetch_source(source, arguments)
+                engine.load_result(flatten(fetched, table_name=source.table_name or source.id))
+
+            if tool.sql:
+                ok, reason = validate_tool_sql(tool.sql)
+                if not ok:
+                    raise ExecutorError(f"Tool {tool.id!r} has invalid SQL: {reason}")
+                sql: str = tool.sql
+                params: dict[str, Any] = {p.name: arguments.get(p.name) for p in tool.parameters}
+            elif tool.filter_groups or tool.return_fields:
+                from_clause = (
+                    quote_ident(managed_table_name(managed_sources[0]), "sqlite")
+                    if len(needed) == 1
+                    else None
+                )
+                sql, params = build_select_sql(tool, arguments, from_clause=from_clause)
+            else:
+                from_clause = quote_ident(managed_table_name(managed_sources[0]), "sqlite")
+                sql, params = f"SELECT * FROM {from_clause}", {}
+
+            rows_out = engine.query(sql, params)
+        finally:
+            engine.close()
+
+        log.info(
+            "tool.managed_read",
+            tool_id=tool.id,
+            scoped=allowed is not None,
+            row_count=len(rows_out),
+        )
+        return self._capped_result(tool.id, rows_out)
+
+    async def _execute_data_write(
+        self,
+        tool: ToolDefinition,
+        arguments: dict[str, Any],
+    ) -> QueryResult:
+        """Execute a WRITE tool against a managed source's persistent store.
+
+        Ownership is enforced by the store: inserts stamp the calling user as
+        the row's owner, updates/deletes only reach rows the caller owns or
+        was granted write access to.
+        """
+        from elliot_core.errors import ElliotError
+        from elliot_core.user_identity import managed_owner_id, managed_write_owner_ids
+
+        mapping = tool.data_mapping
+        if mapping is None:  # pragma: no cover - guarded by the caller
+            raise ExecutorError(f"Tool {tool.id!r} has no data_mapping to execute")
+        if not tool.source_ids:
+            raise ExecutorError(f"{tool.category} tool {tool.id!r} has no source_ids")
+        source = self._sources.get(tool.source_ids[0])
+        if source is None:
+            raise ExecutorError(
+                f"Source {tool.source_ids[0]!r} for tool {tool.id!r} is not configured"
+            )
+        if source.type != "elliot":
+            raise ExecutorError(
+                f"Tool {tool.id!r} has a data_mapping but source {source.id!r} is type "
+                f"{source.type!r}, not a managed 'elliot' source"
+            )
+
+        values = {
+            column: arguments[param]
+            for column, param in mapping.column_params.items()
+            if arguments.get(param) is not None
+        }
+        store = self._managed()
+
+        if mapping.operation == "insert":
+            row = await asyncio.to_thread(store.insert_row, source, values, managed_owner_id())
+            rows = [row]
+        else:
+            if not mapping.key_param:
+                raise ExecutorError(
+                    f"Tool {tool.id!r} performs a managed {mapping.operation} but declares "
+                    "no key_param carrying the target row's _id"
+                )
+            row_id = arguments.get(mapping.key_param)
+            if row_id in (None, ""):
+                raise ElliotError(
+                    "VALIDATION_REQUIRED",
+                    f"Parameter '{mapping.key_param}' (the target row's _id) is required. "
+                    "Find the row with a READ tool first.",
+                )
+            allowed = managed_write_owner_ids()
+            if mapping.operation == "update":
+                row = await asyncio.to_thread(
+                    store.update_row, source, str(row_id), values, allowed
+                )
+                rows = [row]
+            else:
+                row = await asyncio.to_thread(store.delete_row, source, str(row_id), allowed)
+                rows = [row]
+
+        log.info(
+            "tool.data_write",
+            tool_id=tool.id,
+            source_id=source.id,
+            operation=mapping.operation,
         )
         return self._capped_result(tool.id, rows)
 

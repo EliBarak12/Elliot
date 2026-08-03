@@ -683,7 +683,116 @@ def _forwarded_param_names(tool: object) -> set[str]:
         template = getattr(mapping, "path_template", None)
         if template:
             names.update(_PATH_PLACEHOLDER_RE.findall(template))
+    data_mapping = getattr(tool, "data_mapping", None)
+    if data_mapping is not None:
+        # Managed-source params mirror the column names they fill — renaming
+        # them to satisfy naming rules would break the column mapping.
+        names.update((getattr(data_mapping, "column_params", None) or {}).values())
+        key_param = getattr(data_mapping, "key_param", None)
+        if key_param:
+            names.add(key_param)
     return names
+
+
+def _lint_data_mappings(config: ConnectorConfig) -> list[LintIssue]:
+    """Check managed-source ("elliot") schemas and the tools that write them.
+
+    A broken data_mapping fails only at call time — an agent-facing dead end —
+    so publish-time lint catches: a mapping bound to a non-managed source, a
+    mapping filling columns the source never declared, a mutation with no row
+    key, and a required column no insert tool can ever fill.
+    """
+    issues: list[LintIssue] = []
+    sources = {s.id: s for s in config.sources}
+
+    for source in config.sources:
+        if source.type == "elliot" and not source.columns:
+            issues.append(
+                LintIssue(
+                    severity="ERROR",
+                    code="MANAGED_SOURCE_NO_COLUMNS",
+                    tool_id=None,
+                    message=(
+                        f"Managed source '{source.id}' declares no columns — there is "
+                        "no schema to store rows against."
+                    ),
+                    suggestion="Declare the source's columns (name, type, required).",
+                )
+            )
+
+    for tool in config.tools:
+        mapping = tool.data_mapping
+        if mapping is None:
+            continue
+        bound = sources.get(tool.source_ids[0]) if tool.source_ids else None
+        if bound is None or bound.type != "elliot":
+            issues.append(
+                LintIssue(
+                    severity="ERROR",
+                    code="DATA_MAPPING_SOURCE_TYPE",
+                    tool_id=tool.id,
+                    message=(
+                        f"Tool '{tool.id}' has a data_mapping but its source is "
+                        + (
+                            f"type '{bound.type}', not a managed 'elliot' source."
+                            if bound
+                            else "missing."
+                        )
+                    ),
+                    suggestion=(
+                        "Bind the tool to a managed source, or use api_mapping for a REST mutation."
+                    ),
+                )
+            )
+            continue
+        declared_cols = {c.name for c in bound.columns}
+        unknown = sorted(set(mapping.column_params) - declared_cols)
+        if unknown:
+            issues.append(
+                LintIssue(
+                    severity="ERROR",
+                    code="DATA_MAPPING_UNKNOWN_COLUMN",
+                    tool_id=tool.id,
+                    message=(
+                        f"Tool '{tool.id}' maps column(s) {', '.join(unknown)} that "
+                        f"source '{bound.id}' does not declare."
+                    ),
+                    suggestion=(
+                        f"Declared columns: {', '.join(sorted(declared_cols)) or '(none)'}."
+                    ),
+                )
+            )
+        if mapping.operation in ("update", "delete") and not mapping.key_param:
+            issues.append(
+                LintIssue(
+                    severity="ERROR",
+                    code="DATA_MAPPING_MISSING_KEY",
+                    tool_id=tool.id,
+                    message=(
+                        f"Tool '{tool.id}' performs a managed {mapping.operation} but "
+                        "declares no key_param — the runtime cannot target a row."
+                    ),
+                    suggestion="Declare a parameter carrying the row's _id and set key_param.",
+                )
+            )
+        if mapping.operation == "insert":
+            required = {c.name for c in bound.columns if c.required}
+            unfilled = sorted(required - set(mapping.column_params))
+            if unfilled:
+                issues.append(
+                    LintIssue(
+                        severity="ERROR",
+                        code="DATA_MAPPING_REQUIRED_COLUMN_UNMAPPED",
+                        tool_id=tool.id,
+                        message=(
+                            f"Tool '{tool.id}' inserts into '{bound.id}' but never fills "
+                            f"required column(s): {', '.join(unfilled)} — every call would "
+                            "fail validation."
+                        ),
+                        suggestion="Map each required column to a parameter in column_params.",
+                    )
+                )
+    return issues
 
 
 def _starts_with_verb(description: str) -> bool:
@@ -736,6 +845,9 @@ def lint_connector(
 
     # ── SQL ↔ source_ids coverage (runtime "no such table" guard) ────────────
     issues.extend(_lint_tool_source_coverage(config))
+
+    # ── managed-source schemas + data_mapping consistency ────────────────────
+    issues.extend(_lint_data_mappings(config))
 
     # ── skill executability (a deterministic skill that can never run) ────────
     # Deliberately the full set: a step calling a disabled tool must be caught.
@@ -1046,6 +1158,8 @@ def lint_connector(
                 haystack += " " + " ".join(tool.api_mapping.body_params)
                 if tool.api_mapping.path_template:
                     haystack += " " + tool.api_mapping.path_template
+            if tool.data_mapping is not None:
+                haystack += " " + " ".join(tool.data_mapping.column_params)
             if field_re.search(haystack):
                 issues.append(
                     LintIssue(

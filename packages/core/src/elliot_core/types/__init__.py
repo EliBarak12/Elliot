@@ -2,12 +2,14 @@ from elliot_core.types.connector import ConnectorBranding, ConnectorConfig
 from elliot_core.types.source import (
     AuthConfig,
     FetchResult,
+    ManagedColumn,
     OAuth2Config,
     PaginationConfig,
     SourceConfig,
 )
 from elliot_core.types.tool import (
     ApiRequestMapping,
+    DataWriteMapping,
     FilterCondition,
     FilterGroup,
     OrderField,
@@ -27,9 +29,11 @@ __all__ = [
     "ApiRequestMapping",
     "AuthConfig",
     "ConnectorConfig",
+    "DataWriteMapping",
     "FetchResult",
     "FilterCondition",
     "FilterGroup",
+    "ManagedColumn",
     "OAuth2Config",
     "OrderField",
     "PaginationConfig",

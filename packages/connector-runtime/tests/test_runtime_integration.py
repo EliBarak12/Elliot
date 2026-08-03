@@ -393,7 +393,7 @@ async def test_argument_validation_failures_reach_the_session_trace() -> None:
     """
     import tempfile
 
-    from mcp.shared.memory import create_connected_server_and_client_session
+    from mcp.client import Client
 
     from elliot_connector_runtime.executor import ToolExecutor
     from elliot_connector_runtime.server import create_runtime_server
@@ -439,10 +439,9 @@ async def test_argument_validation_failures_reach_the_session_trace() -> None:
         tracker=tracker,
     )
 
-    async with create_connected_server_and_client_session(mcp._mcp_server) as client:
-        await client.initialize()
+    async with Client(mcp, mode="legacy") as client:
         res = await client.call_tool("get_thing", {})  # missing required param
-        assert res.isError
+        assert res.is_error
 
     events = [e for s in tracker.tail(10) for e in s.get("events") or []]
     assert len(events) == 1, f"validation failure missing from the session trace: {events}"

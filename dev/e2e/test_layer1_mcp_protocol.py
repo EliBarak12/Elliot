@@ -198,12 +198,12 @@ BUSINESS_SKILL = {
         {
             "alias": "low_reviews",
             "tool_id": "pending_reviews_with_low_rating",
-            "params": {"max_rating": "{{ max_rating }}"},
+            "params": {"max_rating": "{{ skill.input.max_rating }}"},
         },
         {
             "alias": "history",
             "tool_id": "customer_order_history",
-            "params": {"customer_id": "{{ customer_id }}"},
+            "params": {"customer_id": "{{ skill.input.customer_id }}"},
         },
     ],
     "input_parameters": [
@@ -335,8 +335,12 @@ async def test_full_workflow_via_mcp_wire_protocol(
 
         # ── 7. Export to the workspace's connectors dir ────────────────────
         connector_path = stack.workspace / "connectors" / "ecommerce-ops.connector.json"
+        # The connector lints clean of ERRORs (asserted above); a few non-blocking
+        # WARN-level quality hints remain, so ship-with-warnings to exercise export.
         exported = await call_tool_json(
-            session, "elliot_export_connector", {"path": str(connector_path)}
+            session,
+            "elliot_export_connector",
+            {"path": str(connector_path), "allow_warnings": True},
         )
         assert exported.get("status") in {"exported", "ok"} or "path" in exported
         assert connector_path.exists(), "Exported connector file is missing on disk"

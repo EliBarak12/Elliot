@@ -198,3 +198,26 @@ def test_to_openai_function_strict_mode_lists_all_params_required():
     assert params["properties"]["q"]["type"] == "string"
     # strict mode forbids `default`.
     assert "default" not in params["properties"]["limit"]
+
+
+def test_array_param_schema_maps_to_json_array():
+    from elliot_core.types.tool import ParameterDefinition, ToolDefinition
+
+    tool = ToolDefinition.model_validate(
+        {
+            "id": "bulk_create_users",
+            "name": "bulk_create_users",
+            "description": "Create several users in one call.",
+            "category": "WRITE",
+            "source_ids": ["api"],
+            "parameters": [
+                ParameterDefinition(
+                    name="items", type="array", required=True, description="list of users"
+                )
+            ],
+        }
+    )
+    schema = to_mcp_tool_schema(tool)
+    items = schema["inputSchema"]["properties"]["items"]
+    assert items["type"] == "array"
+    assert items["items"] == {}

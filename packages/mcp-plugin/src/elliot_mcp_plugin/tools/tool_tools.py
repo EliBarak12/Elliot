@@ -16,6 +16,7 @@ from elliot_core.sqlite.query_runner import validate_tool_sql
 from elliot_core.tokens import estimate_tokens
 from elliot_core.tools.param_validation import validate_call_params
 from elliot_core.types.tool import ToolDefinition
+from elliot_mcp_plugin.build_state import refresh_built_connector
 from elliot_mcp_plugin.session import ElliotSession
 
 # A preview result costing more than this is worth flagging — it is the token
@@ -33,7 +34,7 @@ _PARAM_ITEM_SCHEMA: dict[str, Any] = {
         "name": {"type": "string"},
         "type": {
             "type": "string",
-            "enum": ["string", "integer", "number", "boolean", "date"],
+            "enum": ["string", "integer", "number", "boolean", "date", "object", "array"],
         },
         "required": {"type": "boolean"},
         "description": {"type": "string"},
@@ -538,7 +539,10 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
         Every parameter must be routed somewhere (path placeholder, query, or
         body) — unrouted parameters are rejected so the tool cannot silently
-        drop an agent's input.
+        drop an agent's input. Parameters typed ``object`` or ``array`` carry
+        nested JSON: they must be routed via ``body_params`` with
+        ``body_format="json"`` (never a path placeholder or query value), or
+        creation fails with UNSUPPORTED_PARAM_ROUTING.
         """
         try:
             source = session.sources.get(source_id)
@@ -600,6 +604,29 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                     "them. Route each one (or remove it).",
                     detail={"unrouted": unrouted},
                 )
+            # object/array parameters are nested JSON — they can only travel in
+            # a JSON request body, never a path placeholder or query value.
+            complex_params = sorted(
+                str(p["name"])
+                for p in (parameters or [])
+                if isinstance(p, dict) and p.get("type") in ("object", "array")
+            )
+            misrouted = sorted(set(complex_params) - set(body_names))
+            if misrouted:
+                raise ElliotError(
+                    "UNSUPPORTED_PARAM_ROUTING",
+                    f"object/array parameter(s) {', '.join(misrouted)} must be routed via "
+                    "body_params — nested JSON cannot fill a path placeholder or query "
+                    "value.",
+                    detail={"misrouted": misrouted},
+                )
+            if complex_params and body_format != "json":
+                raise ElliotError(
+                    "UNSUPPORTED_PARAM_ROUTING",
+                    "object/array parameters require body_format='json' — form encoding "
+                    "cannot carry nested JSON.",
+                    detail={"complex_params": complex_params},
+                )
 
             tool = ToolDefinition.model_validate(
                 {
@@ -647,7 +674,18 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
 
     @mcp.tool()
     def elliot_update_tool(tool_id: str, patch: dict) -> dict:  # type: ignore[type-arg]
-        """Partially update a tool definition (name, description, sql, parameters)."""
+        """Partially update a tool definition — including the shaping fields.
+
+        ``patch`` merges into the existing definition. Beyond name /
+        description / sql / parameters, this is THE way to set the
+        response-shaping and contract fields that have no create-time argument:
+        ``limit``, ``return_fields`` (with alias + aggregation),
+        ``filter_groups``, ``response_shape`` ({max_rows, rename}),
+        ``output_schema``, ``run_async``, ``destructive``, and per-parameter
+        ``enum`` / ``minimum`` / ``maximum`` / ``default``. Use them to keep
+        results small and typed instead of hand-writing SQL projections.
+        The built connector is refreshed automatically after the update.
+        """
         try:
             tool = session.registry.get(tool_id)
             if tool is None:
@@ -674,34 +712,68 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 patch["source_ids"] = _infer_source_ids_from_sql(sql_patch, session)
             if patch:
                 session.registry.update(tool_id, patch)
+            # F5: an update after a build previously left the built connector
+            # silently stale — export/publish shipped the OLD definition.
+            # Re-assemble the build (same meta + selection) so what ships is
+            # always what the registry says NOW.
+            refreshed = refresh_built_connector(session)
             session.save()
-            return {"tool_id": tool_id, "status": "updated"}
+            result = {"tool_id": tool_id, "status": "updated"}
+            if refreshed:
+                result["connector"] = "rebuilt with the updated definition"
+            return result
         except ElliotError as exc:
             return to_mcp_error_content(exc)
         except Exception as exc:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
-    def elliot_list_tools() -> dict:  # type: ignore[type-arg]
-        """List all user-defined connector tools with their full definitions."""
+    def elliot_list_tools(verbose: bool = False) -> dict:  # type: ignore[type-arg]
+        """List the connector's tools — compact by default, full with verbose.
+
+        The default is a summary (id, category, truncated description,
+        parameter names) sized for an agent's context window; a 20-tool
+        connector costs ~1-2K tokens instead of ~30K. Pass ``verbose=true``
+        for complete definitions including SQL, or use ``elliot_get_tool``
+        for one tool's full contract.
+        """
         try:
             # Pick up any tools the agent created since our last list — even
             # if the agent's MCP client spawned its own plugin process and
             # writes to the same workspace.
             session.refresh_from_disk()
-            # SQL lives in session.tool_sql, not on the model (see
-            # elliot_create_tool), so merge it in just like elliot_get_tool —
-            # otherwise the Studio editor renders an empty query field.
-            tools = []
+            tools: list[dict[str, Any]] = []
             for t in session.registry.get_all():
-                dumped = t.model_dump()
-                if dumped.get("sql") is None:
-                    dumped["sql"] = session.tool_sql.get(t.id)
-                tools.append(dumped)
-            return {
-                "tools": tools,
-                "count": len(tools),
-            }
+                if verbose:
+                    # SQL lives in session.tool_sql, not on the model (see
+                    # elliot_create_tool), so merge it in just like
+                    # elliot_get_tool — otherwise the Studio editor renders an
+                    # empty query field.
+                    dumped = t.model_dump()
+                    if dumped.get("sql") is None:
+                        dumped["sql"] = session.tool_sql.get(t.id)
+                    tools.append(dumped)
+                else:
+                    desc = t.description.strip()
+                    tools.append(
+                        {
+                            "id": t.id,
+                            "name": t.name,
+                            "category": t.category,
+                            "description": desc[:160] + ("…" if len(desc) > 160 else ""),
+                            "parameters": [p.name for p in t.parameters],
+                            "source_ids": t.source_ids,
+                            "has_sql": bool(t.sql or session.tool_sql.get(t.id)),
+                            "destructive": t.destructive,
+                        }
+                    )
+            result: dict[str, Any] = {"tools": tools, "count": len(tools)}
+            if not verbose and tools:
+                result["note"] = (
+                    "Summary view. Pass verbose=true for full definitions, or "
+                    "elliot_get_tool(tool_id) for one tool."
+                )
+            return result
         except Exception as exc:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
@@ -726,6 +798,7 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 return {"error": f"Tool not found: {tool_id}"}
             session.registry.delete(tool_id)
             session.tool_sql.pop(tool_id, None)
+            refresh_built_connector(session)
             session.save()
             log.info("tool.deleted", tool_id=tool_id)
             return {"status": "deleted", "tool_id": tool_id}

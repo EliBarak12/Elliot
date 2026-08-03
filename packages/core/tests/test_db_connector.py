@@ -100,6 +100,67 @@ class TestQueryDatabase:
 
         assert ce.call_args[0][0] == "postgresql://localhost/from-env"
 
+    def test_env_var_dsn_not_resolved_from_os_environ_when_gate_on(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS=1 (multi-tenant cloud), a
+        placeholder DSN must never fall back to the host process environment —
+        otherwise a tenant connector could read the platform's DATABASE_URL."""
+        from elliot_core.secrets import SecretResolutionError
+        from elliot_core.sources.db_connector import query_database
+
+        monkeypatch.setenv("ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS", "1")
+        monkeypatch.setenv("DB_URL", "postgresql://localhost/platform-db")
+        source = _pg_source(url="{{ env:DB_URL }}")
+        engine = _make_engine_mock([])
+
+        with (
+            patch(_PATCH_ENGINE, return_value=engine) as ce,
+            pytest.raises(SecretResolutionError) as exc_info,
+        ):
+            query_database(source, {})
+
+        assert exc_info.value.code == "SECRET_NOT_SET"
+        ce.assert_not_called()
+
+    def test_env_var_dsn_resolved_from_secrets_when_gate_on(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The closed secrets map still resolves normally under the cloud gate."""
+        from elliot_core.sources.db_connector import query_database
+
+        monkeypatch.setenv("ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS", "1")
+        source = _pg_source(url="{{ env:DB_URL }}")
+        engine = _make_engine_mock([])
+
+        with patch(_PATCH_ENGINE, return_value=engine) as ce:
+            query_database(source, {"DB_URL": "postgresql://localhost/tenant-db"})
+
+        assert ce.call_args[0][0] == "postgresql://localhost/tenant-db"
+
+    def test_whitespace_placeholder_variant_is_literal_not_resolved(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """'{{ env: DATABASE_URL }}' (space after the colon) is NOT a valid
+        placeholder — it must be treated as a literal DSN, never resolved from
+        the host environment (that loose match was the cross-tenant leak)."""
+        from elliot_core.sources.db_connector import _resolve_dsn
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/platform-db")
+        source = _pg_source(url="{{ env: DATABASE_URL }}")
+
+        assert _resolve_dsn(source, {}) == "{{ env: DATABASE_URL }}"
+
+    def test_lowercase_placeholder_variant_is_literal_not_resolved(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from elliot_core.sources.db_connector import _resolve_dsn
+
+        monkeypatch.setenv("database_url", "postgresql://localhost/platform-db")
+        source = _pg_source(url="{{ env:database_url }}")
+
+        assert _resolve_dsn(source, {}) == "{{ env:database_url }}"
+
     def test_missing_dsn_raises_elliot_error(self) -> None:
         from elliot_core.sources.db_connector import query_database
 
@@ -221,6 +282,34 @@ class TestQueryDatabase:
             result = query_database(source, {})
 
         assert result.fetched_at
+
+
+class TestQuoteTable:
+    """_quote_table routes identifiers through safe_ident before quoting."""
+
+    def test_valid_identifier_double_quoted_for_postgres(self) -> None:
+        from elliot_core.sources.db_connector import _quote_table
+
+        assert _quote_table("users", dialect="postgres") == '"users"'
+
+    def test_valid_identifier_backticked_for_mysql(self) -> None:
+        from elliot_core.sources.db_connector import _quote_table
+
+        assert _quote_table("orders", dialect="mysql") == "`orders`"
+
+    def test_quote_breakout_raises_invalid_identifier(self) -> None:
+        from elliot_core.sources.db_connector import _quote_table
+
+        with pytest.raises(ElliotError) as exc_info:
+            _quote_table('users"; DROP TABLE t; --', dialect="postgres")
+        assert exc_info.value.code == "INVALID_IDENTIFIER"
+
+    def test_backtick_breakout_raises_invalid_identifier_for_mysql(self) -> None:
+        from elliot_core.sources.db_connector import _quote_table
+
+        with pytest.raises(ElliotError) as exc_info:
+            _quote_table("orders` WHERE 1=1; --", dialect="mysql")
+        assert exc_info.value.code == "INVALID_IDENTIFIER"
 
 
 class TestRunSelect:

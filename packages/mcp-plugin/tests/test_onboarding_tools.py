@@ -101,3 +101,67 @@ def test_import_bad_json(mcp: FastMCP) -> None:
 def test_import_unrecognised_json(mcp: FastMCP) -> None:
     result = _tool(mcp, "elliot_import_api_collection")(json.dumps({"random": "object"}))
     assert "text" in result or "error" in result
+
+
+_OPENAPI_YAML = """
+openapi: 3.0.0
+info:
+  title: Yaml Demo
+  version: "1.0"
+servers:
+  - url: https://yaml.demo.com
+paths:
+  /items:
+    get:
+      operationId: listItems
+      summary: List items
+      responses:
+        "200": {}
+"""
+
+_SWAGGER2 = {
+    "swagger": "2.0",
+    "info": {"title": "Legacy Demo", "version": "1.0"},
+    "host": "legacy.demo.com",
+    "basePath": "/v1",
+    "paths": {
+        "/items": {"get": {"operationId": "listItems", "responses": {"200": {"description": "ok"}}}}
+    },
+}
+
+_OPENAPI_WITH_AUTH = {
+    "openapi": "3.0.0",
+    "info": {"title": "Auth Demo", "version": "1.0"},
+    "servers": [{"url": "https://auth.demo.com"}],
+    "components": {"securitySchemes": {"key": {"type": "apiKey", "in": "header", "name": "X-Key"}}},
+    "paths": {"/items": {"get": {"operationId": "listItems", "responses": {"200": {}}}}},
+}
+
+
+def test_import_pasted_yaml(mcp: FastMCP) -> None:
+    result = _tool(mcp, "elliot_import_api_collection")(_OPENAPI_YAML)
+    assert result["status"] == "imported"
+    assert result["format"] == "openapi"
+    assert result["proposed"]["slug"] == "yaml-demo"
+
+
+def test_import_swagger2_is_converted(mcp: FastMCP) -> None:
+    result = _tool(mcp, "elliot_import_api_collection")(json.dumps(_SWAGGER2))
+    assert result["status"] == "imported"
+    assert result["proposed"]["sources"][0]["base_url"] == "https://legacy.demo.com/v1"
+    assert any("Swagger 2.0" in w for w in result["proposed"]["warnings"])
+
+
+def test_import_surfaces_auth_block_and_secret_names(mcp: FastMCP) -> None:
+    result = _tool(mcp, "elliot_import_api_collection")(json.dumps(_OPENAPI_WITH_AUTH))
+    assert result["status"] == "imported"
+    auth = result["proposed"]["sources"][0]["auth"]
+    assert auth["type"] == "api_key"
+    assert auth["header_name"] == "X-Key"
+    assert "AUTH_DEMO_API_KEY" in result["next"]
+
+
+def test_import_unparseable_text_is_actionable(mcp: FastMCP) -> None:
+    result = _tool(mcp, "elliot_import_api_collection")("just some prose, not a spec")
+    text = str(result)
+    assert "UNRECOGNISED_COLLECTION" in text or "error" in result

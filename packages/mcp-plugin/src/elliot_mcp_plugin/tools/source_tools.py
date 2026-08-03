@@ -637,6 +637,14 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
               POST/PUT/PATCH API that reads its inputs from the JSON request
               body instead of the URL query string; a tool's forwarded params
               then land in the body.
+            - pagination — fetch multiple pages at discovery:
+              {"strategy": "cursor"|"offset"|"page"|"link_header"|"odata",
+               "page_size": 100, "max_pages": 5, "cursor_field": "...",
+               "next_url_field": "..."}. Without it only the first response
+              is loaded.
+        Tip: elliot_import_api_collection proposes a ready `auth` block (with
+        {{ env:NAME }} placeholders) from the spec's securitySchemes — pass it
+        here as config["auth"] after creating the named secrets.
         name: logical name used as the SQLite table prefix
         """
         try:
@@ -762,8 +770,14 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()
-    def elliot_list_sources() -> dict:  # type: ignore[type-arg]
-        """List all loaded sources with their table names, row counts, and columns."""
+    def elliot_list_sources(verbose: bool = False) -> dict:  # type: ignore[type-arg]
+        """List loaded sources — compact by default, full schemas with verbose.
+
+        The default summary (name, type, row count, column NAMES) keeps a
+        many-source session from costing thousands of tokens per list. Pass
+        ``verbose=true`` for full column types and related-table schemas, or
+        use ``elliot_get_schema`` for one table.
+        """
         try:
             # Pick up sources the agent discovered since our last list — even
             # if the agent runs in a separate plugin process sharing the
@@ -784,7 +798,14 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 columns = _cols(src.table_name)
                 # Child tables from flattened nested arrays — without these an
                 # agent can't see (let alone JOIN) the nested data on a re-list.
-                related = [{"name": t, "columns": _cols(t)} for t in (src.related_tables or [])]
+                if verbose:
+                    related: list[Any] = [
+                        {"name": t, "columns": _cols(t)} for t in (src.related_tables or [])
+                    ]
+                    column_field: Any = columns
+                else:
+                    related = list(src.related_tables or [])
+                    column_field = [c["name"] for c in columns]
                 sources.append(
                     {
                         # Both keys for backwards compatibility: 'id' is the
@@ -796,12 +817,18 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                         "type": src.type,
                         "table_name": src.table_name,
                         "row_count": src.row_count,
-                        "columns": columns,
+                        "columns": column_field,
                         "related_tables": related,
                         "schema_hint": _JOIN_HINT if related else None,
                     }
                 )
-            return {"sources": sources, "count": len(sources)}
+            result: dict[str, Any] = {"sources": sources, "count": len(sources)}
+            if not verbose and sources:
+                result["note"] = (
+                    "Summary view (column names only). Pass verbose=true for "
+                    "column types and related-table schemas."
+                )
+            return result
         except Exception as exc:
             log.error("source.list.failed", error=str(exc))
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
@@ -892,7 +919,14 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
         try:
             if session.sources.get(source_id) is None:
                 return {"error": f"Source not found: {source_id}"}
-            return session.remove_source(source_id)
+            result = session.remove_source(source_id)
+            # The cascade may have deleted tools that are in the built
+            # connector — refresh so the build never goes silently stale (F5).
+            from elliot_mcp_plugin.build_state import refresh_built_connector
+
+            refresh_built_connector(session)
+            session.save()
+            return result
         except ElliotError as exc:
             return to_mcp_error_content(exc)
         except Exception as exc:

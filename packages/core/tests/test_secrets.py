@@ -59,3 +59,18 @@ def test_check_secrets_nested(monkeypatch) -> None:
         }
     )
     assert set(missing) == {"A", "B"}
+
+
+def test_host_env_secrets_allowed_by_default(monkeypatch) -> None:
+    from elliot_core.secrets import host_env_secrets_allowed
+
+    monkeypatch.delenv("ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS", raising=False)
+    assert host_env_secrets_allowed() is True
+
+
+@pytest.mark.parametrize("flag", ["1", "true", "yes", "on", " TRUE "])
+def test_host_env_secrets_disallowed_when_flag_set(monkeypatch, flag: str) -> None:
+    from elliot_core.secrets import host_env_secrets_allowed
+
+    monkeypatch.setenv("ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS", flag)
+    assert host_env_secrets_allowed() is False

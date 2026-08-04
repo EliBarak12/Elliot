@@ -98,6 +98,25 @@ class SmokeReport(BaseModel):
         return "; ".join(parts)
 
 
+def build_smoke_executor(config: ConnectorConfig, secrets: dict[str, str]) -> ToolExecutor:
+    """A throwaway executor wired the way a smoke run needs it.
+
+    Managed ("elliot") sources get a private in-memory store instead of the
+    host's persistent one: the smoke proves the query path serves, and an
+    empty table does that without reading (or requiring) real app data.
+    Publish gates also run in containers whose working directory is
+    read-only, where the executor's lazy default (``.elliot/managed.db``)
+    cannot even be created — the in-memory store sidesteps the filesystem
+    entirely.
+    """
+    managed_store = None
+    if any(s.type == "elliot" for s in config.sources):
+        from elliot_core.sqlite.managed_store import ManagedStore
+
+        managed_store = ManagedStore(":memory:")
+    return ToolExecutor(config, secrets, managed_store=managed_store)
+
+
 def smoke_arguments(tool: ToolDefinition) -> dict[str, Any] | None:
     """Arguments for the natural first call an agent makes to ``tool``.
 
@@ -213,6 +232,16 @@ async def smoke_test_connector(
     """
     t0 = time.monotonic()
     log.info("smoke.start", connector=config.slug, tools=len(config.tools), execute=execute)
+
+    # A smoke run must never open the host's persistent managed store: it
+    # would read real app data at publish time, and on hosts with a read-only
+    # working directory the lazy default path cannot even be created. Callers
+    # should build executors via ``build_smoke_executor``; if one arrives
+    # without a store anyway, give it the same private in-memory one.
+    if executor._managed_store is None and any(s.type == "elliot" for s in config.sources):
+        from elliot_core.sqlite.managed_store import ManagedStore
+
+        executor._managed_store = ManagedStore(":memory:")
 
     try:
         listed, context_tokens = await _build_and_list(config, executor)

@@ -14,6 +14,7 @@ from elliot_connector_runtime import smoke as smoke_mod
 from elliot_connector_runtime.executor import ToolExecutor
 from elliot_connector_runtime.smoke import (
     SMOKE_TIMEOUT_CODE,
+    build_smoke_executor,
     smoke_arguments,
     smoke_test_connector,
 )
@@ -300,6 +301,70 @@ def test_execute_false_lists_only() -> None:
     assert report.passed
     assert report.tool_results == []
     assert "list_people" in report.listed_tools
+
+
+def _managed_connector() -> ConnectorConfig:
+    source = SourceConfig(
+        id="items",
+        name="items",
+        type="elliot",
+        table_name="items",
+        columns=[
+            {"name": "title", "type": "string", "required": True},
+            {"name": "done", "type": "boolean"},
+        ],
+    )
+    tool = _read_tool(
+        "list_items",
+        sql='SELECT _id, title FROM "items" ORDER BY _created_at',
+        source_ids=["items"],
+    )
+    return _connector([tool], sources=[source])
+
+
+def _forbid_host_managed_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make any resolution of the host managed-store path an immediate failure.
+
+    This is the production bug class: on a host with a read-only working
+    directory, merely resolving the default path and mkdir-ing its parent
+    raises EACCES. Raising here proves the smoke never goes near it.
+    """
+
+    def _boom() -> str:
+        raise AssertionError("smoke must not open the host managed store")
+
+    monkeypatch.setattr("elliot_core.sqlite.managed_store.managed_db_path", _boom)
+
+
+def test_managed_read_smokes_without_touching_host_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_host_managed_store(monkeypatch)
+    config = _managed_connector()
+    executor = build_smoke_executor(config, {})
+    report = asyncio.run(smoke_test_connector(config, executor))
+    assert report.passed
+    [result] = report.tool_results
+    assert result.status == "passed"
+    # The smoke's private store is empty on purpose — it proves the query
+    # path serves without reading real app data.
+    assert result.rows == 0
+
+
+def test_smoke_gives_bare_executor_a_memory_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A caller that builds its own executor without a managed store must not
+    # fall through to the lazy on-disk default mid-smoke.
+    _forbid_host_managed_store(monkeypatch)
+    config = _managed_connector()
+    report = asyncio.run(smoke_test_connector(config, ToolExecutor(config, {})))
+    assert report.passed
+    [result] = report.tool_results
+    assert result.status == "passed"
+
+
+def test_build_smoke_executor_skips_store_without_managed_sources() -> None:
+    executor = build_smoke_executor(_connector([_read_tool()]), {})
+    assert executor._managed_store is None
 
 
 def test_empty_result_is_a_pass() -> None:

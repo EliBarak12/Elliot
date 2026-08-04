@@ -80,6 +80,10 @@ def allowed_param_names(tool: ToolDefinition) -> set[str]:
     if tool.api_mapping is not None:
         allowed.update(tool.api_mapping.query_params)
         allowed.update(tool.api_mapping.body_params)
+    if tool.data_mapping is not None:
+        allowed.update(tool.data_mapping.column_params.values())
+        if tool.data_mapping.key_param:
+            allowed.add(tool.data_mapping.key_param)
     return allowed
 
 

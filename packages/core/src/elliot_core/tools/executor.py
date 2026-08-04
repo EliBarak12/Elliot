@@ -41,12 +41,23 @@ class ToolExecutor:
         config: ConnectorConfig,
         secrets: dict[str, str] | None = None,
         fetch_source: Any = None,
+        managed_store: Any = None,
     ) -> None:
         self._config = config
         self._source_map = {s.id: s for s in config.sources}
         self._tool_map = {t.id: t for t in config.tools}
         self._secrets = secrets or {}
         self._fetch_source = fetch_source or _default_fetch_source
+        # Persistent store for managed ("elliot") sources; lazily opened at
+        # ELLIOT_MANAGED_DB when the connector declares one.
+        self._managed_store = managed_store
+
+    def _managed(self) -> Any:
+        if self._managed_store is None:
+            from elliot_core.sqlite.managed_store import ManagedStore, managed_db_path
+
+            self._managed_store = ManagedStore(managed_db_path())
+        return self._managed_store
 
     async def execute(self, tool_id: str, params: dict[str, Any]) -> ToolResult:
         tool = self._tool_map.get(tool_id)
@@ -147,7 +158,14 @@ class ToolExecutor:
                 # falling back to source.id (the built-connector case where id == name).
                 source = self._source_map.get(source_id)
                 table_name = source.table_name if source and source.table_name else source_id
-                engine.load_result(flatten(fetch_result.rows, table_name))
+                if source is not None and source.type == "elliot":
+                    # Managed rows keep their store-minted ``_id`` (the handle
+                    # mutations target); the flattener would renumber it.
+                    from elliot_core.sqlite.managed_store import managed_flat_table
+
+                    engine.load_result(managed_flat_table(source, fetch_result.rows))
+                else:
+                    engine.load_result(flatten(fetch_result.rows, table_name))
 
             if tool.sql:
                 # Defence in depth: a stored tool.sql must be a read-only
@@ -185,6 +203,8 @@ class ToolExecutor:
         )
 
     async def _execute_write(self, tool: ToolDefinition, params: dict[str, Any]) -> ToolResult:
+        if tool.data_mapping is not None:
+            return await self._execute_data_write(tool, params)
         if not tool.api_mapping:
             raise ElliotError("MISSING_API_MAPPING", f"WRITE tool '{tool.id}' has no api_mapping")
         if not tool.source_ids:
@@ -253,6 +273,73 @@ class ToolExecutor:
             rows=rows, meta={"fetch_mode": "write", "row_count": len(rows), "url": url}
         )
 
+    async def _execute_data_write(self, tool: ToolDefinition, params: dict[str, Any]) -> ToolResult:
+        """WRITE against a managed ("elliot") source's persistent store.
+
+        Inserts stamp the current caller as the row's owner; updates and
+        deletes only reach rows the caller owns or holds a write grant on —
+        the store enforces this, not the tool.
+        """
+        from elliot_core.user_identity import managed_owner_id, managed_write_owner_ids
+
+        mapping = tool.data_mapping
+        assert mapping is not None  # caller-checked
+        if not tool.source_ids:
+            raise ElliotError("INVALID_TOOL", f"WRITE tool '{tool.id}' has no source_ids")
+        source = self._source_map.get(tool.source_ids[0])
+        if not source:
+            raise ElliotError("SOURCE_NOT_FOUND", f"Source '{tool.source_ids[0]}' not found")
+        if source.type != "elliot":
+            raise ElliotError(
+                "INVALID_TOOL",
+                f"Tool '{tool.id}' has a data_mapping but source '{source.id}' is type "
+                f"'{source.type}', not a managed 'elliot' source",
+            )
+
+        values = {
+            column: params[param]
+            for column, param in mapping.column_params.items()
+            if params.get(param) is not None
+        }
+        store = self._managed()
+
+        if mapping.operation == "insert":
+            row = await asyncio.to_thread(store.insert_row, source, values, managed_owner_id())
+        elif not mapping.key_param:
+            raise ElliotError(
+                "INVALID_TOOL",
+                f"Tool '{tool.id}' performs a managed {mapping.operation} but declares no "
+                "key_param carrying the target row's _id",
+            )
+        else:
+            row_id = params.get(mapping.key_param)
+            if row_id in (None, ""):
+                raise ElliotError(
+                    "VALIDATION_REQUIRED",
+                    f"Parameter '{mapping.key_param}' (the target row's _id) is required.",
+                )
+            allowed = managed_write_owner_ids()
+            if mapping.operation == "update":
+                row = await asyncio.to_thread(
+                    store.update_row, source, str(row_id), values, allowed
+                )
+            else:
+                row = await asyncio.to_thread(store.delete_row, source, str(row_id), allowed)
+
+        return ToolResult(
+            rows=[row],
+            meta={"fetch_mode": "data_write", "operation": mapping.operation, "row_count": 1},
+        )
+
+    async def _fetch_managed(self, source: SourceConfig) -> FetchResult:
+        """Read a managed source's rows, scoped to the current caller."""
+        from datetime import UTC, datetime
+
+        from elliot_core.user_identity import managed_read_owner_ids
+
+        rows = await asyncio.to_thread(self._managed().read_rows, source, managed_read_owner_ids())
+        return FetchResult(rows=rows, fetched_at=datetime.now(UTC).isoformat())
+
     async def _fetch_sources(self, source_ids: list[str]) -> dict[str, FetchResult]:
         async def _one(sid: str) -> tuple[str, FetchResult]:
             source = self._source_map.get(sid)
@@ -260,7 +347,10 @@ class ToolExecutor:
                 raise ElliotError("SOURCE_NOT_FOUND", f"Source '{sid}' not in connector")
             try:
                 log.debug("source.fetch.start", source_id=sid)
-                result = await self._fetch_source(source, self._secrets)
+                if source.type == "elliot":
+                    result = await self._fetch_managed(source)
+                else:
+                    result = await self._fetch_source(source, self._secrets)
                 log.debug("source.fetch.complete", source_id=sid, rows=len(result.rows))
                 return sid, result
             except ElliotError:

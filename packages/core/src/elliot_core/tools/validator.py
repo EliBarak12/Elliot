@@ -49,10 +49,51 @@ def _check_category_requirements(tool: ToolDefinition) -> None:
             "INVALID_TOOL",
             f"READ tool '{tool.id}' must have at least one source_id",
         )
-    if tool.category in ("WRITE", "ACTION") and tool.api_mapping is None:
+    if (
+        tool.category in ("WRITE", "ACTION")
+        and tool.api_mapping is None
+        and tool.data_mapping is None
+    ):
         raise ElliotError(
             "INVALID_TOOL",
-            f"WRITE/ACTION tool '{tool.id}' must have api_mapping",
+            f"WRITE/ACTION tool '{tool.id}' must have api_mapping (REST mutation) "
+            "or data_mapping (managed-source mutation)",
+        )
+    if tool.data_mapping is not None:
+        _check_data_mapping(tool)
+
+
+def _check_data_mapping(tool: ToolDefinition) -> None:
+    mapping = tool.data_mapping
+    assert mapping is not None
+    if tool.api_mapping is not None:
+        raise ElliotError(
+            "INVALID_TOOL",
+            f"Tool '{tool.id}' declares BOTH api_mapping and data_mapping — a tool "
+            "mutates either a REST API or a managed source, not both",
+        )
+    declared = {p.name for p in tool.parameters}
+    undeclared = sorted(
+        {param for param in mapping.column_params.values() if param not in declared}
+    )
+    if mapping.key_param and mapping.key_param not in declared:
+        undeclared.append(mapping.key_param)
+    if undeclared:
+        raise ElliotError(
+            "INVALID_TOOL",
+            f"Tool '{tool.id}': data_mapping references undeclared parameter(s): "
+            f"{', '.join(sorted(set(undeclared)))}",
+        )
+    if mapping.operation == "insert" and not mapping.column_params:
+        raise ElliotError(
+            "INVALID_TOOL",
+            f"Tool '{tool.id}': a managed insert must map at least one column_param",
+        )
+    if mapping.operation in ("update", "delete") and not mapping.key_param:
+        raise ElliotError(
+            "INVALID_TOOL",
+            f"Tool '{tool.id}': a managed {mapping.operation} must declare key_param "
+            "(the parameter carrying the target row's _id)",
         )
 
 

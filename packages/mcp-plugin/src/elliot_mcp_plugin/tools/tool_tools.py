@@ -94,6 +94,14 @@ def preview_tool(
                 "at design time. Point the source at a staging endpoint to test it, "
                 "or verify after publish.",
             )
+        if tool.data_mapping is not None:
+            raise ElliotError(
+                "ACTION_PREVIEW_UNAVAILABLE",
+                f"Tool '{tool_id}' mutates a managed data source — rows live in the "
+                "published connector's store, so it is not run at design time. "
+                "Verify after publish (insert with the tool, read it back with a "
+                "READ tool).",
+            )
         raise ElliotError("NOT_FOUND", f"No SQL defined for tool: {tool_id}")
 
     supplied = dict(supplied or {})
@@ -670,6 +678,160 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return to_mcp_error_content(exc)
         except Exception as exc:
             log.error("tool.create_action.failed", error=str(exc))
+            return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
+
+    @mcp.tool()
+    def elliot_create_data_tool(
+        name: str,
+        description: str,
+        source_id: str,
+        operation: str,
+        parameters: _ParamList,
+        column_params: dict[str, str] | None = None,
+        key_param: str | None = None,
+        category: str = "WRITE",
+        destructive: bool | None = None,
+    ) -> dict:  # type: ignore[type-arg]
+        """Define a WRITE tool that mutates a MANAGED data source (Elliot-hosted).
+
+        The managed-store counterpart of elliot_create_action_tool: instead of
+        firing an HTTP request at an external API, the runtime inserts,
+        updates, or deletes a row in the connector's own data table (created
+        with elliot_create_data_source). Row ownership is automatic — inserts
+        stamp the calling end user as the row's owner, and update/delete only
+        reach rows the caller owns or was granted write access to.
+
+        Args:
+            source_id: id of a managed source (from elliot_create_data_source).
+            operation: "insert" | "update" | "delete".
+            parameters: EVERY agent-facing input ({"name", "type", "required",
+                "description", "enum"}), same shape as elliot_create_tool.
+            column_params: {column_name: parameter_name} — which parameter
+                supplies each column's value. Required for insert (at least
+                one); for update only the mapped columns present in a call are
+                changed; ignored for delete.
+            key_param: the parameter carrying the target row's ``_id``
+                (returned by READ tools / insert). Required for update/delete.
+            category: "WRITE" (default) or "ACTION".
+            destructive: danger-zone override, same semantics as
+                elliot_create_action_tool (delete verbs are inferred).
+        """
+        try:
+            from elliot_core.types.tool import DataWriteMapping
+
+            source = session.sources.get(source_id)
+            if source is None:
+                return {
+                    "error": (
+                        f"Source not found: {source_id}. Create a managed source first "
+                        "with elliot_create_data_source."
+                    )
+                }
+            if source.type != "elliot":
+                return {
+                    "error": (
+                        f"Source '{source_id}' is type '{source.type}', not a managed "
+                        "'elliot' source. For REST mutations use elliot_create_action_tool."
+                    )
+                }
+            op = operation.strip().lower()
+            if op not in ("insert", "update", "delete"):
+                return {"error": f"operation must be insert, update or delete, got {operation!r}."}
+            mapped_category = _CATEGORY_MAP.get(category.lower())
+            if mapped_category not in ("WRITE", "ACTION"):
+                return {"error": f"category must be WRITE or ACTION, got {category!r}."}
+
+            tool_id = slugify_identifier(name)
+            if not is_valid_identifier(tool_id):
+                raise ElliotError(
+                    "INVALID_TOOL_NAME",
+                    f"Could not derive a valid tool id from name {name!r}.",
+                )
+
+            declared = {
+                str(p["name"]) for p in (parameters or []) if isinstance(p, dict) and p.get("name")
+            }
+            if not declared:
+                return {"error": "parameters must declare at least one agent-facing input."}
+            cols = dict(column_params or {})
+            declared_cols = {c.name for c in source.columns}
+            unknown_cols = sorted(set(cols) - declared_cols)
+            if unknown_cols:
+                raise ElliotError(
+                    "UNKNOWN_COLUMN",
+                    f"column_params reference column(s) the source does not declare: "
+                    f"{', '.join(unknown_cols)}. Declared: "
+                    f"{', '.join(sorted(declared_cols))}.",
+                    detail={"unknown": unknown_cols},
+                )
+            undeclared = sorted(set(cols.values()) - declared)
+            if key_param and key_param not in declared:
+                undeclared = sorted({*undeclared, key_param})
+            if undeclared:
+                raise ElliotError(
+                    "UNDECLARED_PARAM",
+                    f"column_params/key_param reference undeclared parameter(s): "
+                    f"{', '.join(undeclared)}. Declare each in `parameters`.",
+                    detail={"undeclared": undeclared},
+                )
+            if op == "insert" and not cols:
+                return {"error": "insert needs column_params mapping at least one column."}
+            if op in ("update", "delete") and not key_param:
+                return {
+                    "error": (
+                        f"{op} needs key_param — the parameter carrying the target row's _id."
+                    )
+                }
+            routed = set(cols.values()) | ({key_param} if key_param else set())
+            unrouted = sorted(declared - routed)
+            if unrouted:
+                raise ElliotError(
+                    "UNROUTED_PARAM",
+                    f"Parameter(s) {', '.join(unrouted)} are declared but not routed to a "
+                    "column (column_params) or the row key (key_param) — the runtime "
+                    "would silently drop them.",
+                    detail={"unrouted": unrouted},
+                )
+
+            tool = ToolDefinition.model_validate(
+                {
+                    "id": tool_id,
+                    "name": name,
+                    "description": description,
+                    "category": mapped_category,
+                    "source_ids": [source_id],
+                    "parameters": parameters,
+                    "data_mapping": DataWriteMapping(
+                        operation=op,  # type: ignore[arg-type]
+                        column_params=cols,
+                        key_param=key_param,
+                    ),
+                    "destructive": destructive,
+                }
+            )
+            session.registry.add(tool)
+            session.tool_sql.pop(tool.id, None)
+            session.save()
+            log.info(
+                "tool.created.data_write",
+                tool_id=tool.id,
+                source_id=source_id,
+                operation=op,
+            )
+            return {
+                "tool_id": tool.id,
+                "status": "created",
+                "mode": "managed_data_write",
+                "note": (
+                    "Rows are stored in Elliot's managed store. Inserts stamp the calling "
+                    "end user as owner; update/delete are limited to rows the caller owns "
+                    "or was granted write access to."
+                ),
+            }
+        except ElliotError as exc:
+            return to_mcp_error_content(exc)
+        except Exception as exc:
+            log.error("tool.create_data.failed", error=str(exc))
             return to_mcp_error_content(ElliotError("INTERNAL_ERROR", str(exc)))
 
     @mcp.tool()

@@ -78,6 +78,23 @@ class ApiRequestMapping(BaseModel):
     body_format: Literal["json", "form"] = "json"
 
 
+class DataWriteMapping(BaseModel):
+    """
+    For managed ("elliot") sources: how tool parameters map into a row mutation.
+    Used when category == 'WRITE' or 'ACTION' and the tool targets a managed
+    source — the managed-store counterpart of ``ApiRequestMapping``.
+    """
+
+    model_config = _strict
+
+    operation: Literal["insert", "update", "delete"] = "insert"
+    # column name -> parameter name supplying its value. insert requires at
+    # least one entry; update applies only the columns present in the call.
+    column_params: dict[str, str] = {}
+    # Parameter carrying the target row's ``_id``. Required for update/delete.
+    key_param: str | None = None
+
+
 class ResponseShape(BaseModel):
     model_config = _strict
 
@@ -181,6 +198,9 @@ class ToolDefinition(BaseModel):
 
     # ── WRITE / ACTION tools (REST sources) ───────────────────────────────
     api_mapping: ApiRequestMapping | None = None
+
+    # ── WRITE tools (managed "elliot" sources) ────────────────────────────
+    data_mapping: DataWriteMapping | None = None
 
     parameters: list[ParameterDefinition] = []
     response_shape: ResponseShape = ResponseShape()

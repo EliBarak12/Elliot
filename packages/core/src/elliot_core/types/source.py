@@ -73,12 +73,29 @@ class PaginationConfig(BaseModel):
     next_url_field: str | None = None
 
 
+class ManagedColumn(BaseModel):
+    """One declared column of a managed ("elliot") source.
+
+    Managed sources have no upstream to sample a schema from — the author
+    declares the columns and Elliot provisions the table. ``type`` uses the
+    same vocabulary as tool parameters so a WRITE tool's params map 1:1 onto
+    columns.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    type: Literal["string", "integer", "number", "boolean", "date"] = "string"
+    required: bool = False
+    description: str = ""
+
+
 class SourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
     name: str
-    type: Literal["rest", "postgres", "mysql", "file"]
+    type: Literal["rest", "postgres", "mysql", "file", "elliot"]
 
     # REST
     url: str | None = None
@@ -128,6 +145,17 @@ class SourceConfig(BaseModel):
     # ``content_encoding == "base64"`` (binary / non-UTF-8 files).
     content: str | None = None
     content_encoding: Literal["text", "base64"] = "text"
+
+    # Managed ("elliot") sources — data lives IN Elliot's per-connector store
+    # (the system of record), not behind an external API/DB/file. The author
+    # declares the schema here; WRITE tools insert/update/delete rows through
+    # the tool's ``data_mapping`` and READ tools query it like any table.
+    columns: list[ManagedColumn] = Field(default_factory=list)
+    # When true (the default) every row is owned by the end user who wrote it:
+    # reads are scoped to "my rows + rows shared with me" and mutations to
+    # "my rows + rows whose owner granted me write access". False makes the
+    # table app-wide — every authenticated user of the connector shares it.
+    user_scoped: bool = True
 
     # Runtime tracking (populated after a fetch)
     table_name: str | None = None

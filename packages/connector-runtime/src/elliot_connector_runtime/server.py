@@ -2029,7 +2029,17 @@ def create_app(
 
         return _app
 
-    executor = ToolExecutor(config, secrets)
+    # Managed ("elliot") sources persist their rows in a per-connector store —
+    # one shared instance so every executor (shared and per-user) sees the
+    # same data. Path via ELLIOT_MANAGED_DB (the cloud points it at a
+    # per-connector file that survives republish).
+    managed_store = None
+    if any(s.type == "elliot" for s in config.sources):
+        from elliot_core.sqlite.managed_store import ManagedStore, managed_db_path
+
+        managed_store = ManagedStore(managed_db_path())
+
+    executor = ToolExecutor(config, secrets, managed_store=managed_store)
     audit = AuditLog(audit_path)
     tracker = SessionTracker(sessions_path)
     store = ObservationStore(db_url)
@@ -2039,7 +2049,12 @@ def create_app(
     # shared-auth, so single-tenant connectors behave exactly as before.
     vault_path = os.environ.get("ELLIOT_VAULT_DB", ".elliot/credentials.db")
     vault = CredentialVault(vault_path)
-    pool = ExecutorPool(config, secrets, vault=vault)
+    pool = ExecutorPool(
+        config,
+        secrets,
+        vault=vault,
+        executor_factory=lambda c, s: ToolExecutor(c, s, managed_store=managed_store),
+    )
 
     mcp = create_runtime_server(
         config,

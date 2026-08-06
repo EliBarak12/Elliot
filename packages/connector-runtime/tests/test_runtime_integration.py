@@ -1096,6 +1096,39 @@ def test_task_tool_namespaced_under_slug(tmp_path: Path) -> None:
     assert mcp._tool_manager.get_tool("elliot_get_task") is None
 
 
+def test_feedback_tool_documents_and_enumerates_its_params(tmp_path: Path) -> None:
+    """The injected feedback tool's schema is a contract, not a prose recital.
+
+    Its six parameters reached agents with a title and a type and no
+    description — the meanings lived only in the tool description's "Args:"
+    sentence — and `outcome` accepted exactly three values while being served
+    as an open string. Both are things Elliot's own rubric marks down
+    (param_descriptions_present, categorical_params_enumerated), on a tool
+    Elliot injects into every connector it serves.
+    """
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.observation_store import ObservationStore
+    from elliot_connector_runtime.server import _FEEDBACK_OUTCOMES, create_runtime_server
+
+    cfg_path = tmp_path / "pets.connector.json"
+    cfg_path.write_text(json.dumps(MINIMAL_CONNECTOR))
+    config = ConnectorCache().get(cfg_path)
+    mcp = create_runtime_server(
+        config,
+        ToolExecutor(config, secrets={}),
+        store=ObservationStore(f"sqlite:///{tmp_path / 'obs.db'}"),
+    )
+
+    tool = mcp._tool_manager.get_tool("pets_submit_feedback")
+    assert tool is not None
+    props = tool.parameters["properties"]
+    undocumented = [name for name, pv in props.items() if not pv.get("description")]
+    assert not undocumented, f"parameters with no description: {undocumented}"
+    # The closed value set is declared, not only enforced on the way in.
+    assert props["outcome"]["enum"] == list(_FEEDBACK_OUTCOMES)
+
+
 def test_tool_titles_are_human_readable(tmp_path: Path) -> None:
     """A served tool's title is a label, not a repeat of its identifier.
 

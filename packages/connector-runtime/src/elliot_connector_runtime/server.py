@@ -1376,12 +1376,42 @@ def _register_feedback_tool(
         annotations=annotations,
     )
     async def submit_feedback(
-        tool_id: str,
-        outcome: str,
-        why_chosen: str = "",
-        input_summary: str = "",
-        output_summary: str = "",
-        detail: str = "",
+        tool_id: Annotated[
+            str,
+            Field(description="The id of the tool you just used, exactly as it was named."),
+        ],
+        outcome: Annotated[
+            str,
+            Field(
+                description=(
+                    "How the call went: 'success' (did what you needed), 'failure' "
+                    "(errored or returned nothing usable), or 'partial' (worked, but "
+                    "the result was incomplete or awkward)."
+                ),
+                # Declared, not just validated. The handler below already rejects
+                # anything outside this set with an actionable error, but a closed
+                # value set an agent can only discover by getting it wrong is the
+                # opposite of a contract — and Elliot's own rubric marks exactly
+                # this down ("a parameter that accepts a fixed value set is typed
+                # as an enum, not an open string"). Kept as `str` rather than a
+                # Literal so the handler's tolerant normalisation still accepts
+                # "Success" or " partial " instead of failing them in validation.
+                json_schema_extra={"enum": list(_FEEDBACK_OUTCOMES)},
+            ),
+        ],
+        why_chosen: Annotated[
+            str, Field(description="Why you picked this tool over the alternatives.")
+        ] = "",
+        input_summary: Annotated[
+            str, Field(description="The arguments you passed, summarised.")
+        ] = "",
+        output_summary: Annotated[str, Field(description="What came back, summarised.")] = "",
+        detail: Annotated[
+            str,
+            Field(
+                description="Anything else worth telling the author — the error text, what was missing."
+            ),
+        ] = "",
     ) -> dict[str, Any]:
         normalized = (outcome or "").strip().lower()
         if normalized not in _FEEDBACK_OUTCOMES:

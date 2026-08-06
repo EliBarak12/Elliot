@@ -1096,6 +1096,46 @@ def test_task_tool_namespaced_under_slug(tmp_path: Path) -> None:
     assert mcp._tool_manager.get_tool("elliot_get_task") is None
 
 
+def test_tool_titles_are_human_readable(tmp_path: Path) -> None:
+    """A served tool's title is a label, not a repeat of its identifier.
+
+    The runtime passed `td.name` straight through, and the linter pushes ids
+    and names toward snake_case, so a normally-authored connector published
+    title="list_animals". An author who wrote a real title keeps it verbatim.
+    """
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+
+    spec = json.loads(json.dumps(MINIMAL_CONNECTOR))
+    spec["tools"][0]["name"] = "list_animals"
+    spec["tools"].append(
+        {
+            "id": "cancel_visit",
+            "name": "Cancel a vet visit",
+            "description": "Cancels a booked visit for the given id",
+            "category": "ACTION",
+            "api_mapping": {"method": "POST", "path_template": "/visits/{id}/cancel"},
+            "parameters": [
+                {"name": "id", "type": "string", "required": True, "description": "Visit id."}
+            ],
+        }
+    )
+    cfg_path = tmp_path / "pets.connector.json"
+    cfg_path.write_text(json.dumps(spec))
+    config = ConnectorCache().get(cfg_path)
+    mcp = create_runtime_server(config, ToolExecutor(config, secrets={}))
+
+    listed = mcp._tool_manager.get_tool("list_animals")
+    assert listed is not None
+    assert listed.title == "List animals", "an identifier is not a title"
+    assert listed.annotations is not None and listed.annotations.title == "List animals"
+
+    authored = mcp._tool_manager.get_tool("cancel_visit")
+    assert authored is not None
+    assert authored.title == "Cancel a vet visit", "an authored title is left alone"
+
+
 def test_task_tool_is_annotated(tmp_path: Path) -> None:
     """The injected task tool carries annotations like every other tool.
 

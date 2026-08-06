@@ -37,6 +37,7 @@ from elliot_core.auth_middleware import ApiKeyMiddleware, enforce_auth_configure
 from elliot_core.danger_zone import is_destructive
 from elliot_core.error_middleware import register_error_handlers
 from elliot_core.http_middleware import AgentIdentityMiddleware, UserIdentityMiddleware
+from elliot_core.naming import humanize_identifier
 from elliot_core.user_identity import get_current_user_id
 
 from .audit import AuditLog
@@ -1020,8 +1021,16 @@ def _register_tool(
     # destructiveHint=False so clients don't gate them — agents operate the
     # product freely, and only genuinely destructive calls prompt for approval.
     is_destructive = _is_destructive(td.category, td.id, getattr(td, "destructive", None))
+    # MCP's `title` is the label a client shows a person, distinct from the
+    # machine `name`. This served td.name unchanged, and the linter pushes tool
+    # ids and names toward snake_case — so a connector authored the normal way
+    # published title="list_orders", an identifier presented as a title.
+    # Measured on a live connector: every tool's title was byte-identical to
+    # its name. humanize_identifier leaves anything with a space alone, so an
+    # author who wrote a real title keeps it.
+    title = humanize_identifier(td.name)
     annotations = ToolAnnotations(
-        title=td.name,
+        title=title,
         readOnlyHint=read_only,
         destructiveHint=is_destructive,
         idempotentHint=read_only,
@@ -1261,7 +1270,7 @@ def _register_tool(
 
     mcp.tool(
         name=td.id,
-        title=td.name,
+        title=title,
         description=_tool_registration_description(td),
         annotations=annotations,
     )(_handler)

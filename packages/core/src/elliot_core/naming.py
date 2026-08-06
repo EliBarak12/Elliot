@@ -34,3 +34,29 @@ def slugify_identifier(name: str) -> str:
 def is_valid_identifier(candidate: str) -> bool:
     """True iff ``candidate`` matches ``^[a-z][a-z0-9_]*$``."""
     return bool(_VALID_IDENT.fullmatch(candidate))
+
+
+def humanize_identifier(name: str) -> str:
+    """A snake_case / camelCase identifier as a human-readable title.
+
+    MCP's ``title`` is meant to be the label a client shows a person, distinct
+    from the machine ``name``. Elliot's linter pushes tool ids and names toward
+    snake_case, so a connector authored the normal way served
+    ``title="list_orders"`` — an identifier presented as a title.
+
+    Anything containing a space already reads as prose and is returned
+    untouched: the author wrote a title and it is not this function's business
+    to restyle it. Mixed case alone does not count — ``searchCustomers`` is an
+    identifier, not a title.
+    """
+    candidate = name.strip()
+    if not candidate or " " in candidate:
+        return candidate
+    # Both camel boundaries, in the order slugify_identifier uses them, so an
+    # acronym splits from the word after it (HTTPRequest -> HTTP Request)
+    # instead of fusing into one token.
+    spaced = _CAMEL_BOUNDARY_2.sub(r"\1 \2", _CAMEL_BOUNDARY_1.sub(r"\1 \2", candidate))
+    words = _NON_IDENT.sub(" ", spaced.lower()).split()
+    if not words:
+        return candidate
+    return words[0].capitalize() + ("" if len(words) == 1 else " " + " ".join(words[1:]))

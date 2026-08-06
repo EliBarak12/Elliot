@@ -1096,6 +1096,37 @@ def test_task_tool_namespaced_under_slug(tmp_path: Path) -> None:
     assert mcp._tool_manager.get_tool("elliot_get_task") is None
 
 
+def test_task_tool_is_annotated(tmp_path: Path) -> None:
+    """The injected task tool carries annotations like every other tool.
+
+    It shipped with a name and a description only, so `tools/list` reported
+    readOnlyHint=None and destructiveHint=None for it while the sibling
+    `{slug}_submit_feedback` carried a full set. Clients that gate on
+    annotations could not tell that polling a task is safe, and Elliot's own
+    grader marks a missing readOnlyHint/destructiveHint as a directory-readiness
+    blocker — so every connector built on Elliot lost points for a tool Elliot
+    injected.
+    """
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+
+    cfg_path = tmp_path / "pets.connector.json"
+    cfg_path.write_text(json.dumps(MINIMAL_CONNECTOR))
+    config = ConnectorCache().get(cfg_path)
+    mcp = create_runtime_server(config, ToolExecutor(config, secrets={}))
+
+    tool = mcp._tool_manager.get_tool("pets_get_task")
+    assert tool is not None
+    ann = tool.annotations
+    assert ann is not None, "the task tool reached agents with no annotations"
+    # A task lookup reads one record from this connector's own store.
+    assert ann.readOnlyHint is True
+    assert ann.destructiveHint is False
+    assert ann.idempotentHint is True
+    assert ann.openWorldHint is False
+
+
 def test_instructions_mention_feedback_tool_when_store_present(tmp_path: Path) -> None:
     """When the connector can record feedback, its instructions tell the agent
     to use the (slug-namespaced) feedback tool."""

@@ -1277,13 +1277,38 @@ def _register_task_tool(
     ``elliot_get_task`` when the connector has no slug.
     """
 
+    # Annotated like every other tool the runtime serves. This one was
+    # registered with a name and a description only, so it reached agents with
+    # no annotations at all — measured on a live published connector,
+    # `tools/list` returned readOnlyHint=None and destructiveHint=None for it
+    # while its sibling `{slug}_submit_feedback` carried the full set.
+    #
+    # Two costs. A client that gates on annotations cannot tell that polling a
+    # task is safe, so a cautious one prompts a human before a status check.
+    # And Elliot's own grader marks exactly this down — "Every tool carries an
+    # honest readOnlyHint or destructiveHint" is a directory-readiness blocker
+    # and annotations_present is a contract check — so every connector built on
+    # Elliot lost points on Elliot's own leaderboard for a tool Elliot injected.
+    #
+    # Reading a task record is a pure lookup: read-only, idempotent, and it
+    # touches nothing outside this connector's own store.
+    annotations = ToolAnnotations(
+        title="Get background task",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+
     @mcp.tool(
         name=task_tool_name,
+        title="Get background task",
         description=(
             "Poll the result of a background tool execution. "
             "Use when a previous tool call returned status='accepted' with a task_id. "
             "Returns status ('pending'|'running'|'completed'|'failed') and result when done."
         ),
+        annotations=annotations,
     )
     def elliot_get_task(task_id: str) -> dict[str, Any]:
         """Retrieve background task status and result by task_id."""

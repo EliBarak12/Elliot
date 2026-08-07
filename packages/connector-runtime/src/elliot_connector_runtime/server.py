@@ -1484,7 +1484,25 @@ def _register_resources(mcp: FastMCP, cfg: Any, executor: ToolExecutor, json: An
 
     c: ConnectorConfig = cfg
 
-    @mcp.resource("connector://schema")
+    # Explicit description, because FastMCP falls back to the function's
+    # __doc__ when none is given — and the docstring below is a maintainer's
+    # note about how redaction is layered and where a key-name check alone
+    # would miss. Measured on a live connector: 755 characters, ~190 tokens of
+    # implementation detail, served to every agent on connect as the
+    # description of this resource. Two things wrong with that. It is the
+    # single largest item in the connector's resource surface on a platform
+    # whose second principle is that results are sized for context windows,
+    # and whose grader charges connectors for exactly this. And it hands any
+    # caller a description of the redaction strategy, including the cases it
+    # exists to cover. The docstring stays for whoever maintains this.
+    @mcp.resource(
+        "connector://schema",
+        description=(
+            "This connector's definition: its sources, its tools and their "
+            "parameters, and its skills. Read it to see what is available "
+            "before calling anything. Credentials are redacted."
+        ),
+    )
     def connector_schema() -> str:
         """Full connector definition including all sources, tools, and skills.
 

@@ -1096,6 +1096,35 @@ def test_task_tool_namespaced_under_slug(tmp_path: Path) -> None:
     assert mcp._tool_manager.get_tool("elliot_get_task") is None
 
 
+@pytest.mark.asyncio
+async def test_schema_resource_description_is_for_agents(tmp_path: Path) -> None:
+    """The schema resource describes what it holds, not how redaction works.
+
+    FastMCP falls back to a function's __doc__ when the decorator gives no
+    description, and this one's docstring is a maintainer's note on layered
+    redaction. Measured on a live connector before the fix: 755 characters,
+    ~190 tokens of implementation detail served to every agent on connect, on
+    a platform whose second principle is that results are sized for context
+    windows — and it described the redaction strategy to any caller.
+    """
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+
+    cfg_path = tmp_path / "pets.connector.json"
+    cfg_path.write_text(json.dumps(MINIMAL_CONNECTOR))
+    config = ConnectorCache().get(cfg_path)
+    mcp = create_runtime_server(config, ToolExecutor(config, secrets={}))
+
+    resources = await mcp.list_resources()
+    schema = next(r for r in resources if str(r.uri) == "connector://schema")
+    description = schema.description or ""
+    assert description, "the schema resource must say what it holds"
+    assert len(description) < 400, f"{len(description)} chars is a docstring, not a description"
+    for term in ("redact_value", "ConnectorConfig", "resolve_secrets", "loader hydration"):
+        assert term not in description, f"implementation detail {term!r} reached the agent"
+
+
 def test_feedback_tool_documents_and_enumerates_its_params(tmp_path: Path) -> None:
     """The injected feedback tool's schema is a contract, not a prose recital.
 

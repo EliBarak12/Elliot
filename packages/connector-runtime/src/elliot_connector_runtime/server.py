@@ -1620,8 +1620,11 @@ def _skill_prompt_text(
     parts = [lead]
     if when_to_use and when_to_use.strip():
         parts.append(f"Use this when: {when_to_use.strip()}")
-    if kwargs:
-        parts.append("Inputs: " + ", ".join(f"{k}={v}" for k, v in kwargs.items()))
+    # Blank values are omitted optionals, not inputs: listing them renders
+    # "Inputs: since=" and asks the agent to reason about an empty string.
+    supplied = {k: v for k, v in kwargs.items() if str(v).strip()}
+    if supplied:
+        parts.append("Inputs: " + ", ".join(f"{k}={v}" for k, v in supplied.items()))
     if steps:
         step_lines = "\n".join(
             f"  Step {i + 1} ({s.alias}): call {s.tool_id} with {s.params}"
@@ -1642,9 +1645,7 @@ def _register_skill_prompt(mcp: FastMCP, skill: Any) -> None:
     skill_instructions = getattr(skill, "instructions", "") or ""
     skill_when = getattr(skill, "when_to_use", "") or ""
 
-    param_names = [p.name for p in input_params]
-
-    def _make_prompt_fn(params: list[str]) -> Any:
+    def _make_prompt_fn(params: list[Any]) -> Any:
         if not params:
 
             def prompt_fn() -> list[dict[str, Any]]:
@@ -1685,18 +1686,39 @@ def _register_skill_prompt(mcp: FastMCP, skill: Any) -> None:
             # Build signature so FastMCP can introspect parameter names,
             # and also set __annotations__ so pydantic's validate_call can
             # resolve type hints via typing.get_type_hints.
+            #
+            # FastMCP derives each PromptArgument from this function's pydantic
+            # schema — `description` off the property, `required` off the
+            # schema's required list. Building every parameter as a bare
+            # keyword-only `str` therefore threw away both: measured on a skill
+            # whose author documented two inputs and marked one optional,
+            # prompts/list returned description=None for both and
+            # required=True for the optional one, so an agent was forced to
+            # invent a value for an argument the author said to omit.
+            def _annotation(param: Any) -> Any:
+                desc = (getattr(param, "description", "") or "").strip()
+                return Annotated[str, Field(description=desc)] if desc else str
+
+            annotations = {p.name: _annotation(p) for p in params}
             sig_params = [
-                inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, annotation=str)
-                for name in params
+                inspect.Parameter(
+                    p.name,
+                    inspect.Parameter.KEYWORD_ONLY,
+                    annotation=annotations[p.name],
+                    # An optional input needs a default, or the schema lists it
+                    # as required no matter what the author declared.
+                    default=inspect.Parameter.empty if getattr(p, "required", True) else "",
+                )
+                for p in params
             ]
             object.__setattr__(prompt_fn_with_args, "__signature__", inspect.Signature(sig_params))
-            prompt_fn_with_args.__annotations__ = {name: str for name in params}
+            prompt_fn_with_args.__annotations__ = dict(annotations)
             prompt_fn_with_args.__annotations__["return"] = list[dict[str, Any]]
             prompt_fn_with_args.__name__ = skill_id
             prompt_fn_with_args.__doc__ = skill_description
             return prompt_fn_with_args
 
-    prompt_fn = _make_prompt_fn(param_names)
+    prompt_fn = _make_prompt_fn(list(input_params))
     mcp.prompt(name=skill_id, description=skill_description)(prompt_fn)
 
 

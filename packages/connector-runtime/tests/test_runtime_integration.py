@@ -1097,6 +1097,63 @@ def test_task_tool_namespaced_under_slug(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_skill_prompt_arguments_keep_their_contract(tmp_path: Path) -> None:
+    """A skill's declared inputs reach the agent as declared.
+
+    FastMCP derives each PromptArgument from the prompt function's pydantic
+    schema, and the runtime built every input as a bare keyword-only `str`.
+    That dropped the author's descriptions and made every argument required —
+    so an input explicitly marked `required: false` came back required=True,
+    and get_prompt raised "Missing required arguments" when an agent did what
+    the author told it to and omitted it.
+    """
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+
+    spec = json.loads(json.dumps(MINIMAL_CONNECTOR))
+    spec["skills"] = [
+        {
+            "id": "triage_visit",
+            "name": "Triage a visit",
+            "description": "Look up an animal then summarise its recent visits.",
+            "instructions": "1. Find the animal. 2. Summarise visits.",
+            "input_parameters": [
+                {
+                    "name": "animal_id",
+                    "type": "string",
+                    "required": True,
+                    "description": "The animal's id, from list_animals.",
+                },
+                {
+                    "name": "since",
+                    "type": "string",
+                    "required": False,
+                    "description": "ISO date; omit for the last 30 days.",
+                },
+            ],
+        }
+    ]
+    cfg_path = tmp_path / "pets.connector.json"
+    cfg_path.write_text(json.dumps(spec))
+    config = ConnectorCache().get(cfg_path)
+    mcp = create_runtime_server(config, ToolExecutor(config, secrets={}))
+
+    prompt = next(p for p in await mcp.list_prompts() if p.name == "triage_visit")
+    args = {a.name: a for a in (prompt.arguments or [])}
+    assert args["animal_id"].description == "The animal's id, from list_animals."
+    assert args["animal_id"].required is True
+    assert args["since"].description == "ISO date; omit for the last 30 days."
+    assert args["since"].required is False, "an optional input was served as required"
+
+    # Omitting the optional works, and its blank value is not recited back.
+    rendered = await mcp.get_prompt("triage_visit", {"animal_id": "a-42"})
+    text = rendered.messages[0].content.text
+    assert "Inputs: animal_id=a-42" in text
+    assert "since=" not in text
+
+
+@pytest.mark.asyncio
 async def test_schema_resource_description_is_for_agents(tmp_path: Path) -> None:
     """The schema resource describes what it holds, not how redaction works.
 

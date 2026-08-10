@@ -6,7 +6,7 @@ dependencies = [
     "elliot-core",
     "mcp>=2.0.0,<3",
     "pyyaml>=6.0",
-    "structlog>=24.0",
+    "structlog>=26.1.0",
 ]
 
 [tool.uv.sources]

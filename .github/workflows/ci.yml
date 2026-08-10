@@ -28,8 +28,8 @@ jobs:
     name: Python (lint + typecheck + test)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
-      - uses: astral-sh/setup-uv@v4.2.0
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9.0.0
         with:
           version: "latest"
           python-version: "3.13"
@@ -56,11 +56,11 @@ jobs:
     name: Studio (typecheck + test + build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
-      - uses: pnpm/action-setup@v4.0.0
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6.0.10
         with:
           version: 9
-      - uses: actions/setup-node@v4.1.0
+      - uses: actions/setup-node@v7.0.0
         with:
           node-version: "22"
           cache: "pnpm"
@@ -82,8 +82,8 @@ jobs:
     name: Audit (Python deps)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
-      - uses: astral-sh/setup-uv@v4.2.0
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9.0.0
         with:
           version: "latest"
           python-version: "3.13"
@@ -108,11 +108,11 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4.2.2
-      - uses: pnpm/action-setup@v4.0.0
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6.0.10
         with:
           version: 9
-      - uses: actions/setup-node@v4.1.0
+      - uses: actions/setup-node@v7.0.0
         with:
           node-version: "22"
           cache: "pnpm"

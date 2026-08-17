@@ -213,8 +213,11 @@ def judge_audit(
                 severity="warning",
                 tool_id=call.tool_id,
                 message=(
-                    f"'{call.tool_id}' returned ~{call.result_token_estimate} "
-                    f"tokens (over the {OVERSIZED_TOKEN_ESTIMATE} budget)."
+                    # Grouped, for the reason tool_tools.py's heavy-preview
+                    # note gives: these land in the Cloud audit report beside
+                    # figures the UI has already formatted.
+                    f"'{call.tool_id}' returned ~{call.result_token_estimate:,} "
+                    f"tokens (over the {OVERSIZED_TOKEN_ESTIMATE:,} budget)."
                 ),
                 evidence=_evidence(seed_id, idx, call),
                 suggestion=(
@@ -288,7 +291,7 @@ def judge_audit(
             score=_score(ratio(len(oversized_calls))),
             justification=(
                 f"{len(oversized_calls)}/{total_calls} calls returned an "
-                f"oversized result; ~{total_tokens} tokens total."
+                f"oversized result; ~{total_tokens:,} tokens total."
             ),
         ),
         DimensionScore(

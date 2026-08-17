@@ -127,7 +127,14 @@ def preview_tool(
     out: dict[str, Any] = {"rows": rows, "row_count": len(rows), "estimated_tokens": tokens}
     if tokens > _HEAVY_PREVIEW_TOKENS:
         out["note"] = (
-            f"This result is ~{tokens} tokens — an agent pays that on every call. Project only "
+            # Grouped. This string is rendered verbatim next to the Cloud
+            # Playground's own token badge, which formats with separators:
+            # measured on a 59-row preview, the card read "~2,538 tok" three
+            # lines above "This result is ~2538 tokens" — the same number,
+            # twice, two ways. Token counts are the largest figures this
+            # product quotes and the ones it is about, so they are exactly the
+            # ones that have to be read rather than counted.
+            f"This result is ~{tokens:,} tokens — an agent pays that on every call. Project only "
             "the columns the agent needs and add a LIMIT so it fits a context window (principle 2)."
         )
     return out

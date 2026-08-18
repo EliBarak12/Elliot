@@ -206,6 +206,27 @@ def test_contract_miss_signal_flags_param_errors(tmp_path: Path) -> None:
     assert out["events"][1]["error_code"] == "UPSTREAM_FETCH_FAILED"
 
 
+def test_signal_messages_are_pluralised(tmp_path: Path) -> None:
+    """Elliot Cloud renders these strings verbatim, so they have to read."""
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    sid = tracker.start_session(session_id="s")
+    for _ in range(3):
+        tracker.record_tool_call(sid, "get_order", {}, 0, [], 1.0, error="boom")
+
+    out = tracker.tail(1)[0]
+    by_type = {s["type"]: s["message"] for s in out["signals"]}
+    assert by_type["errors"] == "3 calls failed"
+    # Two of the three follow a failed call on the same tool.
+    assert by_type["retry"] == "2 retries after an error"
+    assert by_type["redundant"] == "2 repeated calls with identical arguments"
+
+    single = SessionTracker(tmp_path / "one.ndjson")
+    sid2 = single.start_session(session_id="s2")
+    single.record_tool_call(sid2, "get_order", {}, 0, [], 1.0, error="boom")
+    one = single.tail(1)[0]
+    assert next(s for s in one["signals"] if s["type"] == "errors")["message"] == "1 call failed"
+
+
 def test_contract_miss_absent_when_no_param_errors(tmp_path: Path) -> None:
     tracker = SessionTracker(tmp_path / "sessions.ndjson")
     sid = tracker.start_session(session_id="s")

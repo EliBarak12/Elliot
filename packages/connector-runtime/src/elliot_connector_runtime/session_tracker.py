@@ -23,6 +23,21 @@ log = structlog.get_logger(__name__)
 _LARGE_RESULT_TOKENS = 500
 # A call slower than this is worth flagging in the trace.
 _SLOW_CALL_MS = 3000.0
+
+
+def _count(n: int, one: str, many: str) -> str:
+    """`1 call` / `3 calls`, grouped.
+
+    The signal messages below are not log lines: Elliot Cloud renders them
+    verbatim as UI copy, on the Agent Console's session cards and on the
+    session trace. They read "1 call(s) failed" there, in a dashboard whose
+    own copy pluralises at every other site, and the retry signal had dropped
+    the idiom without replacing it — it said "3 retry after an error". Same
+    reason the token counts in these traces are grouped.
+    """
+    return f"{n:,} {one if n == 1 else many}"
+
+
 # Error codes that mean the agent got the tool's *contract* wrong — it sent a
 # parameter the tool rejected (missing, wrong type, out-of-range/enum, or a name
 # the tool doesn't accept). A run that hits these is runtime proof that a tool's
@@ -118,7 +133,7 @@ class AgentSession:
                 {
                     "type": "errors",
                     "severity": "high",
-                    "message": f"{self.error_count} call(s) failed",
+                    "message": f"{_count(self.error_count, 'call', 'calls')} failed",
                 }
             )
 
@@ -132,7 +147,7 @@ class AgentSession:
                 {
                     "type": "contract_miss",
                     "severity": "medium",
-                    "message": f"{contract_misses} call(s) sent a parameter the tool rejected",
+                    "message": f"{_count(contract_misses, 'call', 'calls')} sent a parameter the tool rejected",
                 }
             )
 
@@ -146,7 +161,7 @@ class AgentSession:
                 {
                     "type": "retry",
                     "severity": "medium",
-                    "message": f"{retries} retry after an error",
+                    "message": f"{_count(retries, 'retry', 'retries')} after an error",
                 }
             )
 
@@ -156,7 +171,7 @@ class AgentSession:
                 {
                     "type": "large_result",
                     "severity": "medium",
-                    "message": f"{len(large)} call(s) returned over {_LARGE_RESULT_TOKENS} tokens",
+                    "message": f"{_count(len(large), 'call', 'calls')} returned over {_LARGE_RESULT_TOKENS} tokens",
                 }
             )
 
@@ -171,7 +186,7 @@ class AgentSession:
                 {
                     "type": "redundant",
                     "severity": "low",
-                    "message": f"{redundant} repeated call(s) with identical arguments",
+                    "message": f"{_count(redundant, 'repeated call', 'repeated calls')} with identical arguments",
                 }
             )
 
@@ -181,7 +196,7 @@ class AgentSession:
                 {
                     "type": "slow",
                     "severity": "low",
-                    "message": f"{len(slow)} call(s) slower than {_SLOW_CALL_MS / 1000:.0f}s",
+                    "message": f"{_count(len(slow), 'call', 'calls')} slower than {_SLOW_CALL_MS / 1000:.0f}s",
                 }
             )
 

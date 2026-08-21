@@ -51,6 +51,7 @@ _MUTATION_RE = re.compile(r"\b(?:" + "|".join(sorted(_MUTATION_WORDS)) + r")", r
 # source") far more often than SQL leakage, so flagging it produced false
 # positives on otherwise clean, natural descriptions.
 _JARGON = frozenset({"sql", "endpoint", "table", "column", "database", "api", "select"})
+_WORD_RE = re.compile(r"[a-z]+")
 _GENERIC_IDS = frozenset({"query", "get_data", "fetch", "run", "execute", "call"})
 _SNAKE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -169,7 +170,17 @@ def analyze_tool_quality(tool: ToolDefinition) -> ToolQualityScore:
 
     # context: no implementation jargon leaking to the agent
     applicable += 1
-    words = frozenset(tool.description.lower().split())
+    # Tokenised on word characters, not whitespace. `.split()` leaves the
+    # punctuation attached, so "table." and "table," are not "table" — and a
+    # description names its noun last far more often than mid-sentence, which
+    # made the common shape of this defect the one shape that slipped through.
+    # Measured before the change: "Returns rows from the orders table.",
+    # "Returns the customer records from the API.", "Returns everything stored
+    # in the database.", "Runs the statement against the endpoint." and
+    # "Returns rows using SQL." were all clean, and the two descriptions that
+    # did trip it were flagged only on their mid-sentence word — "Returns data
+    # from the SQL endpoint." reported `sql` and let `endpoint.` past.
+    words = frozenset(_WORD_RE.findall(tool.description.lower()))
     found = words & _JARGON
     if found:
         issues.append(

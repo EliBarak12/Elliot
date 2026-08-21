@@ -432,3 +432,43 @@ def test_short_verb_must_start_a_word_boundary():
     )
     result = analyze_tool_quality(tool)
     assert any(i.check == "starts_with_verb" for i in result.issues)
+
+
+def test_jargon_is_found_when_it_ends_a_clause():
+    """`.split()` left the punctuation attached, so "table." was not "table".
+
+    A description names its noun last far more often than mid-sentence, so the
+    common shape of leaked jargon was the one shape that slipped through.
+    """
+    for description, word in (
+        ("Returns rows from the orders table.", "table"),
+        ("Returns rows from the orders table, newest first.", "table"),
+        ("Returns the customer records from the API.", "api"),
+        ("Returns everything stored in the database.", "database"),
+        ("Runs the statement against the endpoint.", "endpoint"),
+        ("Returns rows using SQL.", "sql"),
+    ):
+        tool = ToolDefinition(
+            id="list_rows",
+            name="list_rows",
+            description=description,
+            category="READ",
+            source_ids=["src"],
+        )
+        result = analyze_tool_quality(tool)
+        issue = next((i for i in result.issues if i.check == "no_jargon"), None)
+        assert issue is not None, description
+        assert word in issue.message, description
+
+
+def test_jargon_does_not_match_inside_a_longer_word():
+    """Tokenising on word characters keeps "timetable" from reading as "table"."""
+    tool = ToolDefinition(
+        id="list_departures",
+        name="list_departures",
+        description="Returns the timetable for the depot.",
+        category="READ",
+        source_ids=["src"],
+    )
+    result = analyze_tool_quality(tool)
+    assert not any(i.check == "no_jargon" for i in result.issues)

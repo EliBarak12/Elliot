@@ -392,3 +392,43 @@ def test_mutation_word_must_start_a_word():
         )
         result = analyze_tool_quality(tool)
         assert any(i.check == "mutation_hint" for i in result.issues), description
+
+
+def test_high_impact_verb_starts_a_description():
+    """The verb block was written for mutation verbs and got only "cancel".
+
+    "refund", "void", "suspend", "terminate", "deactivate" and the rest of
+    HIGH_IMPACT_VERBS were absent, so the most consequential actions a connector
+    can expose were the ones told their description does not start with an
+    action verb — by the quality scan and, off the same pattern, by the linter.
+    """
+    for description in (
+        "Refunds a payment to the original card.",
+        "Voids the invoice so it can never be paid.",
+        "Suspends the user account until an admin restores it.",
+        "Terminates the running deployment.",
+        "Unpublishes the connector from its live URL.",
+    ):
+        tool = ToolDefinition(
+            id="refund_payment",
+            name="refund_payment",
+            description=description,
+            category="ACTION",
+            source_ids=["src"],
+            destructive=True,
+        )
+        result = analyze_tool_quality(tool)
+        assert not any(i.check == "starts_with_verb" for i in result.issues), description
+
+
+def test_short_verb_must_start_a_word_boundary():
+    """`ban` and `void` are short; the trailing \\b keeps them from over-matching."""
+    tool = ToolDefinition(
+        id="show_banner",
+        name="show_banner",
+        description="Banner ads for the storefront, by placement.",
+        category="READ",
+        source_ids=["src"],
+    )
+    result = analyze_tool_quality(tool)
+    assert any(i.check == "starts_with_verb" for i in result.issues)

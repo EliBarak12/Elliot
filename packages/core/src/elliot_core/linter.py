@@ -122,7 +122,23 @@ _VERB_RE = re.compile(
     r"escalate|notify|publish|register|record|save|upload|trigger|start|stop|"
     r"grant|revoke|merge|move|rename|copy|sync|import|schedule|approve|"
     r"reject|complete|upsert|patch|modify|adjust|enable|disable|verify|"
-    r"convert|extract|parse|analy[sz]e|describe|explain|preview|grade|audit)"
+    r"convert|extract|parse|analy[sz]e|describe|explain|preview|grade|audit|"
+    # The rest of danger_zone.HIGH_IMPACT_VERBS. The block above was written
+    # for exactly this and got one of them: "cancel" is here, and "refund",
+    # "void", "suspend", "terminate", "deactivate" and the others are not — so
+    # the most consequential actions a connector can expose were the ones told
+    # their description does not start with an action verb. Measured through
+    # analyze_tool_quality: "Refunds a payment to the original card.", "Voids
+    # the invoice so it can never be paid." and "Suspends the user account
+    # until an admin restores it." each drew a starts_with_verb warning, and
+    # the linter's own verb rule reads off this same pattern, so the author was
+    # told twice to rewrite copy that was already in the house style. Kept as
+    # literals rather than interpolated from HIGH_IMPACT_VERBS because this
+    # pattern is one readable regex and the two sets are conceptually distinct
+    # — one asks "is this word an action verb", the other "does this id need a
+    # destructive decision".
+    r"refund|chargeback|payout|deactivate|suspend|terminate|void|ban|"
+    r"deprovision|withdraw|unpublish|unsubscribe)"
     r"(?:es|s)?\b",
     re.IGNORECASE,
 )

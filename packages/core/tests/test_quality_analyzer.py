@@ -348,3 +348,47 @@ def test_additive_action_no_danger_zone_check():
     )
     result = analyze_tool_quality(tool)
     assert not any(i.check == "danger_zone_classified" for i in result.issues)
+
+
+def test_high_impact_verb_in_description_counts_as_naming_the_mutation():
+    """An irreversible verb IS the mutation, and used not to count as one.
+
+    The base word set named the ordinary mutations and none of the dangerous
+    ones, so the tools the check exists to protect an agent from were the tools
+    it could not recognise. `cancel_order` described as "Cancels an order by id.
+    Irreversible." was told its description "doesn't mention the mutation" while
+    danger_zone_classified passed the same tool as destructive: true.
+    """
+    for description in (
+        "Cancels an order by id. Irreversible.",
+        "Refunds a payment to the original card.",
+        "Suspends the user account until an admin restores it.",
+        "Unpublishes the connector from its live URL.",
+    ):
+        tool = ToolDefinition(
+            id="cancel_order",
+            name="cancel_order",
+            description=description,
+            category="ACTION",
+            source_ids=["src"],
+            destructive=True,
+        )
+        result = analyze_tool_quality(tool)
+        assert not any(i.check == "mutation_hint" for i in result.issues), description
+
+
+def test_mutation_word_must_start_a_word():
+    """`ban` and `void` are short enough that a substring test misfires.
+
+    "Abandons" and "Avoids" each contain one mid-word; neither names a mutation.
+    """
+    for description in ("Abandons the draft and starts over.", "Avoids duplicate rows."):
+        tool = ToolDefinition(
+            id="handle_draft",
+            name="handle_draft",
+            description=description,
+            category="WRITE",
+            source_ids=["src"],
+        )
+        result = analyze_tool_quality(tool)
+        assert any(i.check == "mutation_hint" for i in result.issues), description

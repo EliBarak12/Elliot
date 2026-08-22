@@ -7,6 +7,7 @@ from elliot_core.eval.quality import (
     analyze_connector_quality,
     analyze_tool_quality,
 )
+from elliot_core.linter import _LIST_TOOL_PREFIXES
 from elliot_core.types.connector import ConnectorConfig
 from elliot_core.types.source import SourceConfig
 from elliot_core.types.tool import ParameterDefinition, ToolDefinition
@@ -65,6 +66,22 @@ def test_description_starting_with_verb_no_warning():
     tool = _make_tool(description="Returns all users in the system sorted by name")
     result = analyze_tool_quality(tool)
     assert not any(i.check == "starts_with_verb" for i in result.issues)
+
+
+def test_list_tool_prefixes_all_count_as_verbs():
+    # The linter's _LIST_TOOL_PREFIXES and this scan's verb rule read the same
+    # _VERB_RE, so a description opening with the verb its own tool id starts
+    # with must not be marked down here either. list/search/find always passed;
+    # browse and query did not.
+    for prefix in _LIST_TOOL_PREFIXES:
+        third = "queries" if prefix == "query" else prefix + "s"
+        for description in (
+            f"{prefix.capitalize()} the widget records matching a filter.",
+            f"{third.capitalize()} the widget records matching a filter.",
+        ):
+            tool = _make_tool(tool_id=f"{prefix}_widgets", description=description)
+            result = analyze_tool_quality(tool)
+            assert not any(i.check == "starts_with_verb" for i in result.issues), description
 
 
 # ── no_jargon ─────────────────────────────────────────────────────────────────

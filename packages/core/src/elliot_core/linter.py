@@ -137,7 +137,25 @@ _MUTATION_RE = re.compile(r"\b(?:" + "|".join(sorted(_MUTATION_WORDS)) + r")", r
 
 _VERB_RE = re.compile(
     r"^\s*(return|list|get|find|create|update|delete|calculate|"
-    r"search|fetch|check|count|filter|retrieve|"
+    # "browse" and "query" are two of the five _LIST_TOOL_PREFIXES above — the
+    # leading tokens this module itself reads as "this tool returns a
+    # collection", and holds to the list-tool pagination rule on that basis. The
+    # other three (list, search, find) were verbs here; these two were not, so a
+    # tool whose description opened with the very verb its id starts with was
+    # told the description does not start with a verb. Measured on
+    # browse_widgets / query_widgets with "Browses the widget records matching a
+    # filter." and "Queries …": both drew DESCRIPTION_MISSING_VERB from the
+    # linter and a starts_with_verb warning through analyze_tool_quality (87.5
+    # against list_/search_/find_'s 100), while the identical sentence under the
+    # other three prefixes passed clean. `query` is also one of the six
+    # GENERIC_IDS, whose own check copy calls them "a generic verb (query,
+    # fetch, run, …)" — fetch, run and execute all match here, and query alone
+    # did not.
+    #
+    # `quer(?:y|ies)`, not a bare `query`, because the trailing `(?:es|s)?`
+    # cannot spell the third person of a -y verb: "Queries" is not "query" plus
+    # a suffix. Same reason `summari[sz]e` and `analy[sz]e` are written out.
+    r"search|browse|quer(?:y|ies)|fetch|check|count|filter|retrieve|"
     r"aggregate|export|generate|compute|load|send|submit|"
     r"remove|show|run|execute|insert|stream|resolve|validate|"
     r"summari[sz]e|surface|pull|lookup|identify|detect|match|group|rank|sort|"

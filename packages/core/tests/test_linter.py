@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from elliot_core.linter import lint_connector
+from elliot_core.linter import _LIST_TOOL_PREFIXES, lint_connector
 from elliot_core.types import ConnectorConfig, SourceConfig
 
 
@@ -700,6 +700,37 @@ def test_description_mutation_verbs_pass() -> None:
         config = _make_connector(description=desc)
         codes = {i.code for i in lint_connector(config)}
         assert "DESCRIPTION_MISSING_VERB" not in codes, desc
+
+
+def test_every_list_tool_prefix_is_a_verb() -> None:
+    # _LIST_TOOL_PREFIXES is this module's own answer to "does this tool return
+    # a collection", and MISSING_PAGINATION holds every one of them to the
+    # list-tool rule. A prefix the linter reads as a list verb in one rule must
+    # not be told, in another, that it is not a verb.
+    for prefix in _LIST_TOOL_PREFIXES:
+        third = "queries" if prefix == "query" else prefix + "s"
+        for desc in (
+            f"{prefix.capitalize()} the widget records matching a filter.",
+            f"{third.capitalize()} the widget records matching a filter.",
+        ):
+            config = _make_connector(id=f"{prefix}_widgets", description=desc)
+            codes = {i.code for i in lint_connector(config)}
+            assert "DESCRIPTION_MISSING_VERB" not in codes, desc
+
+
+def test_words_that_merely_start_like_a_verb_still_fail() -> None:
+    # The two prefixes added above are the only -y and -e verbs in the pattern
+    # whose neighbours read as verbs and are not: keep the word boundary honest
+    # rather than matching "brows"/"quer" as substrings.
+    for desc in (
+        "Browser history for the widget account.",
+        "Queryable widget list for the storefront.",
+        "Browsing the widget records matching a filter.",
+        "Querying the widget records matching a filter.",
+    ):
+        config = _make_connector(description=desc)
+        codes = {i.code for i in lint_connector(config)}
+        assert "DESCRIPTION_MISSING_VERB" in codes, desc
 
 
 # ── skill executability (F4: a deterministic skill that can never run) ────────

@@ -108,6 +108,33 @@ _FILTER_SEMANTICS_RE = re.compile(
 # This is the single source of truth for the verb check: elliot_core.eval.quality
 # imports _VERB_RE from here so the linter and the quality scan can never drift
 # apart on the same description.
+# Canonical "the description names the mutation" matcher. WRITE_TOOL_DESCRIPTION
+# below and elliot_core.eval.quality's mutation_hint ask the same question of
+# the same string, and each used to carry its own word set — this module's was
+# the shorter of the two, missing "submit" as well as every irreversible verb.
+#
+# HIGH_IMPACT_VERBS is part of it, and was the hole in it: the base names the
+# ordinary mutations and none of the irreversible ones, so the tools the rule
+# exists to protect an agent from were exactly the tools it could not
+# recognise. Measured on a published connector whose ACTION tool reads "Cancels
+# an order by id. Irreversible.": the stored lint report carried
+# WRITE_TOOL_DESCRIPTION against it, and Elliot Cloud renders that report on
+# the connector page — so the suggestion "add the mutation verb" was shown for
+# a description that opens with one.
+#
+# Word-START matching, not substring. `ban` and `void` are short enough to
+# misfire — "urban", "abandon" and "avoid" each contain one — while every
+# inflection the substring test caught ("Cancels", "created", "unpublishes")
+# still matches.
+#
+# Defined here, like _VERB_RE, so the linter and the quality scan can never
+# drift apart on the same description again.
+_MUTATION_WORDS = (
+    frozenset({"write", "create", "update", "delete", "send", "insert", "remove", "submit"})
+    | HIGH_IMPACT_VERBS
+)
+_MUTATION_RE = re.compile(r"\b(?:" + "|".join(sorted(_MUTATION_WORDS)) + r")", re.IGNORECASE)
+
 _VERB_RE = re.compile(
     r"^\s*(return|list|get|find|create|update|delete|calculate|"
     r"search|fetch|check|count|filter|retrieve|"
@@ -824,8 +851,7 @@ def lint_connector(
             )
 
         if tool.category in ("WRITE", "ACTION"):
-            mutation_words = {"write", "create", "update", "delete", "send", "insert", "remove"}
-            if not any(w in desc.lower() for w in mutation_words):
+            if not _MUTATION_RE.search(desc):
                 issues.append(
                     LintIssue(
                         severity="INFO",

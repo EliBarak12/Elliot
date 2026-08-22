@@ -1009,3 +1009,39 @@ def test_skill_step_calling_disabled_tool_is_error() -> None:
     )
     issues = [i for i in lint_connector(config) if i.code == "SKILL_STEP_DISABLED_TOOL"]
     assert issues and issues[0].severity == "ERROR"
+
+
+def test_write_tool_description_accepts_an_irreversible_verb() -> None:
+    """WRITE_TOOL_DESCRIPTION carried its own, shorter, mutation word set.
+
+    It named the ordinary mutations and none of the irreversible ones, so the
+    tools the rule exists to protect an agent from were exactly the tools it
+    could not recognise — and Elliot Cloud renders the stored lint report on
+    the connector page, so "add the mutation verb" was shown against a
+    description that opens with one.
+    """
+    for description in (
+        "Cancels an order by id. Irreversible.",
+        "Refunds a payment to the original card.",
+        "Suspends the user account until an admin restores it.",
+        "Submits the form for review.",
+    ):
+        cfg = _make_connector(
+            id="cancel_order",
+            description=description,
+            category="ACTION",
+            destructive=True,
+            sql=None,
+        )
+        codes = [i.code for i in lint_connector(cfg)]
+        assert "WRITE_TOOL_DESCRIPTION" not in codes, description
+
+
+def test_write_tool_description_still_flags_a_description_naming_no_mutation() -> None:
+    cfg = _make_connector(
+        id="handle_order",
+        description="Handles the order lifecycle.",
+        category="ACTION",
+        sql=None,
+    )
+    assert "WRITE_TOOL_DESCRIPTION" in [i.code for i in lint_connector(cfg)]

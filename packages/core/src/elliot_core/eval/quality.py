@@ -6,41 +6,13 @@ from dataclasses import dataclass, field
 from elliot_core.danger_zone import HIGH_IMPACT_VERBS, name_tokens
 from elliot_core.linter import (
     _ENUM_DESC_RE,
+    _MUTATION_RE,
     _PAGINATION_HINTS,
     _VERB_RE,
     _is_list_tool,
 )
 from elliot_core.types.connector import ConnectorConfig
 from elliot_core.types.tool import ToolDefinition
-
-# Verbs whose presence in a description counts as naming the mutation.
-#
-# HIGH_IMPACT_VERBS is part of the set, and was the hole in it: the base names
-# the ordinary mutations (write/create/update/delete/...) and none of the
-# irreversible ones, so the tools this check exists to protect an agent from
-# were exactly the tools it could not recognise. Measured on a connector whose
-# ACTION tool reads "Cancels an order by id. Irreversible.": mutation_hint
-# warned that the description "doesn't mention the mutation" while
-# danger_zone_classified, twenty lines below, reported the same tool classified
-# destructive: true. One tool, two checks, disagreeing about whether cancelling
-# is a mutation — and the warning cost the connector 5 points for a description
-# that was already right.
-#
-# Word-START matching, not substring. The base words are long enough that `in`
-# never misfired, but `ban` and `void` are not: "urban", "abandon" and "avoid"
-# each contain one, and "Abandons the draft" would have passed on the wrong
-# word. Anchoring the start keeps every inflection the substring test caught —
-# "Cancels", "created", "removed", "unpublishes" — and drops the mid-word
-# accidents.
-#
-# Elliot Cloud's lib/connectorQuality.ts takes the same union from its own copy
-# of HIGH_IMPACT_VERBS; the two have to stay identical for the dashboard to keep
-# scoring a connector the way `elliot eval` does.
-_MUTATION_WORDS = (
-    frozenset({"write", "create", "update", "delete", "send", "insert", "remove", "submit"})
-    | HIGH_IMPACT_VERBS
-)
-_MUTATION_RE = re.compile(r"\b(?:" + "|".join(sorted(_MUTATION_WORDS)) + r")", re.IGNORECASE)
 
 # The "starts with an action verb" matcher (_VERB_RE), the closed-value-set
 # matcher (_ENUM_DESC_RE), the pagination-parameter set (_PAGINATION_HINTS) and

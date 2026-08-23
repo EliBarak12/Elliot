@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from elliot_core.linter import _LIST_TOOL_PREFIXES, lint_connector
+from elliot_core.linter import (
+    _BLOCKING_DESCRIPTION_CHARS,
+    _LIST_TOOL_PREFIXES,
+    MIN_DESCRIPTION_CHARS,
+    lint_connector,
+)
 from elliot_core.types import ConnectorConfig, SourceConfig
 
 
@@ -716,6 +721,27 @@ def test_every_list_tool_prefix_is_a_verb() -> None:
             config = _make_connector(id=f"{prefix}_widgets", description=desc)
             codes = {i.code for i in lint_connector(config)}
             assert "DESCRIPTION_MISSING_VERB" not in codes, desc
+
+
+def test_the_short_description_advice_names_the_graded_bar() -> None:
+    """The gate and the bar are different numbers; the advice must name the bar.
+
+    DESCRIPTION_TOO_SHORT blocks a publish below _BLOCKING_DESCRIPTION_CHARS,
+    and the quality scan grades against MIN_DESCRIPTION_CHARS. The suggestion
+    used to quote the gate, so an author who did exactly what it said landed
+    between the two and lost points for it: "Lists the widgets." lints clean
+    and grades 87.5 with "Description too short (18 chars, min 20)".
+    """
+    config = _make_connector(description="Short.")
+    issue = next(i for i in lint_connector(config) if i.code == "DESCRIPTION_TOO_SHORT")
+    assert issue.suggestion is not None
+    assert str(MIN_DESCRIPTION_CHARS) in issue.suggestion
+    assert str(_BLOCKING_DESCRIPTION_CHARS) not in issue.suggestion
+
+    # A description that satisfies the advice satisfies the grader too, which is
+    # the whole point of quoting that number.
+    followed = _make_connector(description="x" * MIN_DESCRIPTION_CHARS)
+    assert not any(i.code == "DESCRIPTION_TOO_SHORT" for i in lint_connector(followed))
 
 
 def test_words_that_merely_start_like_a_verb_still_fail() -> None:

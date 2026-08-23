@@ -9,6 +9,7 @@ from elliot_core.linter import (
     _MUTATION_RE,
     _PAGINATION_HINTS,
     _VERB_RE,
+    MIN_DESCRIPTION_CHARS,
     _is_list_tool,
 )
 from elliot_core.types.connector import ConnectorConfig
@@ -118,12 +119,13 @@ def analyze_tool_quality(tool: ToolDefinition) -> ToolQualityScore:
 
     # context: concise but sufficient description
     applicable += 1
-    if len(tool.description.strip()) < 20:
+    if len(tool.description.strip()) < MIN_DESCRIPTION_CHARS:
         issues.append(
             ToolIssue(
                 "min_length",
                 "error",
-                f"Description too short ({len(tool.description)} chars, min 20)",
+                f"Description too short ({len(tool.description)} chars, "
+                f"min {MIN_DESCRIPTION_CHARS})",
                 PRINCIPLE_CONTEXT,
             )
         )

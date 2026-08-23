@@ -7,7 +7,7 @@ from elliot_core.eval.quality import (
     analyze_connector_quality,
     analyze_tool_quality,
 )
-from elliot_core.linter import _LIST_TOOL_PREFIXES
+from elliot_core.linter import _LIST_TOOL_PREFIXES, MIN_DESCRIPTION_CHARS
 from elliot_core.types.connector import ConnectorConfig
 from elliot_core.types.source import SourceConfig
 from elliot_core.types.tool import ParameterDefinition, ToolDefinition
@@ -66,6 +66,20 @@ def test_description_starting_with_verb_no_warning():
     tool = _make_tool(description="Returns all users in the system sorted by name")
     result = analyze_tool_quality(tool)
     assert not any(i.check == "starts_with_verb" for i in result.issues)
+
+
+def test_min_length_grades_against_the_shared_constant():
+    """One number, imported, so this check and the linter's advice cannot drift.
+
+    The linter's DESCRIPTION_TOO_SHORT suggestion quotes MIN_DESCRIPTION_CHARS;
+    if this check ever grades against a different number, following that advice
+    stops being enough.
+    """
+    just_under = _make_tool(description="x" * (MIN_DESCRIPTION_CHARS - 1))
+    assert any(i.check == "min_length" for i in analyze_tool_quality(just_under).issues)
+
+    exactly = _make_tool(description="x" * MIN_DESCRIPTION_CHARS)
+    assert not any(i.check == "min_length" for i in analyze_tool_quality(exactly).issues)
 
 
 def test_list_tool_prefixes_all_count_as_verbs():

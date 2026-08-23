@@ -55,6 +55,27 @@ _PAGINATION_HINTS = frozenset(
     }
 )
 
+# How long a tool description has to be, in two roles that are not the same
+# number and should not pretend to be.
+#
+# _BLOCKING_DESCRIPTION_CHARS is the publish gate: below it there is no contract
+# at all, DESCRIPTION_TOO_SHORT is an ERROR, and Elliot Cloud refuses the
+# publish ("Connector has blocking lint issues").
+#
+# MIN_DESCRIPTION_CHARS is the graded bar — what elliot_core.eval.quality's
+# min_length check asks for, "so an agent can tell what it does".
+#
+# They differ on purpose, but the SUGGESTION did not say so: it read "Write at
+# least 15 characters", which is the gate, not the bar. Follow it exactly and
+# the quality scan answers "Description too short (18 chars, min 20)" and takes
+# 12.5 points — measured on "Lists the widgets.", which lints clean and grades
+# at 87.5. An author fixing one check by doing what it told them should not be
+# marked down by another for it, so the advice names the bar and the number
+# lives in one place, the way _VERB_RE and _MUTATION_RE already do for the two
+# questions these modules both ask.
+MIN_DESCRIPTION_CHARS = 20
+_BLOCKING_DESCRIPTION_CHARS = 15
+
 # Tool-id leading tokens that imply a potentially large collection result.
 _LIST_TOOL_PREFIXES = ("list", "search", "find", "query", "browse")
 
@@ -660,14 +681,17 @@ def lint_connector(
     for tool in config.tools:
         desc = tool.description or ""
 
-        if len(desc.strip()) < 15:
+        if len(desc.strip()) < _BLOCKING_DESCRIPTION_CHARS:
             issues.append(
                 LintIssue(
                     severity="ERROR",
                     code="DESCRIPTION_TOO_SHORT",
                     tool_id=tool.id,
                     message=f"Tool '{tool.id}' description is too short ({len(desc)} chars).",
-                    suggestion='Write at least 15 characters starting with a verb: "Return all...", "Get a single..."',
+                    suggestion=(
+                        f"Write at least {MIN_DESCRIPTION_CHARS} characters starting with a "
+                        'verb: "Return all...", "Get a single..."'
+                    ),
                 )
             )
         elif not _starts_with_verb(desc):

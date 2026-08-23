@@ -46,7 +46,7 @@ output). The common ones and how to fix them:
 | `FILTER_SEMANTICS_UNCLEAR` | warn | In the *parameter's own* description, state exact / contains / prefix / case-insensitive matching. |
 | `WRITE_TOOL_DESCRIPTION` | info | Add the mutation verb ("Creates…", "Deletes…") to a WRITE/ACTION tool. |
 | `SENSITIVE_FIELD_EXPOSED` | error | A field the product intent marked never-expose appears in this tool's SQL/output **or** its forwarded `rest_query_params` / `api_mapping` body/query params. Drop or redact it. |
-| `SECRET_IN_URL` | error | A secret is embedded in `source.url`. Move it to `auth.secret_key` as `{{ env:VAR }}`. |
+| `SECRET_IN_URL` | error | A secret is embedded in `source.url` — either a declared `auth.secret_key` repeated in the URL, or a literal password in a `user:password@host` connection string. Move a REST key to `auth.secret_key`; put a whole DSN behind `{{ env:DATABASE_URL }}`. |
 
 Auth issues (these fire on the *source*, not a tool):
 

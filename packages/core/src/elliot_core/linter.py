@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Literal
+from urllib.parse import urlsplit
 
 from .danger_zone import DESTRUCTIVE_VERBS, HIGH_IMPACT_VERBS, name_tokens
 from .sql import extract_sql_params, referenced_base_tables
@@ -236,6 +237,31 @@ def _is_env_placeholder(value: str) -> bool:
 
 def _is_bare_env_name(value: str) -> bool:
     return bool(re.fullmatch(r"[A-Z][A-Z0-9_]*", value))
+
+
+def _literal_url_password(url: str) -> bool:
+    """True when ``url`` carries a literal password in its userinfo.
+
+    A postgres/mysql source has no ``auth`` block at all — ``_resolve_dsn``
+    reads the credential straight out of ``source.url``, either from a
+    ``{{ env:VAR }}`` placeholder holding the whole DSN (what the shipped
+    postgres-readonly template does) or, when the author pasted one, from a
+    literal ``scheme://user:password@host/db``. Only the userinfo component is
+    considered, so an ``@`` in a path or query — ``/users/a@b.com`` — is not
+    mistaken for a credential, and a placeholder password is left alone.
+    """
+    if "://" not in url:
+        return False
+    try:
+        password = urlsplit(url).password
+    except ValueError:
+        # Malformed authority (a bad port, say). Nothing to assert about it.
+        return False
+    if not password:
+        return False
+    # ``postgresql://app:{{ env:DB_PASSWORD }}@host/db`` — the credential is
+    # already a reference, which is the shape this rule is asking for.
+    return "{{" not in password
 
 
 def _lint_source_auth(config: ConnectorConfig) -> list[LintIssue]:
@@ -950,7 +976,9 @@ def lint_connector(
                     )
 
     for source in config.sources:
-        if source.auth and source.auth.secret_key and source.auth.secret_key in (source.url or ""):
+        url = source.url or ""
+        auth_key = source.auth.secret_key if source.auth else ""
+        if auth_key and auth_key in url:
             issues.append(
                 LintIssue(
                     severity="ERROR",
@@ -958,6 +986,39 @@ def lint_connector(
                     tool_id=None,
                     message=f"Source '{source.id}' may have a secret embedded in the URL.",
                     suggestion="Use auth.secret_key to reference an env var; never put secrets in URLs.",
+                )
+            )
+        # The same rule for the sources that carry their credential in the URL
+        # and nowhere else. The check above can only fire when the secret is
+        # ALSO declared in auth.secret_key — and a postgres/mysql source has no
+        # auth block, so a DSN with the password in it never reached this rule
+        # at all, despite being the single most common way a credential ends up
+        # in a connector file. _lint_source_auth's own contract is "a published
+        # connector must ship NO literal secrets", the code's published meaning
+        # is "a secret is embedded in source.url", and the shipped
+        # postgres-readonly template already models the fix — but nothing
+        # enforced any of it: measured, `postgresql://app:s3cr3t@db:5432/orders`
+        # linted clean while the REST equivalent raised AUTH_LITERAL_SECRET.
+        #
+        # It stays quiet after publish too, which is why lint is the place to
+        # catch it: check_secrets() scans for {{ env:… }}, so a literal DSN
+        # declares no required secrets and the pre-publish panel gives an
+        # all-clear, and the dashboard's Sources card prints source.url
+        # verbatim — password included — as its location line.
+        elif _literal_url_password(url):
+            issues.append(
+                LintIssue(
+                    severity="ERROR",
+                    code="SECRET_IN_URL",
+                    tool_id=None,
+                    message=(
+                        f"Source '{source.id}' has a password embedded in its connection URL."
+                    ),
+                    suggestion=(
+                        "Store the whole connection string as a secret and set url to "
+                        "{{ env:DATABASE_URL }}; never ship a literal credential in the "
+                        "connector file."
+                    ),
                 )
             )
 

@@ -479,6 +479,63 @@ def test_secret_in_url_is_error() -> None:
     assert any(i.code == "SECRET_IN_URL" for i in issues)
 
 
+def _db_connector(url: str) -> ConnectorConfig:
+    from elliot_core.types.source import SourceConfig
+
+    return ConnectorConfig(
+        name="Test",
+        slug="test",
+        version="1.0.0",
+        sources=[SourceConfig(id="db", name="Orders DB", type="postgres", url=url, table="orders")],
+        tools=[],
+    )
+
+
+def test_literal_db_password_in_url_is_secret_in_url() -> None:
+    """A DSN is the one URL that carries its credential and nothing else.
+
+    The rule only ever fired when the secret was ALSO declared in
+    auth.secret_key, and a postgres/mysql source has no auth block — so the
+    most common way a credential reaches a connector file went unflagged while
+    the REST equivalent raised AUTH_LITERAL_SECRET.
+    """
+    issues = lint_connector(_db_connector("postgresql://app:s3cr3t@db.internal:5432/orders"))
+    secret = [i for i in issues if i.code == "SECRET_IN_URL"]
+    assert secret and secret[0].severity == "ERROR"
+    # The finding must not repeat the credential it is reporting.
+    assert "s3cr3t" not in secret[0].message
+    assert "s3cr3t" not in secret[0].suggestion
+
+
+def test_db_url_behind_a_placeholder_is_clean() -> None:
+    """What the shipped postgres-readonly template does, and the advice given."""
+    for url in (
+        "{{ env:DATABASE_URL }}",
+        "postgresql://app:{{ env:DB_PASSWORD }}@db.internal:5432/orders",
+        "postgresql://readonly@db.internal:5432/orders",
+        "postgresql://db.internal:5432/orders",
+    ):
+        assert not any(i.code == "SECRET_IN_URL" for i in lint_connector(_db_connector(url))), url
+
+
+def test_an_at_sign_outside_the_userinfo_is_not_a_credential() -> None:
+    """Only the authority is inspected, so an address in a path or query is safe."""
+    from elliot_core.types.source import SourceConfig
+
+    for url in (
+        "https://api.example.com/users/alice@example.com",
+        "https://api.example.com/search?q=a@b.com&to=c@d.com",
+    ):
+        config = ConnectorConfig(
+            name="Test",
+            slug="test",
+            version="1.0.0",
+            sources=[SourceConfig(id="api", name="API", type="rest", url=url)],
+            tools=[],
+        )
+        assert not any(i.code == "SECRET_IN_URL" for i in lint_connector(config)), url
+
+
 # ── upgraded best-practice rules ─────────────────────────────────────────────
 
 

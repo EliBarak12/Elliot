@@ -10,6 +10,7 @@ from elliot_core.linter import (
     _PAGINATION_HINTS,
     _VERB_RE,
     MIN_DESCRIPTION_CHARS,
+    MIN_PARAM_DESCRIPTION_CHARS,
     _is_list_tool,
 )
 from elliot_core.types.connector import ConnectorConfig
@@ -166,15 +167,20 @@ def analyze_tool_quality(tool: ToolDefinition) -> ToolQualityScore:
             )
         )
 
-    # schema: every parameter described
+    # schema: every parameter described. The bar is the linter's
+    # MIN_PARAM_DESCRIPTION_CHARS, not "is it blank?" — a one-word placeholder
+    # tells an agent nothing, and grading it clean while the linter WARNs on it
+    # makes the two graders contradict each other on the same connector.
     for p in tool.parameters:
         applicable += 1
-        if not (p.description or "").strip():
+        param_desc = (p.description or "").strip()
+        if len(param_desc) < MIN_PARAM_DESCRIPTION_CHARS:
             issues.append(
                 ToolIssue(
                     "has_params_described",
                     "error",
-                    f"Parameter '{p.name}' has no description",
+                    f"Parameter '{p.name}' is not described "
+                    f"({len(param_desc)} chars, min {MIN_PARAM_DESCRIPTION_CHARS})",
                     PRINCIPLE_SCHEMA,
                 )
             )

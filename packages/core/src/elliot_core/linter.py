@@ -76,6 +76,17 @@ _PAGINATION_HINTS = frozenset(
 MIN_DESCRIPTION_CHARS = 20
 _BLOCKING_DESCRIPTION_CHARS = 15
 
+# How long a PARAMETER description has to be to count as one. Unlike the tool
+# description above this is a single number in both roles — the linter WARNs
+# below it (PARAMETER_MISSING_DESCRIPTION) and the quality scan's
+# has_params_described check asks for exactly the same thing — so it is defined
+# once here and imported, rather than kept as a bare literal in one module and
+# an "is it blank?" test in the other. They disagreed before: a parameter
+# described as "id" linted as undescribed while the quality scan scored it
+# clean, so a connector could be told to fix something its own score called
+# fine.
+MIN_PARAM_DESCRIPTION_CHARS = 5
+
 # Tool-id leading tokens that imply a potentially large collection result.
 _LIST_TOOL_PREFIXES = ("list", "search", "find", "query", "browse")
 
@@ -800,14 +811,20 @@ def lint_connector(
                     )
                 )
             param_desc = param.description or ""
-            if len(param_desc.strip()) < 5:
+            if len(param_desc.strip()) < MIN_PARAM_DESCRIPTION_CHARS:
                 issues.append(
                     LintIssue(
                         severity="WARN",
                         code="PARAMETER_MISSING_DESCRIPTION",
                         tool_id=tool.id,
-                        message=f"Tool '{tool.id}' parameter '{param.name}' has no description.",
-                        suggestion="Add a description so agents know what value to pass.",
+                        message=(
+                            f"Tool '{tool.id}' parameter '{param.name}' is not described "
+                            f"({len(param_desc.strip())} chars)."
+                        ),
+                        suggestion=(
+                            f"Add a description of at least {MIN_PARAM_DESCRIPTION_CHARS} "
+                            "characters so agents know what value to pass."
+                        ),
                     )
                 )
 

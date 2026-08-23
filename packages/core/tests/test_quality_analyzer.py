@@ -7,7 +7,12 @@ from elliot_core.eval.quality import (
     analyze_connector_quality,
     analyze_tool_quality,
 )
-from elliot_core.linter import _LIST_TOOL_PREFIXES, MIN_DESCRIPTION_CHARS
+from elliot_core.linter import (
+    _LIST_TOOL_PREFIXES,
+    MIN_DESCRIPTION_CHARS,
+    MIN_PARAM_DESCRIPTION_CHARS,
+    lint_connector,
+)
 from elliot_core.types.connector import ConnectorConfig
 from elliot_core.types.source import SourceConfig
 from elliot_core.types.tool import ParameterDefinition, ToolDefinition
@@ -134,6 +139,47 @@ def test_param_with_description_no_issue():
     )
     result = analyze_tool_quality(tool)
     assert not any(i.check == "has_params_described" for i in result.issues)
+
+
+def test_param_description_bar_is_the_one_the_linter_warns_at():
+    """The two graders answer "is this parameter described?" the same way.
+
+    A one-word placeholder used to split them: the linter WARNed
+    PARAMETER_MISSING_DESCRIPTION on "id" while this scan, testing only for
+    blankness, scored the tool clean — so an author fixing the lint warning was
+    fixing something their own quality score said was already fine, and an
+    author trusting the score shipped a parameter the linter calls undescribed.
+    Both now read MIN_PARAM_DESCRIPTION_CHARS.
+    """
+    source = SourceConfig(id="src", name="Src", type="rest", url="https://example.com")
+    placeholder = "x" * (MIN_PARAM_DESCRIPTION_CHARS - 1)
+
+    tool = _make_tool(
+        description="Returns all users in the system",
+        params=[
+            ParameterDefinition(
+                name="user_id", type="string", required=True, description=placeholder
+            )
+        ],
+    )
+    config = ConnectorConfig(
+        name="c", slug="c", version="1", description="", sources=[source], tools=[tool]
+    )
+    assert any(i.check == "has_params_described" for i in analyze_tool_quality(tool).issues)
+    assert any(i.code == "PARAMETER_MISSING_DESCRIPTION" for i in lint_connector(config))
+
+    at_bar = "x" * MIN_PARAM_DESCRIPTION_CHARS
+    ok_tool = _make_tool(
+        description="Returns all users in the system",
+        params=[
+            ParameterDefinition(name="user_id", type="string", required=True, description=at_bar)
+        ],
+    )
+    ok_config = ConnectorConfig(
+        name="c", slug="c", version="1", description="", sources=[source], tools=[ok_tool]
+    )
+    assert not any(i.check == "has_params_described" for i in analyze_tool_quality(ok_tool).issues)
+    assert not any(i.code == "PARAMETER_MISSING_DESCRIPTION" for i in lint_connector(ok_config))
 
 
 # ── name_snake_case ───────────────────────────────────────────────────────────

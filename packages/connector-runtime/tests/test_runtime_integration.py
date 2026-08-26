@@ -376,6 +376,13 @@ async def test_argument_validation_failures_are_recorded() -> None:
     assert len(errored) == 1
     assert "VALIDATION_INVALID_PARAMS" in errored[0]["error"]
     assert errored[0]["tool_id"] == "get_thing"
+    # The recorded reason has to name the ARGUMENT, not just the tool. Pydantic
+    # opens its dump with "1 validation error for get_thingArguments" and puts
+    # the parameter and the reason on the lines below, so the first line alone
+    # told a connector owner to fix a parameter without saying which.
+    assert "thing_id" in errored[0]["error"], errored[0]["error"]
+    # ...and never the rejected VALUE, which is caller-supplied argument data.
+    assert "\n" not in errored[0]["error"], "one compact line, not the whole dump"
 
 
 async def test_argument_validation_failures_reach_the_session_trace() -> None:

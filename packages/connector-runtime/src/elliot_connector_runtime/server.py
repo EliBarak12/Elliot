@@ -738,9 +738,39 @@ def _record_validation_failure(
     session_id, identity_payload = _current_session_and_identity(mcp)
     if not session_id:
         return
-    # Single compact line — never the full multi-line pydantic dump.
-    first_line = next((ln for ln in str(exc).splitlines() if ln.strip()), "")
-    reason = first_line[:200] if first_line else "argument validation failed"
+    # Single compact line — never the full multi-line pydantic dump. But the
+    # first line of that dump is the one line in it with nothing actionable:
+    # pydantic opens with "1 validation error for list_peopleArguments" and puts
+    # the parameter and the reason on the lines after it, so taking line one
+    # recorded which TOOL was called wrong and never which ARGUMENT.
+    #
+    # Measured on a live connector's Observability tab, where this string is the
+    # evidence under the advice: "Start with list_people: Agents keep sending
+    # parameters this tool rejects — its contract is unclear. Tighten each
+    # parameter's description…", and directly beneath it "last error:
+    # [VALIDATION_INVALID_PARAMS] Error executing tool list_people: 1 validation
+    # error for list_peopleArguments". The owner is told to fix a parameter and
+    # not told which one.
+    #
+    # loc + msg only, never ``input``: the rejected VALUE is caller-supplied
+    # argument data and has no business in a stored observation.
+    import pydantic
+
+    reason = ""
+    cause = exc.__cause__
+    if isinstance(cause, pydantic.ValidationError):
+        errors = cause.errors()
+        parts = []
+        for err in errors[:3]:
+            loc = ".".join(str(x) for x in (err.get("loc") or ())) or "(argument)"
+            parts.append(f"{loc}: {err.get('msg') or 'invalid'}")
+        if parts:
+            more = len(errors) - len(parts)
+            reason = "; ".join(parts) + (f"; +{more} more" if more > 0 else "")
+    if not reason:
+        first_line = next((ln for ln in str(exc).splitlines() if ln.strip()), "")
+        reason = first_line[:200] if first_line else "argument validation failed"
+    reason = reason[:200]
     error = f"[VALIDATION_INVALID_PARAMS] {reason}"
     agent_hint = _agent_hint_from_identity(get_current_agent_identity())
     if store is not None:

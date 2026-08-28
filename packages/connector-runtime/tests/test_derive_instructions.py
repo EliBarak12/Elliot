@@ -70,13 +70,13 @@ def test_briefing_leads_with_product_name_and_description() -> None:
 
 def test_frames_read_as_context_and_action_as_operate() -> None:
     text = derive_agent_briefing(_connector([_read(), _action("create_order")]))
-    assert "1 READ tool(s) give you context" in text
-    assert "1 WRITE/ACTION tool(s) operate the product" in text
+    assert "1 READ tool gives you context" in text
+    assert "1 WRITE/ACTION tool operates the product" in text
 
 
 def test_danger_zone_names_destructive_verb_tools_only() -> None:
     text = derive_agent_briefing(_connector([_action("delete_order"), _action("create_order")]))
-    assert "Danger zone: 1 tool(s) are irreversible" in text
+    assert "Danger zone: 1 tool is irreversible" in text
     assert "delete_order" in text
     # An additive create is NOT the danger zone — it must not be named there.
     danger_line = next(line for line in text.splitlines() if line.startswith("Danger zone"))
@@ -88,7 +88,7 @@ def test_explicit_destructive_flag_enters_danger_zone_without_a_verb() -> None:
     text = derive_agent_briefing(
         _connector([_action("execute_refund", category="ACTION", destructive=True)])
     )
-    assert "Danger zone: 1 tool(s) are irreversible" in text
+    assert "Danger zone: 1 tool is irreversible" in text
     assert "execute_refund" in text
 
 
@@ -99,7 +99,7 @@ def test_additive_only_connector_has_no_danger_zone() -> None:
 
 def test_read_only_connector_reads_as_context_only() -> None:
     text = derive_agent_briefing(_connector([_read("list_orders"), _read("get_order")]))
-    assert "2 READ tool(s) give you context" in text
+    assert "2 READ tools give you context" in text
     assert "WRITE/ACTION" not in text
     assert "Danger zone" not in text
 
@@ -115,7 +115,7 @@ def test_deterministic_skill_briefed_as_a_one_call_workflow() -> None:
     )
     text = derive_agent_briefing(_connector([_read(), _action("create_order")], skills=[skill]))
     # A skill with steps is now a callable tool — the briefing must say so.
-    assert "1 multi-step workflow(s) run in ONE call" in text
+    assert "1 multi-step workflow runs in ONE call" in text
     assert "MCP prompts" not in text
 
 
@@ -129,7 +129,7 @@ def test_prose_skill_briefed_as_a_prompt() -> None:
         instructions="Assess severity, then page the on-call.",
     )
     text = derive_agent_briefing(_connector([_read()], skills=[skill]))
-    assert "1 prose workflow(s) are available as MCP prompts" in text
+    assert "1 prose workflow is available as MCP prompts" in text
     assert "run in ONE call" not in text
 
 
@@ -137,3 +137,41 @@ def test_falls_back_gracefully_with_no_tools() -> None:
     text = derive_agent_briefing(_connector([]))
     assert "acme-orders" in text
     assert "Call list_tools" in text
+
+
+def test_briefing_reads_as_prose_for_one_of_each() -> None:
+    """Singular counts read as sentences, not as "(s)" with a plural verb.
+
+    The briefing is the first and often only orientation an agent gets, and
+    Cloud renders it verbatim on the connector page as the thing an owner is
+    meant to see and trust. Measured on a live published connector with a
+    single read tool, ``initialize`` returned "1 READ tool(s) give you context
+    about the product" — a parenthetical plural and a disagreeing verb, in the
+    opening sentence of a product whose first principle is that descriptions
+    are contracts.
+    """
+    cfg = _connector([_read("list_invoices"), _action("delete_invoice", category="ACTION")])
+    text = derive_agent_briefing(cfg)
+    assert "(s)" not in text
+    assert "1 READ tool gives you context" in text
+    assert "1 WRITE/ACTION tool operates the product" in text
+    assert "Danger zone: 1 tool is irreversible" in text
+    assert "requires confirmation before you call it" in text
+
+
+def test_briefing_stays_plural_for_more_than_one() -> None:
+    """The other half of the same rule — nothing above is a hardcoded singular."""
+    cfg = _connector(
+        [
+            _read("list_invoices"),
+            _read("get_invoice"),
+            _action("delete_invoice", category="ACTION"),
+            _action("purge_invoice", category="ACTION"),
+        ]
+    )
+    text = derive_agent_briefing(cfg)
+    assert "(s)" not in text
+    assert "2 READ tools give you context" in text
+    assert "2 WRITE/ACTION tools operate the product" in text
+    assert "Danger zone: 2 tools are irreversible" in text
+    assert "require confirmation before you call them" in text

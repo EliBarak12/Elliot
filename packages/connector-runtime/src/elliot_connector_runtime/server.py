@@ -253,6 +253,25 @@ def _require_destructive_confirmation() -> bool:
 _is_destructive = is_destructive
 
 
+def _count(n: int, singular: str, plural: str | None = None) -> str:
+    """``2 tools`` / ``1 tool`` — for the briefing's prose, which is read, not parsed.
+
+    The briefing is the first and often only orientation an agent gets, and the
+    Cloud dashboard renders it verbatim on the connector page as the thing an
+    owner is meant to "SEE and trust". It was written with parenthetical
+    plurals: measured on a live published connector with one read tool, an
+    agent's ``initialize`` returned "1 READ tool(s) give you context about the
+    product", and the danger line reads "1 tool(s) are irreversible" the same
+    way. A product whose first principle is that descriptions are contracts —
+    and whose linter holds authors to it — should not ship "(s)" and a plural
+    verb for one tool in its own opening sentence.
+
+    Kept to this prose. The ``(s)`` in executor/smoke/credential_resolver error
+    strings is a different audience and a different convention.
+    """
+    return f"{n} {singular if n == 1 else (plural or singular + 's')}"
+
+
 def derive_agent_briefing(cfg: Any) -> str:
     """Compose the default MCP ``instructions`` briefing a consuming agent reads
     on connect. Unlike a bare "call list_tools" note, it orients the agent to the
@@ -281,12 +300,14 @@ def derive_agent_briefing(cfg: Any) -> str:
     parts: list[str] = []
     if read_tools:
         parts.append(
-            f"{len(read_tools)} READ tool(s) give you context about the product — "
+            f"{_count(len(read_tools), 'READ tool')} "
+            f"{'gives' if len(read_tools) == 1 else 'give'} you context about the product — "
             "read them to understand the data before you act"
         )
     if act_tools:
         parts.append(
-            f"{len(act_tools)} WRITE/ACTION tool(s) operate the product on the user's behalf"
+            f"{_count(len(act_tools), 'WRITE/ACTION tool')} "
+            f"{'operates' if len(act_tools) == 1 else 'operate'} the product on the user's behalf"
         )
 
     lines = [lead]
@@ -297,20 +318,27 @@ def derive_agent_briefing(cfg: Any) -> str:
         names = ", ".join(shown[:6])
         more = "" if len(shown) <= 6 else f", +{len(shown) - 6} more"
         lines.append(
-            f"Danger zone: {len(danger)} tool(s) are irreversible ({names}{more}) and require "
-            "confirmation before you call them; every other tool is safe to run directly."
+            f"Danger zone: {_count(len(danger), 'tool')} "
+            f"{'is' if len(danger) == 1 else 'are'} irreversible ({names}{more}) and "
+            f"{'requires' if len(danger) == 1 else 'require'} confirmation before you call "
+            f"{'it' if len(danger) == 1 else 'them'}; every other tool is safe to run directly."
         )
     skills = getattr(cfg, "skills", None) or []
     deterministic = [s for s in skills if getattr(s, "steps", None)]
     prose = [s for s in skills if not getattr(s, "steps", None)]
     if deterministic:
         lines.append(
-            f"{len(deterministic)} multi-step workflow(s) run in ONE call — call them like any "
-            "other tool and the connector executes the whole chain for you, so you don't "
-            "orchestrate the steps yourself."
+            f"{_count(len(deterministic), 'multi-step workflow')} "
+            f"{'runs' if len(deterministic) == 1 else 'run'} in ONE call — call "
+            f"{'it' if len(deterministic) == 1 else 'them'} like any other tool and the "
+            "connector executes the whole chain for you, so you don't orchestrate the steps "
+            "yourself."
         )
     if prose:
-        lines.append(f"{len(prose)} prose workflow(s) are available as MCP prompts for guidance.")
+        lines.append(
+            f"{_count(len(prose), 'prose workflow')} "
+            f"{'is' if len(prose) == 1 else 'are'} available as MCP prompts for guidance."
+        )
     lines.append("Call list_tools for each tool's full parameter contract.")
     return "\n\n".join(lines)
 

@@ -55,6 +55,47 @@ _CATEGORY_MAP: dict[str, str] = {
 }
 
 
+def heavy_preview_note(tool: ToolDefinition, tokens: int) -> str:
+    """What to actually change on THIS tool to make its result cheaper.
+
+    The sentence used to prescribe the same two fixes for every tool —
+    "Project only the columns the agent needs and add a LIMIT" — without
+    looking at whether either was already done. Measured against the fixture's
+    ``list_orders`` preview: 883 tokens over 25 rows and four of the source's
+    seven columns, i.e. a tool that already projects and already caps, told to
+    project and to add a cap.
+
+    "Add a LIMIT" is in fact never the advice for a declarative tool:
+    ``ToolDefinition.limit`` defaults to 100, so the cap always exists and the
+    useful instruction is to lower it. It IS the advice for a raw-SQL tool that
+    bounds nothing, which is the one shape that can return the whole table —
+    the same case core's quality grader raises its pagination check for.
+
+    Each clause names the state the tool is in, so an author is never sent to
+    add something they have.
+    """
+    if tool.return_fields:
+        columns = f"Drop a column from the {len(tool.return_fields)} it returns"
+    else:
+        columns = "Project only the columns the agent needs"
+    sql = tool.sql or ""
+    if sql and "LIMIT" not in sql.upper():
+        rows = "add a LIMIT"
+    else:
+        rows = f"lower its limit (now {tool.limit:,})"
+    return (
+        # Grouped. This string is rendered verbatim next to the Cloud
+        # Playground's own token badge, which formats with separators:
+        # measured on a 59-row preview, the card read "~2,538 tok" three
+        # lines above "This result is ~2538 tokens" — the same number,
+        # twice, two ways. Token counts are the largest figures this
+        # product quotes and the ones it is about, so they are exactly the
+        # ones that have to be read rather than counted.
+        f"This result is ~{tokens:,} tokens — an agent pays that on every call. "
+        f"{columns} and {rows} so it fits a context window (principle 2)."
+    )
+
+
 def preview_tool(
     session: ElliotSession,
     tool_id: str,
@@ -126,17 +167,7 @@ def preview_tool(
     tokens = estimate_tokens(rows)
     out: dict[str, Any] = {"rows": rows, "row_count": len(rows), "estimated_tokens": tokens}
     if tokens > _HEAVY_PREVIEW_TOKENS:
-        out["note"] = (
-            # Grouped. This string is rendered verbatim next to the Cloud
-            # Playground's own token badge, which formats with separators:
-            # measured on a 59-row preview, the card read "~2,538 tok" three
-            # lines above "This result is ~2538 tokens" — the same number,
-            # twice, two ways. Token counts are the largest figures this
-            # product quotes and the ones it is about, so they are exactly the
-            # ones that have to be read rather than counted.
-            f"This result is ~{tokens:,} tokens — an agent pays that on every call. Project only "
-            "the columns the agent needs and add a LIMIT so it fits a context window (principle 2)."
-        )
+        out["note"] = heavy_preview_note(tool, tokens)
     return out
 
 

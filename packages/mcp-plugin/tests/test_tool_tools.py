@@ -819,3 +819,67 @@ def test_authored_action_tool_executes_in_runtime():
     sent_body = _json.loads(route.calls[0].request.content)
     assert sent_body == {"reason": "customer ask"}
     assert result.rows and result.rows[0]["ok"] is True
+
+
+def test_heavy_preview_note_names_the_fix_the_tool_needs():
+    """The remedy must not prescribe work the tool has already done.
+
+    The sentence prescribed the same two fixes for every tool — "Project only
+    the columns the agent needs and add a LIMIT" — without looking at either.
+    Measured against a preview returning 883 tokens over 25 rows and four of
+    seven columns: a tool that already projects and already caps, told to
+    project and to add a cap. ``ToolDefinition.limit`` defaults to 100, so a
+    declarative tool always has a cap and "add a LIMIT" is never its advice;
+    a raw-SQL tool that bounds nothing is the one shape for which it is.
+    """
+    from elliot_core.types.tool import ReturnField, ToolDefinition
+    from elliot_mcp_plugin.tools.tool_tools import heavy_preview_note
+
+    projecting = ToolDefinition(
+        id="list_orders",
+        name="List orders",
+        description="List orders.",
+        category="READ",
+        source_ids=["orders"],
+        return_fields=[ReturnField(field="id"), ReturnField(field="status")],
+        limit=25,
+    )
+    note = heavy_preview_note(projecting, 883)
+    assert "~883 tokens" in note
+    assert "Drop a column from the 2 it returns" in note
+    assert "lower its limit (now 25)" in note
+    assert "add a LIMIT" not in note
+
+    # No projection yet: the original instruction is the right one.
+    wide = ToolDefinition(
+        id="list_all",
+        name="List all",
+        description="List everything.",
+        category="READ",
+        source_ids=["orders"],
+        limit=100,
+    )
+    assert "Project only the columns the agent needs" in heavy_preview_note(wide, 2538)
+    # ...and the figure is grouped, like the token badge beside it.
+    assert "~2,538 tokens" in heavy_preview_note(wide, 2538)
+
+    # Raw SQL bounding nothing is the one shape that can return the whole table.
+    unbounded = ToolDefinition(
+        id="dump_orders",
+        name="Dump orders",
+        description="Dump orders.",
+        category="READ",
+        source_ids=["orders"],
+        sql="SELECT * FROM orders",
+    )
+    assert "add a LIMIT" in heavy_preview_note(unbounded, 900)
+
+    bounded_sql = ToolDefinition(
+        id="recent_orders",
+        name="Recent orders",
+        description="Recent orders.",
+        category="READ",
+        source_ids=["orders"],
+        sql="SELECT * FROM orders LIMIT 50",
+    )
+    assert "lower its limit" in heavy_preview_note(bounded_sql, 900)

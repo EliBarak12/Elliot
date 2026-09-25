@@ -715,7 +715,7 @@ def _register_validation_capture(
     tracker: SessionTracker | None,
     connector_slug: str | None,
 ) -> None:
-    """Record argument-validation failures, which FastMCP rejects BEFORE the tool
+    """Handle argument-validation failures, which FastMCP rejects BEFORE the tool
     handler runs.
 
     FastMCP validates a tool's arguments against its schema and rejects a bad
@@ -727,12 +727,14 @@ def _register_validation_capture(
     (which ``FastMCP.call_tool`` resolves at call time, so the wrap takes effect)
     and, on a ``ToolError`` whose cause is a pydantic ``ValidationError`` — the
     stable signal that this is a pre-handler validation failure and not a handler
-    error (which is already recorded) — write one error observation. Best-effort:
-    it never changes the call result and never raises into the call path.
-    """
-    if store is None and tracker is None:
-        return
+    error (which is already recorded) — write one error observation AND answer
+    the agent with a coded, actionable sentence in place of pydantic's dump.
 
+    Installed unconditionally. The recording half needs a store or a tracker and
+    does nothing without one, but the translation half is the connector's error
+    contract, and a runtime serving without an observation store — a self-hosted
+    one, the CLI, a test — owes its agents that contract just the same.
+    """
     import pydantic
     from mcp.server.fastmcp.exceptions import ToolError
 
@@ -743,45 +745,76 @@ def _register_validation_capture(
         try:
             return await orig_call(name, arguments, *args, **kwargs)
         except ToolError as exc:
-            if isinstance(exc.__cause__, pydantic.ValidationError):
+            cause = exc.__cause__
+            if isinstance(cause, pydantic.ValidationError):
+                if store is not None or tracker is not None:
+                    with contextlib.suppress(Exception):
+                        _record_validation_failure(
+                            mcp, store, tracker, connector_slug, name, arguments, exc
+                        )
+                # ...and the AGENT gets the same compact, coded sentence the
+                # observation store gets, instead of pydantic's dump.
+                #
+                # Principle 3 is "errors are actionable — agents must know what
+                # to do next", and every error this platform raises itself obeys
+                # it: an enum violation comes back "[INVALID_PARAM_VALUE]
+                # Parameter 'status' must be one of ['open', 'shipped',
+                # 'cancelled'], got: 'banana'". But FastMCP rejects a missing or
+                # wrong-typed argument BEFORE the handler runs, so the two most
+                # common contract misses of all skipped that contract entirely.
+                #
+                # Measured against a published connector: get_order with no
+                # arguments answered "Error executing tool get_order: 1
+                # validation error for get_orderArguments\norder_id\n  Field
+                # required [type=missing, input_value={}, input_type=dict]\n
+                # For further information visit
+                # https://errors.pydantic.dev/2.13/v/missing" — three lines of
+                # framework internals, an invented class name the tool does not
+                # have, and a link to another project's docs. The connector's
+                # own dashboard calls exactly this class of failure a "contract
+                # miss … the connector author's to fix", and the agent was being
+                # handed pydantic's spelling of it.
+                #
+                # Best-effort, like the recording above: any failure building the
+                # sentence re-raises the original untouched.
+                friendly = ""
                 with contextlib.suppress(Exception):
-                    _record_validation_failure(
-                        mcp, store, tracker, connector_slug, name, arguments, exc
+                    friendly = (
+                        f"[VALIDATION_INVALID_PARAMS] {_validation_reason(exc)}. "
+                        "Check this tool's inputSchema in tools/list and retry "
+                        "with the arguments corrected."
                     )
+                if friendly:
+                    raise ToolError(friendly) from cause
             raise
 
     tool_manager.call_tool = _wrapped  # type: ignore[method-assign]
 
 
-def _record_validation_failure(
-    mcp: FastMCP,
-    store: ObservationStore | None,
-    tracker: SessionTracker | None,
-    connector_slug: str | None,
-    tool_id: str,
-    arguments: dict[str, Any],
-    exc: Exception,
-) -> None:
-    """Write one error observation for an argument-validation failure."""
-    session_id, identity_payload = _current_session_and_identity(mcp)
-    if not session_id:
-        return
-    # Single compact line — never the full multi-line pydantic dump. But the
-    # first line of that dump is the one line in it with nothing actionable:
-    # pydantic opens with "1 validation error for list_peopleArguments" and puts
-    # the parameter and the reason on the lines after it, so taking line one
-    # recorded which TOOL was called wrong and never which ARGUMENT.
-    #
-    # Measured on a live connector's Observability tab, where this string is the
-    # evidence under the advice: "Start with list_people: Agents keep sending
-    # parameters this tool rejects — its contract is unclear. Tighten each
-    # parameter's description…", and directly beneath it "last error:
-    # [VALIDATION_INVALID_PARAMS] Error executing tool list_people: 1 validation
-    # error for list_peopleArguments". The owner is told to fix a parameter and
-    # not told which one.
-    #
-    # loc + msg only, never ``input``: the rejected VALUE is caller-supplied
-    # argument data and has no business in a stored observation.
+def _validation_reason(exc: Exception) -> str:
+    """One compact line naming the argument and why it was rejected.
+
+    Shared by the observation this failure writes and the error the agent is
+    handed, so the owner's evidence and the agent's instruction can never
+    describe the same rejection differently.
+
+    Never the full multi-line pydantic dump. The first line of that dump is the
+    one line in it with nothing actionable: pydantic opens with "1 validation
+    error for list_peopleArguments" and puts the parameter and the reason on the
+    lines after it, so taking line one recorded which TOOL was called wrong and
+    never which ARGUMENT.
+
+    Measured on a live connector's Observability tab, where this string is the
+    evidence under the advice: "Start with list_people: Agents keep sending
+    parameters this tool rejects — its contract is unclear. Tighten each
+    parameter's description…", and directly beneath it "last error:
+    [VALIDATION_INVALID_PARAMS] Error executing tool list_people: 1 validation
+    error for list_peopleArguments". The owner is told to fix a parameter and
+    not told which one.
+
+    ``loc`` + ``msg`` only, never ``input``: the rejected VALUE is
+    caller-supplied argument data and has no business in a stored observation.
+    """
     import pydantic
 
     reason = ""
@@ -798,8 +831,25 @@ def _record_validation_failure(
     if not reason:
         first_line = next((ln for ln in str(exc).splitlines() if ln.strip()), "")
         reason = first_line[:200] if first_line else "argument validation failed"
-    reason = reason[:200]
-    error = f"[VALIDATION_INVALID_PARAMS] {reason}"
+    return reason[:200]
+
+
+def _record_validation_failure(
+    mcp: FastMCP,
+    store: ObservationStore | None,
+    tracker: SessionTracker | None,
+    connector_slug: str | None,
+    tool_id: str,
+    arguments: dict[str, Any],
+    exc: Exception,
+) -> None:
+    """Write one error observation for an argument-validation failure."""
+    session_id, identity_payload = _current_session_and_identity(mcp)
+    if not session_id:
+        return
+    # One compact line, and the same one the agent is handed — see
+    # _validation_reason for what it leaves out and why.
+    error = f"[VALIDATION_INVALID_PARAMS] {_validation_reason(exc)}"
     agent_hint = _agent_hint_from_identity(get_current_agent_identity())
     if store is not None:
         store.open_session(

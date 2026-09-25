@@ -385,6 +385,74 @@ async def test_argument_validation_failures_are_recorded() -> None:
     assert "\n" not in errored[0]["error"], "one compact line, not the whole dump"
 
 
+async def test_the_agent_gets_a_coded_reason_not_pydantics_dump() -> None:
+    """Principle 3 applies to the commonest failure of all.
+
+    Every error this platform raises itself is coded and actionable — an enum
+    violation comes back "[INVALID_PARAM_VALUE] Parameter 'status' must be one
+    of [...]". But FastMCP rejects a missing or wrong-typed argument BEFORE the
+    handler runs, so those two skipped the contract entirely and the agent was
+    handed pydantic's dump: three lines of framework internals, a class name the
+    tool does not have ("get_thingArguments"), and a link to another project's
+    documentation.
+    """
+    from mcp.shared.memory import create_connected_server_and_client_session
+    from mcp.types import TextContent
+
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import (
+        ConnectorConfig,
+        ParameterDefinition,
+        SourceConfig,
+        ToolDefinition,
+    )
+
+    class _Eng:
+        def query(self, sql, params):  # type: ignore[no-untyped-def]
+            return [{"id": 1}]
+
+    tool = ToolDefinition(
+        id="get_thing",
+        name="Get Thing",
+        description="Get a thing by id",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT id FROM s WHERE id = :thing_id",
+        parameters=[
+            ParameterDefinition(name="thing_id", type="integer", required=True, description="id")
+        ],
+    )
+    cfg = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        sources=[SourceConfig(id="s", name="s", type="file", url="x")],
+        tools=[tool],
+        skills=[],
+    )
+    mcp = create_runtime_server(
+        cfg,
+        ToolExecutor(cfg, secrets={}, engine=_Eng()),  # type: ignore[arg-type]
+    )
+
+    async with create_connected_server_and_client_session(mcp._mcp_server) as client:
+        res = await client.call_tool("get_thing", {})
+    assert res.isError
+    body = "\n".join(c.text for c in res.content if isinstance(c, TextContent))
+
+    # Coded, so an agent can branch on it and the dashboard can group it.
+    assert "[VALIDATION_INVALID_PARAMS]" in body, body
+    # Names the ARGUMENT, which is the whole point.
+    assert "thing_id" in body, body
+    # And says what to do next.
+    assert "inputSchema" in body, body
+    # None of pydantic's spelling of it.
+    assert "pydantic" not in body.lower(), body
+    assert "validation error for" not in body, body
+    assert "get_thingArguments" not in body, body
+
+
 async def test_argument_validation_failures_reach_the_session_trace() -> None:
     """The session trace must show the same calls the observation store does.
 

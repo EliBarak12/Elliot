@@ -977,6 +977,7 @@ def _make_observe(
         session_id: str | None,
         identity: Any,
         error_code: str | None = None,
+        truncation_reason: str | None = None,
     ) -> None:
         row_count = len(result_rows)
         # Estimate tokens up-front so the audit row, the observation store, and
@@ -1034,6 +1035,15 @@ def _make_observe(
                         duration_ms=duration_ms,
                         error=error,
                         error_code=error_code,
+                        # The agent is told, in words, that it got part of the
+                        # set (`_truncation_note`). The owner was told nothing:
+                        # a capped call is recorded as a successful one with a
+                        # row count, and nothing on the console distinguishes
+                        # "280 rows" from "280 of 1,200". Measured on a
+                        # published connector over a 1,200-row extract: the
+                        # agent read "Returned 280 of 1200 matching rows", and
+                        # Recent calls showed 280 rows, ~24,921 tokens, ok.
+                        truncation_reason=truncation_reason,
                         connector_slug=connector_slug,
                     )
                     # Do NOT close the session here: it stays open and
@@ -1050,6 +1060,7 @@ def _make_observe(
         error: str | None,
         session_id: str | None,
         error_code: str | None = None,
+        truncation_reason: str | None = None,
     ) -> None:
         """Capture the request-scoped agent identity, then offload the blocking
         audit/tracker/observation-store writes to a worker thread."""
@@ -1064,6 +1075,7 @@ def _make_observe(
             session_id,
             identity,
             error_code,
+            truncation_reason,
         )
 
     return _observe
@@ -1289,7 +1301,19 @@ def _register_tool(
         try:
             result = await active_executor.execute(td, kwargs)
             duration_ms = round((time.monotonic() - t0) * 1000, 1)
-            await _observe(td.id, kwargs, result.rows, duration_ms, None, session_id)
+            await _observe(
+                td.id,
+                kwargs,
+                result.rows,
+                duration_ms,
+                None,
+                session_id,
+                truncation_reason=(
+                    getattr(result, "truncation_reason", None)
+                    if _result_truncated(result)
+                    else None
+                ),
+            )
             await _emit_runtime_log(
                 ctx,
                 "info",
@@ -2035,7 +2059,17 @@ def _register_one_skill_tool(
             result = await run_skill_steps(skill, kwargs, _run_step)
             duration_ms = round((time.monotonic() - t0) * 1000, 1)
             await _observe(
-                skill_id, kwargs, getattr(result, "rows", []) or [], duration_ms, None, session_id
+                skill_id,
+                kwargs,
+                getattr(result, "rows", []) or [],
+                duration_ms,
+                None,
+                session_id,
+                truncation_reason=(
+                    getattr(result, "truncation_reason", None)
+                    if _result_truncated(result)
+                    else None
+                ),
             )
             return _skill_payload(result)
         except Exception as exc:

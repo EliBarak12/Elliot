@@ -314,6 +314,113 @@ async def test_connector_schema_resource_redacts_secrets() -> None:
     assert "api.example.com" in body
 
 
+async def test_a_capped_result_is_recorded_as_capped() -> None:
+    """The agent is told its result was cut short; the owner was not.
+
+    The executor sizes a result to the per-call token budget and
+    ``_truncation_note`` tells the agent, in words, that it got part of the set
+    and what to narrow. None of that reached the observation store, so the
+    console recorded a successful call with a row count and nothing that
+    distinguishes "409 rows" from "409 of 500" — on the surface whose job is
+    that every session is observable.
+    """
+    import tempfile
+
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.observation_store import ObservationStore
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import ConnectorConfig, SourceConfig, ToolDefinition
+
+    class _Eng:
+        def query(self, sql, params):  # type: ignore[no-untyped-def]
+            # Over the 25k-token budget, well under the 10k row cap: the
+            # token_budget path, which a row count alone cannot reveal.
+            return [{"id": i, "blob": "x" * 400} for i in range(500)]
+
+    tool = ToolDefinition(
+        id="list_things",
+        name="List things",
+        description="Lists the things this source holds.",
+        category="READ",
+        source_ids=["s"],
+        sql='SELECT * FROM "s"',
+        parameters=[],
+    )
+    cfg = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        sources=[SourceConfig(id="s", name="s", type="file", url="x")],
+        tools=[tool],
+        skills=[],
+    )
+    d = tempfile.mkdtemp()
+    store = ObservationStore(f"sqlite:///{d}/obs.db")
+    mcp = create_runtime_server(
+        cfg,
+        ToolExecutor(cfg, secrets={}, engine=_Eng()),  # type: ignore[arg-type]
+        store=store,
+    )
+
+    async with create_connected_server_and_client_session(mcp._mcp_server) as client:
+        res = await client.call_tool("list_things", {})
+    assert not res.isError
+
+    calls = store.recent_tool_calls(5)
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["truncation_reason"] == "token_budget"
+    # The call itself succeeded — this is not an error, and recording it as one
+    # would put a healthy tool in the error rate.
+    assert not call["error"]
+    assert call["result_row_count"] < 500
+
+
+async def test_a_complete_result_records_no_truncation_reason() -> None:
+    import tempfile
+
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.observation_store import ObservationStore
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import ConnectorConfig, SourceConfig, ToolDefinition
+
+    class _Eng:
+        def query(self, sql, params):  # type: ignore[no-untyped-def]
+            return [{"id": 1}, {"id": 2}]
+
+    tool = ToolDefinition(
+        id="list_things",
+        name="List things",
+        description="Lists the things this source holds.",
+        category="READ",
+        source_ids=["s"],
+        sql='SELECT * FROM "s"',
+        parameters=[],
+    )
+    cfg = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        sources=[SourceConfig(id="s", name="s", type="file", url="x")],
+        tools=[tool],
+        skills=[],
+    )
+    d = tempfile.mkdtemp()
+    store = ObservationStore(f"sqlite:///{d}/obs.db")
+    mcp = create_runtime_server(
+        cfg,
+        ToolExecutor(cfg, secrets={}, engine=_Eng()),  # type: ignore[arg-type]
+        store=store,
+    )
+    async with create_connected_server_and_client_session(mcp._mcp_server) as client:
+        await client.call_tool("list_things", {})
+    assert store.recent_tool_calls(5)[0]["truncation_reason"] is None
+
+
 async def test_argument_validation_failures_are_recorded() -> None:
     """FastMCP rejects a bad-argument call (missing required param) before the
     handler runs, so it would otherwise never reach the observation store — but

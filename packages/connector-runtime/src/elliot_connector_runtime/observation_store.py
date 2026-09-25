@@ -60,6 +60,14 @@ class _ToolCall(_Base):
     # call, so per-tool insights can separate a contract miss the author must fix
     # from an upstream/auth failure that isn't theirs.
     error_code = Column(String(64))
+    # Why this result was incomplete — result_cap, token_budget or source_cap —
+    # or NULL when the agent got the whole set. The executor computes it and the
+    # agent is told in words; without it here the owner's console shows a
+    # successful call with a row count and no way to know the agent was handed a
+    # partial answer, which is the one fact that explains what the agent did
+    # next. A source_cap result can be small, cheap and incomplete all at once,
+    # so token weight is not a proxy for it.
+    truncation_reason = Column(String(32))
     connector_slug = Column(String(128))
 
 
@@ -124,7 +132,7 @@ class ObservationStore:
             _enable_sqlite_concurrency(self._engine)
         _Base.metadata.create_all(self._engine)
         self._migrate_agent_identity_columns()
-        self._migrate_tool_call_error_code()
+        self._migrate_tool_call_columns()
         log.info("observation_store.ready", db_url=db_url.split("@")[-1])
 
     def _migrate_agent_identity_columns(self) -> None:
@@ -155,12 +163,12 @@ class ObservationStore:
                         text(f"ALTER TABLE agent_sessions ADD COLUMN {col_name} {col_type}")
                     )
 
-    def _migrate_tool_call_error_code(self) -> None:
-        """Retro-fit the ``error_code`` column onto a pre-existing tool_calls
-        table (``create_all`` never alters an existing table). Same pattern as
-        the agent-identity migration; without it an upgraded deployment would
-        drop the structured code and the per-tool contract-miss insight would
-        read empty."""
+    def _migrate_tool_call_columns(self) -> None:
+        """Retro-fit ``error_code`` and ``truncation_reason`` onto a pre-existing
+        tool_calls table (``create_all`` never alters an existing table). Same
+        pattern as the agent-identity migration; without it an upgraded
+        deployment would drop the structured code and the per-tool contract-miss
+        insight would read empty, and every capped result would look complete."""
         inspector = sa_inspect(self._engine)
         if "tool_calls" not in inspector.get_table_names():
             return
@@ -168,6 +176,11 @@ class ObservationStore:
         if "error_code" not in existing:
             with self._engine.begin() as conn:
                 conn.execute(text("ALTER TABLE tool_calls ADD COLUMN error_code VARCHAR(64)"))
+        if "truncation_reason" not in existing:
+            with self._engine.begin() as conn:
+                conn.execute(
+                    text("ALTER TABLE tool_calls ADD COLUMN truncation_reason VARCHAR(32)")
+                )
 
     # ------------------------------------------------------------------ writes
 
@@ -182,6 +195,7 @@ class ObservationStore:
         error: str | None = None,
         connector_slug: str | None = None,
         error_code: str | None = None,
+        truncation_reason: str | None = None,
     ) -> None:
         # Redact secret-bearing argument fields before persisting — same
         # policy as AuditLog.record and SessionTracker.record_tool_call, so
@@ -200,6 +214,7 @@ class ObservationStore:
                     duration_ms=round(duration_ms, 2),
                     error=error,
                     error_code=error_code,
+                    truncation_reason=truncation_reason,
                     connector_slug=connector_slug,
                 )
             )

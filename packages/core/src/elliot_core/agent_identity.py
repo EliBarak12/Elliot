@@ -141,9 +141,28 @@ def parse_agent_identity(headers: Mapping[str, str]) -> AgentIdentity:
         if mm:
             model = mm.group(1).lower()
         else:
-            mm = _BARE_MODEL_RE.search(user_agent)
-            if mm:
-                model = mm.group(1).lower()
+            # The first bare match that is not a client's own name.
+            #
+            # `claude-code` satisfies `claude-[A-Za-z0-9_.-]+` as readily as
+            # `claude-opus-4-7` does, so the commonest agent in this ecosystem
+            # reported itself as its own model: measured on
+            # "claude-code/1.42.0", client=claude-code AND model=claude-code,
+            # which is what the dashboard's "By model — per-model success"
+            # table then attributed calls to.
+            #
+            # The AX form in this module's own docstring made it worse rather
+            # than better. "agent-claude-code/1.42.0 claude-opus-4-7" carries
+            # the real model in the same string, and `search` returns the
+            # FIRST match — the client token inside `agent-…` — so the model
+            # that was right there was discarded. Measured: model=claude-code.
+            #
+            # Exact match against _KNOWN_CLIENTS, not a prefix: a future
+            # `claude-codex-…` model is a model, not this client.
+            for candidate in _BARE_MODEL_RE.finditer(user_agent):
+                value = candidate.group(1).lower()
+                if value not in _KNOWN_CLIENTS:
+                    model = value
+                    break
 
         md = _AX_MODALITY_RE.search(user_agent)
         if md:

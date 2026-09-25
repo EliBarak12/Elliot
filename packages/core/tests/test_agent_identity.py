@@ -147,3 +147,35 @@ def test_contextvar_set_get_reset() -> None:
     finally:
         reset_current_agent_identity(token)
     assert get_current_agent_identity() is None
+
+
+def test_a_client_name_is_never_read_as_its_own_model() -> None:
+    """`claude-code` satisfies the bare-model pattern as readily as
+    `claude-opus-4-7` does, so the commonest agent in this ecosystem reported
+    itself as its own model — and the dashboard's "By model — per-model
+    success" table attributed calls to a model named claude-code."""
+    ident = parse_agent_identity({"user-agent": "claude-code/1.42.0"})
+    assert ident.client == "claude-code"
+    # Unknown is the honest answer: MCP carries no model and this caller
+    # volunteered none.
+    assert ident.model is None
+
+    # Case-insensitively too, which is how a real User-Agent spells it.
+    assert parse_agent_identity({"user-agent": "Claude-Code/2.0 (darwin)"}).model is None
+
+
+def test_the_real_model_beside_a_client_token_still_wins() -> None:
+    """The AX form in the module's own docstring, which used to come out wrong.
+
+    `search` returns the FIRST bare match, and in "agent-claude-code/1.42.0
+    claude-opus-4-7" that is the client token inside `agent-…` — so the model
+    sitting in the same string was discarded.
+    """
+    ident = parse_agent_identity({"user-agent": "agent-claude-code/1.42.0 claude-opus-4-7"})
+    assert ident.client == "claude-code"
+    assert ident.model == "claude-opus-4-7"
+
+
+def test_a_model_that_merely_starts_like_a_client_is_still_a_model() -> None:
+    # Exact match against the known-client list, not a prefix test.
+    assert parse_agent_identity({"user-agent": "claude-codex-9"}).model == "claude-codex-9"

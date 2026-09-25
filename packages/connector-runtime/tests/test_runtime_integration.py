@@ -385,6 +385,68 @@ async def test_argument_validation_failures_are_recorded() -> None:
     assert "\n" not in errored[0]["error"], "one compact line, not the whole dump"
 
 
+async def test_an_unknown_tool_name_is_coded_and_points_at_tools_list() -> None:
+    """The other failure FastMCP answers by itself.
+
+    It says "Unknown tool: x" — no code, and nothing saying where the real
+    names are. This runtime's own OpenAI protocol path already codes the same
+    condition TOOL_NOT_FOUND, and the trigger is ordinary: a tool renamed or
+    removed by a republish leaves every agent holding the old name.
+    """
+    from mcp.shared.memory import create_connected_server_and_client_session
+    from mcp.types import TextContent
+
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_core.types import (
+        ConnectorConfig,
+        ParameterDefinition,
+        SourceConfig,
+        ToolDefinition,
+    )
+
+    class _Eng:
+        def query(self, sql, params):  # type: ignore[no-untyped-def]
+            return [{"id": 1}]
+
+    tool = ToolDefinition(
+        id="get_thing",
+        name="Get Thing",
+        description="Get a thing by id",
+        category="READ",
+        source_ids=["s"],
+        sql="SELECT id FROM s WHERE id = :thing_id",
+        parameters=[
+            ParameterDefinition(name="thing_id", type="integer", required=True, description="id")
+        ],
+    )
+    cfg = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        sources=[SourceConfig(id="s", name="s", type="file", url="x")],
+        tools=[tool],
+        skills=[],
+    )
+    mcp = create_runtime_server(
+        cfg,
+        ToolExecutor(cfg, secrets={}, engine=_Eng()),  # type: ignore[arg-type]
+    )
+
+    async with create_connected_server_and_client_session(mcp._mcp_server) as client:
+        res = await client.call_tool("get_thign", {})  # the everyday typo
+        assert res.isError
+        body = "\n".join(c.text for c in res.content if isinstance(c, TextContent))
+        assert "[TOOL_NOT_FOUND]" in body, body
+        assert "get_thign" in body, body
+        assert "tools/list" in body, body
+
+        # A tool that DOES exist keeps its handler's own error, whatever that is
+        # — this branch must not swallow the connector's real failures.
+        ok = await client.call_tool("get_thing", {"thing_id": 1})
+        assert not ok.isError
+
+
 async def test_the_agent_gets_a_coded_reason_not_pydantics_dump() -> None:
     """Principle 3 applies to the commonest failure of all.
 

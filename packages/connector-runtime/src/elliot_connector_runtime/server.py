@@ -715,8 +715,8 @@ def _register_validation_capture(
     tracker: SessionTracker | None,
     connector_slug: str | None,
 ) -> None:
-    """Handle argument-validation failures, which FastMCP rejects BEFORE the tool
-    handler runs.
+    """Hold the error contract for the two failures FastMCP answers by itself:
+    an unknown tool name, and arguments it rejects BEFORE the handler runs.
 
     FastMCP validates a tool's arguments against its schema and rejects a bad
     call (missing or wrong-typed required parameter) before the handler executes,
@@ -746,6 +746,26 @@ def _register_validation_capture(
             return await orig_call(name, arguments, *args, **kwargs)
         except ToolError as exc:
             cause = exc.__cause__
+            # A name this connector does not serve. FastMCP answers "Unknown
+            # tool: x" — no code, and nothing saying where the real names are.
+            # The same runtime's OpenAI protocol path already codes this one
+            # ("TOOL_NOT_FOUND"), and the trigger is ordinary: a tool renamed or
+            # removed by a republish leaves every agent holding the old name,
+            # which is exactly the state the dashboard warns about before it
+            # deletes a tool.
+            #
+            # `get_tool(...) is None` rather than matching the sentence, so a
+            # wording change upstream cannot silently turn this off, and a
+            # handler's own ToolError on a tool that DOES exist is left alone.
+            if cause is None and tool_manager.get_tool(name) is None:
+                friendly = ""
+                with contextlib.suppress(Exception):
+                    friendly = (
+                        f"[TOOL_NOT_FOUND] No tool named '{name[:80]}' on this "
+                        "connector. Call tools/list for the tools it serves."
+                    )
+                if friendly:
+                    raise ToolError(friendly) from exc
             if isinstance(cause, pydantic.ValidationError):
                 if store is not None or tracker is not None:
                     with contextlib.suppress(Exception):

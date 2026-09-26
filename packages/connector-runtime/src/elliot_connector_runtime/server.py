@@ -302,7 +302,18 @@ def derive_agent_briefing(cfg: Any) -> str:
         parts.append(
             f"{_count(len(read_tools), 'READ tool')} "
             f"{'gives' if len(read_tools) == 1 else 'give'} you context about the product — "
-            "read them to understand the data before you act"
+            # ...and the pronoun. This clause switched its noun through _count
+            # and its verb through gives/give, then said "read them" for one
+            # tool. Every other line in this briefing already switches its
+            # own: the danger zone has "call it"/"call them", the skills line
+            # has "call it"/"call them". This was the sentence _count exists
+            # for and the only one still disagreeing with itself.
+            #
+            # It slipped past test_briefing_reads_as_prose_for_one_of_each
+            # because that assertion stops at the verb — "1 READ tool gives
+            # you context" — one clause short of the pronoun.
+            f"read {'it' if len(read_tools) == 1 else 'them'} to understand the data "
+            "before you act"
         )
     if act_tools:
         parts.append(

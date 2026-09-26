@@ -71,6 +71,9 @@ def test_briefing_leads_with_product_name_and_description() -> None:
 def test_frames_read_as_context_and_action_as_operate() -> None:
     text = derive_agent_briefing(_connector([_read(), _action("create_order")]))
     assert "1 READ tool gives you context" in text
+    # ...through to the end of the clause. These assertions used to stop at the
+    # verb, and the pronoun one clause later still read "read them" either way.
+    assert "read it to understand the data" in text
     assert "1 WRITE/ACTION tool operates the product" in text
 
 
@@ -100,6 +103,7 @@ def test_additive_only_connector_has_no_danger_zone() -> None:
 def test_read_only_connector_reads_as_context_only() -> None:
     text = derive_agent_briefing(_connector([_read("list_orders"), _read("get_order")]))
     assert "2 READ tools give you context" in text
+    assert "read them to understand the data" in text
     assert "WRITE/ACTION" not in text
     assert "Danger zone" not in text
 
@@ -154,6 +158,7 @@ def test_briefing_reads_as_prose_for_one_of_each() -> None:
     text = derive_agent_briefing(cfg)
     assert "(s)" not in text
     assert "1 READ tool gives you context" in text
+    assert "read it to understand the data" in text
     assert "1 WRITE/ACTION tool operates the product" in text
     assert "Danger zone: 1 tool is irreversible" in text
     assert "requires confirmation before you call it" in text
@@ -172,6 +177,7 @@ def test_briefing_stays_plural_for_more_than_one() -> None:
     text = derive_agent_briefing(cfg)
     assert "(s)" not in text
     assert "2 READ tools give you context" in text
+    assert "read them to understand the data" in text
     assert "2 WRITE/ACTION tools operate the product" in text
     assert "Danger zone: 2 tools are irreversible" in text
     assert "require confirmation before you call them" in text

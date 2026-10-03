@@ -626,10 +626,25 @@ class ToolExecutor:
     async def _fetch_db(self, source: SourceConfig) -> list[dict[str, Any]]:
         """Fetch a whole DB source for the SQLite-snapshot path.
 
-        Routed through elliot_core's SQLAlchemy connector so Postgres and
-        MySQL are both supported and Postgres runs in a read-only
-        transaction. The push-down path (``_execute_db_pushdown``) avoids
-        this whole-table fetch whenever a tool's filters can run server-side.
+        Routed through elliot_core's SQLAlchemy connector, so Postgres and
+        MySQL are both supported and BOTH open the connection read-only: the
+        Postgres engine passes ``-c default_transaction_read_only=on`` and the
+        MySQL one runs ``SET SESSION TRANSACTION READ ONLY`` as its pooled
+        ``init_command`` (``db_connector._get_engine``). Either way a write or
+        DDL the SQL validator missed is refused by the database rather than
+        trusted.
+
+        This said "Postgres runs in a read-only transaction", naming one of
+        the two. It predates the MySQL branch, whose own comment describes
+        itself as "defence-in-depth matching Postgres, not validator-only" —
+        so the sentence understated a control the code has, in the direction
+        that invites someone to add the missing half twice. /security states
+        the implemented behaviour ("rejected by Postgres or MySQL rather than
+        trusted") and this is what it is reading.
+
+        The push-down path (``_execute_db_pushdown``) avoids this whole-table
+        fetch whenever a tool's filters can run server-side; it goes through
+        ``run_select`` on the same engines, so it inherits the same guarantee.
         """
         from elliot_core.sources.db_connector import query_database
 

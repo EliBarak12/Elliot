@@ -447,7 +447,20 @@ def test_read_tool_with_high_impact_verb_no_warn() -> None:
     assert not any(i.code == "DESTRUCTIVE_NOT_FLAGGED" for i in issues)
 
 
-def test_no_tools_returns_empty_issues() -> None:
+def test_no_tools_warns_and_blocks_nothing() -> None:
+    """A connector that serves no tools is reported, not passed in silence.
+
+    This assertion used to be `== []`, with no docstring — it pinned the
+    mechanism (nothing to iterate, so nothing emitted) rather than a decision
+    that a connector offering an agent nothing is agent-ready. Measured before
+    the rule: no tools and no sources, sources but no tools, and one tool
+    switched off ALL linted completely clean, while a single well-formed tool
+    drew a warning.
+
+    WARN and not ERROR on purpose: `passed` is `not any(severity == "ERROR")`,
+    so this must not newly refuse a publish that succeeds today. The assertion
+    below pins both halves — the warning is raised, and nothing is blocked.
+    """
     config = ConnectorConfig(
         name="Empty",
         slug="empty",
@@ -455,7 +468,25 @@ def test_no_tools_returns_empty_issues() -> None:
         sources=[],
         tools=[],
     )
-    assert lint_connector(config) == []
+    issues = lint_connector(config)
+    assert [i.code for i in issues] == ["NO_SERVED_TOOLS"]
+    assert issues[0].severity == "WARN"
+    assert not any(i.severity == "ERROR" for i in issues)
+
+
+def test_all_tools_disabled_warns_and_says_which() -> None:
+    """The shape that reads worst: a populated spec that serves nothing.
+
+    `served_tools` is computed before the connector-level checks, so a spec
+    whose every tool is switched off reaches the same rule — and it needs a
+    different fix from an empty one, so the message says which it is.
+    """
+    config = _make_connector(enabled=False)
+    issues = [i for i in lint_connector(config) if i.code == "NO_SERVED_TOOLS"]
+    assert len(issues) == 1
+    assert issues[0].severity == "WARN"
+    assert "switched off" in issues[0].message
+    assert "enabled: true" in issues[0].suggestion
 
 
 def test_secret_in_url_is_error() -> None:

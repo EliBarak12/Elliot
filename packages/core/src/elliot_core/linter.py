@@ -690,6 +690,56 @@ def lint_connector(
         config = config.model_copy(update={"tools": served_tools})
 
     # ── connector-level checks ──────────────────────────────────────────────
+    # The floor under _MAX_TOOLS, which had only a ceiling. A connector that
+    # serves no tools offers a connecting agent nothing at all, and this linter
+    # — whose whole question is "is this agent-ready?" — answered it clean.
+    #
+    # Measured: `lint_connector` returned ZERO issues for three shapes that all
+    # serve nothing — no tools and no sources, sources but no tools, and one
+    # tool switched off — while a single well-formed tool drew a warning. The
+    # middle shape is the likeliest mid-build state there is: the agent
+    # discovered a source and has not drafted a tool yet. The last is the one
+    # that reads worst, because the spec looks populated.
+    #
+    # The product already holds this judgement everywhere except here: Elliot
+    # Cloud's agent-briefing and readiness endpoints both refuse the state in
+    # as many words — `if not spec or served_tool_count(spec) == 0: raise
+    # HTTPException(404, "Connector has no tools yet")` — and
+    # SkillDefinition's own validator rejects a skill with neither steps nor
+    # instructions because "an empty skill does nothing". A connector is the
+    # same shape of thing one level up.
+    #
+    # WARN, not ERROR, deliberately. `passed` is `not any(severity ==
+    # "ERROR")`, so an ERROR here would newly refuse publishes that succeed
+    # today — a change to what the gate blocks, which is a product decision
+    # rather than a missing check. This makes the state visible on every
+    # surface that renders a lint report, and leaves the gate where it is.
+    #
+    # Counted over `served_tools`, so the disabled case lands here too, and the
+    # message names which of the two it is — the spec with nothing in it and
+    # the spec with everything switched off need different fixes.
+    if not config.tools:
+        parked = len(declared.tools)
+        issues.append(
+            LintIssue(
+                severity="WARN",
+                code="NO_SERVED_TOOLS",
+                tool_id=None,
+                message=(
+                    f"Connector serves no tools — all {parked} are switched off. "
+                    "An agent that connects sees an empty tool list."
+                    if parked
+                    else "Connector defines no tools. An agent that connects sees an "
+                    "empty tool list and can do nothing with this server."
+                ),
+                suggestion=(
+                    "Switch at least one tool back on (enabled: true)."
+                    if parked
+                    else "Add at least one tool — elliot_create_tool, or the SQL/REST helpers."
+                ),
+            )
+        )
+
     if len(config.tools) > _MAX_TOOLS:
         issues.append(
             LintIssue(

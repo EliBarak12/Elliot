@@ -123,9 +123,47 @@ def redact_url(url: str | None) -> str:
         parts = urlsplit(url)
     except ValueError:
         return _REDACTED
-    netloc = parts.hostname or ""
-    if parts.port:
-        netloc = f"{netloc}:{parts.port}"
+    # The authority with its userinfo removed, taken from ``netloc`` verbatim
+    # rather than rebuilt from ``hostname`` and ``port``. Both of those were
+    # wrong, in different ways, and this function is the one the whole repo
+    # routes a URL through before it reaches a log, an error message or an API
+    # payload.
+    #
+    # ``parts.port`` VALIDATES on access and raises outside the try above —
+    # urlsplit is lazy, so the guard could never catch it — and the docstring
+    # promises best-effort. Measured: "http://[::1]:notaport/x",
+    # "http://host:99999999999999999999/x" and "http://host:-1/x" all raised
+    # ValueError out of this function. It is reachable from an unauthenticated
+    # request: routers/grader.py's public POST /api/grader/submissions calls
+    # ``log.info("grader.submit", url=redact_url(url))`` as its first
+    # statement, before the quota check and before anything looks at the URL —
+    # measured against the running API, a posted "http://[::1]:notaport/mcp"
+    # returned 500 Internal Server Error with that ValueError in the log. A
+    # redactor that raises is worse than no redactor: it turns the log line
+    # that was protecting the secret into the thing that fails.
+    #
+    # ``parts.hostname`` strips the brackets off an IPv6 literal, so
+    # "http://[::1]:8000/mcp" came back as "http://::1:8000/mcp" — not a URL,
+    # and ambiguous about where the address ends. Measured on three IPv6
+    # forms; the loopback case is an everyday local MCP endpoint.
+    #
+    # Slicing at the LAST "@" because a password may contain one. This is
+    # exactly what Elliot Cloud's redactUrl.ts already does — its header says
+    # "this is a port of that function, and the two are meant to agree" — so
+    # the two now agree on both shapes. One visible consequence: a host keeps
+    # the case it was written in, where ``hostname`` lower-cased it. The mirror
+    # has always done that, and this is a display helper, not a comparison.
+    #
+    # Differential-tested against that port over 30 URLs — DSNs, userinfo with
+    # an "@" in the password, every sensitive query key, IPv6, bad ports,
+    # fragments, a `{{ env:VAR }}` template: 29 agree exactly. The one that
+    # does not is an upper-case SCHEME, which urlsplit lower-cases per RFC 3986
+    # ("HTTPS://HOST/P" -> "https://HOST/P") and the port leaves alone. Left as
+    # it is: the RFC behaviour is the right one and no defect sits behind it.
+    netloc = parts.netloc
+    at = netloc.rfind("@")
+    if at != -1:
+        netloc = netloc[at + 1 :]
     new_query = _redact_query(parts.query) if parts.query else ""
     return urlunsplit((parts.scheme, netloc, parts.path, new_query, parts.fragment))
 

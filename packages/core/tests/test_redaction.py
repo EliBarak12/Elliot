@@ -41,6 +41,42 @@ def test_redact_url_case_insensitive_param():
 # ── redact_value (dict scrubbing) ─────────────────────────────────────────
 
 
+def test_redact_url_does_not_raise_on_a_malformed_port():
+    """The docstring promises best-effort, and this function could raise.
+
+    ``urlsplit`` is lazy: it does not validate the port, ``parts.port`` does,
+    on access — which happened outside the try/except, so the guard could
+    never catch it. Reachable from an unauthenticated request: the public
+    POST /api/grader/submissions logs ``redact_url(url)`` as its first
+    statement, so a posted URL like this returned 500 Internal Server Error.
+    A redactor that raises turns the log line protecting the secret into the
+    thing that fails.
+    """
+    for url in (
+        "http://[::1]:notaport/x",
+        "http://host:99999999999999999999/x",
+        "http://host:-1/x",
+    ):
+        assert redact_url(url) == url
+
+
+def test_redact_url_keeps_an_ipv6_literal_bracketed():
+    """``parts.hostname`` strips the brackets, which unmakes the URL.
+
+    "http://[::1]:8000/mcp" came back as "http://::1:8000/mcp" — not a URL,
+    and ambiguous about where the address ends. The loopback form is an
+    everyday local MCP endpoint.
+    """
+    assert redact_url("http://[::1]:8000/mcp?token=x") == "http://[::1]:8000/mcp?token=***"
+    assert redact_url("http://[2001:db8::1]/x") == "http://[2001:db8::1]/x"
+    assert redact_url("http://user:pw@[::1]:8000/x") == "http://[::1]:8000/x"
+
+
+def test_redact_url_splits_userinfo_at_the_last_at():
+    """A password may itself contain an "@"."""
+    assert redact_url("postgresql://u:p@ss@host/db") == "postgresql://host/db"
+
+
 def test_redact_value_masks_top_level_secrets():
     out = redact_value({"api_key": "abc", "name": "x"})
     assert out == {"api_key": "***", "name": "x"}

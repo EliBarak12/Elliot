@@ -454,6 +454,28 @@ def test_high_impact_verb_in_description_counts_as_naming_the_mutation():
         assert not any(i.check == "mutation_hint" for i in result.issues), description
 
 
+def test_destructive_verb_in_description_counts_as_naming_the_mutation():
+    """Same hole, destructive half — see the linter test of the same name.
+
+    These are the verbs that make a tool destructive in the first place, so
+    each of these tools is gated behind confirmation while being told its
+    description names no mutation. `delete` and `remove` are in the base set,
+    which is what hid the other eight.
+    """
+    for verb in ("destroy", "drop", "erase", "purge", "reset", "revoke", "truncate", "wipe"):
+        description = f"{verb.capitalize()}s the archive by id. Irreversible."
+        tool = ToolDefinition(
+            id=f"{verb}_archive",
+            name=f"{verb}_archive",
+            description=description,
+            category="ACTION",
+            source_ids=["src"],
+            destructive=True,
+        )
+        result = analyze_tool_quality(tool)
+        assert not any(i.check == "mutation_hint" for i in result.issues), description
+
+
 def test_mutation_word_must_start_a_word():
     """`ban` and `void` are short enough that a substring test misfires.
 

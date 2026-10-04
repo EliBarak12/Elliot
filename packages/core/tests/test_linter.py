@@ -1151,6 +1151,30 @@ def test_write_tool_description_accepts_an_irreversible_verb() -> None:
         assert "WRITE_TOOL_DESCRIPTION" not in codes, description
 
 
+def test_write_tool_description_accepts_a_destructive_verb() -> None:
+    """The other half of the same hole, and the worse half.
+
+    HIGH_IMPACT_VERBS had been folded into the word set; DESTRUCTIVE_VERBS had
+    not — and those are the verbs that PUT a tool in the danger zone, so a tool
+    named for one was gated behind confirmation AND told its description does
+    not mention the mutation. The base set carries `delete` and `remove`, which
+    is why it looked covered; the other eight were not. Elliot Cloud's
+    connectorQuality.ts unions both sets, so until now the two graders
+    disagreed about these eight descriptions.
+    """
+    for verb in ("destroy", "drop", "erase", "purge", "reset", "revoke", "truncate", "wipe"):
+        description = f"{verb.capitalize()}s the archive by id. Irreversible."
+        cfg = _make_connector(
+            id=f"{verb}_archive",
+            description=description,
+            category="ACTION",
+            destructive=True,
+            sql=None,
+        )
+        codes = [i.code for i in lint_connector(cfg)]
+        assert "WRITE_TOOL_DESCRIPTION" not in codes, description
+
+
 def test_write_tool_description_still_flags_a_description_naming_no_mutation() -> None:
     cfg = _make_connector(
         id="handle_order",

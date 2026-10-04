@@ -155,15 +155,32 @@ _FILTER_SEMANTICS_RE = re.compile(
 # the connector page — so the suggestion "add the mutation verb" was shown for
 # a description that opens with one.
 #
+# DESTRUCTIVE_VERBS with it, which was the other half of the same hole and the
+# worse one: these are the verbs that PUT a tool in the danger zone, so a tool
+# named for one is simultaneously gated behind confirmation and told its
+# description does not mention the mutation. The base set happens to carry
+# `delete` and `remove`, which is why this looked covered; the other eight were
+# not. Measured against this regex: "Destroys/Drops/Erases/Purges/Resets/
+# Revokes/Truncates/Wipes the archive by id. Irreversible." all failed, eight
+# for eight.
+#
+# Elliot Cloud's connectorQuality.ts already unions both sets — its own note
+# says "Mirrors the mutation_words set in quality.py" — so until now the two
+# graders disagreed about those eight descriptions, and the mirror was the one
+# telling the truth. 21 words here against its 29.
+#
 # Word-START matching, not substring. `ban` and `void` are short enough to
 # misfire — "urban", "abandon" and "avoid" each contain one — while every
 # inflection the substring test caught ("Cancels", "created", "unpublishes")
-# still matches.
+# still matches. `drop` does match "dropdown" at a word start, which can only
+# make this check more lenient, never raise a false alarm — and it is how the
+# Cloud mirror has read descriptions all along.
 #
 # Defined here, like _VERB_RE, so the linter and the quality scan can never
 # drift apart on the same description again.
 _MUTATION_WORDS = (
     frozenset({"write", "create", "update", "delete", "send", "insert", "remove", "submit"})
+    | DESTRUCTIVE_VERBS
     | HIGH_IMPACT_VERBS
 )
 _MUTATION_RE = re.compile(r"\b(?:" + "|".join(sorted(_MUTATION_WORDS)) + r")", re.IGNORECASE)

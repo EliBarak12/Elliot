@@ -154,7 +154,11 @@ def _render_usage_skill(config: ConnectorConfig) -> str:
         "",
         intro,
     ]
-    if config.instructions:
+    # `.strip()`, the same test the runtime's briefing now makes: a
+    # whitespace-only `instructions` is truthy and added a blank paragraph to
+    # the exported guide — a gap where the connector's own orientation should
+    # be. The value itself is still written verbatim when there is one.
+    if config.instructions.strip():
         lines += ["", config.instructions]
     lines += [
         "",

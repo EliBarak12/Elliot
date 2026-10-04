@@ -659,7 +659,26 @@ def create_runtime_server(
     feedback_tool_name = _feedback_tool_name(prefix)
     task_tool_name = _task_tool_name(prefix)
 
-    instructions = cfg.instructions if cfg.instructions else derive_agent_briefing(cfg)
+    # `.strip()`, not truthiness: an `instructions` of "   " or "\n\n" is
+    # truthy, so the runtime served the whitespace AS the briefing and then
+    # rstrip()ped it away before appending the feedback paragraph below — the
+    # agent's entire orientation became that one sentence, with no product
+    # description, no read-vs-act split and no danger zone.
+    #
+    # Measured by assembling it exactly as this line does: instructions="   "
+    # served '   ' and instructions="\n\n" served '\n\n', while an empty
+    # string correctly derived "This MCP server exposes 'Acme' as agent-ready
+    # tools. Orders API. …". Cloud's own card disagrees with both: it asks the
+    # same question with `str(spec.get("instructions") or "").strip()`, so it
+    # shows the owner the derived briefing under "the first thing an agent
+    # reads when it connects" while agents read the whitespace.
+    #
+    # The author's text is untouched — a briefing with surrounding whitespace
+    # is still served verbatim; only the "is there one at all?" test changes.
+    # That is the test SkillDefinition already makes this way one package over
+    # (`not self.steps and not self.instructions.strip()` — "an empty skill
+    # does nothing"), on a field of the same name.
+    instructions = cfg.instructions if cfg.instructions.strip() else derive_agent_briefing(cfg)
     # Tell the agent the connector ships a feedback tool and to use it — the
     # tool only exists when there's an observation store to persist to, so the
     # instruction is conditional on the same thing the registration is.

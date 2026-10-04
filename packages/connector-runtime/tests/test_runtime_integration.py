@@ -1552,6 +1552,42 @@ def test_instructions_mention_feedback_tool_when_store_present(tmp_path: Path) -
     assert "submit_feedback" not in (mcp_no_store.instructions or "")
 
 
+def test_whitespace_only_instructions_still_get_the_derived_briefing(tmp_path: Path) -> None:
+    """A briefing of "   " is not a briefing.
+
+    ``instructions`` is a plain string with no default beyond "", so a
+    whitespace-only value is truthy — and the runtime used to serve it AS the
+    agent's briefing, then rstrip() it away before appending the feedback
+    paragraph, leaving that one sentence as the whole orientation. Cloud's
+    agent-briefing card asks the same question with ``.strip()``, so it showed
+    the owner a full derived briefing under "the first thing an agent reads
+    when it connects" while agents read the whitespace.
+    """
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.server import create_runtime_server
+
+    for blank in ("   ", "\n\n", "\t"):
+        raw = dict(MINIMAL_CONNECTOR)
+        raw["instructions"] = blank
+        cfg_path = tmp_path / "pets.connector.json"
+        cfg_path.write_text(json.dumps(raw))
+        config = ConnectorCache().get(cfg_path)
+        mcp = create_runtime_server(config, ToolExecutor(config, secrets={}))
+        assert "This MCP server exposes" in (mcp.instructions or ""), blank
+
+    # An authored briefing is still served verbatim, surrounding whitespace and
+    # all — only the "is there one at all?" test changed.
+    raw = dict(MINIMAL_CONNECTOR)
+    raw["instructions"] = "  Call list_pets first.  "
+    cfg_path = tmp_path / "pets2.connector.json"
+    cfg_path.write_text(json.dumps(raw))
+    config = ConnectorCache().get(cfg_path)
+    mcp = create_runtime_server(config, ToolExecutor(config, secrets={}))
+    assert (mcp.instructions or "").startswith("  Call list_pets first.  ")
+    assert "This MCP server exposes" not in (mcp.instructions or "")
+
+
 def test_slug_prefix_helpers_fall_back_without_slug() -> None:
     from elliot_connector_runtime.server import (
         _feedback_tool_name,

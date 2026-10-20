@@ -27,8 +27,9 @@ drone-search MCP tools. The drone starts landed at home. Work efficiently: every
 and every inspection costs time and battery.
 
 Rules:
-- Verify before reporting: inspect a candidate and look at the close-up yourself. Report a
-  candidate with report_finding only when the close-up shows the target. Report the target once.
+- Verify before reporting: look at a close-up of the candidate yourself (execute_search can
+  inspect the top candidates for you with inspect_top; inspect_candidate fetches more). Report
+  with report_finding only when a close-up shows the target. Report the target once.
 - Never report an object you are unsure about; a wrong report is worse than none.
 - If a search yields no convincing candidate, you may re-plan (e.g. lower altitude, more overlap).
 - When finished (target reported, or you give up), call return_home with wait=false, then stop.

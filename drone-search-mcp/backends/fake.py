@@ -62,6 +62,7 @@ class FakeBackend(DroneBackend):
             gimbal_pitch_deg=-90.0,
         )
         self._target: tuple[float, float, float] | None = None
+        self._hold_yaw: float | None = None
         self._speed = 5.0
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -120,7 +121,7 @@ class FakeBackend(DroneBackend):
             step = min(d, self._speed * dt)
             if d > 0.05:
                 t.lat, t.lon = offset(t.lat, t.lon, n / d * step, e / d * step)
-                t.yaw_rad = math.atan2(e, n)
+                t.yaw_rad = math.atan2(e, n) if self._hold_yaw is None else self._hold_yaw
                 t.heading_deg = math.degrees(t.yaw_rad) % 360
                 t.vn_ms, t.ve_ms = n / d * self._speed, e / d * self._speed
             else:
@@ -141,12 +142,15 @@ class FakeBackend(DroneBackend):
             self._t.mode = "GUIDED"
             self._target = (self._t.lat, self._t.lon, alt_m)  # type: ignore[assignment]
 
-    def goto(self, lat: float, lon: float, alt_rel_m: float, speed_ms: float | None = None) -> None:
+    def goto(
+        self, lat: float, lon: float, alt_rel_m: float, speed_ms: float | None = None, yaw_deg: float | None = None
+    ) -> None:
         with self._lock:
             if not self._t.armed:
                 raise BackendError("not armed")
             self._t.mode = "GUIDED"
             self._target = (lat, lon, alt_rel_m)
+            self._hold_yaw = None if yaw_deg is None else math.radians(yaw_deg)
             if speed_ms:
                 self._speed = speed_ms
 

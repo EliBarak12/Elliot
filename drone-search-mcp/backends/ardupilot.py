@@ -46,6 +46,7 @@ MODE_NAMES = {v: k for k, v in COPTER_MODES.items()}
 # ArduPilot EKF_STATUS_REPORT flags we need before arming in GUIDED
 EKF_REQUIRED = M.EKF_ATTITUDE | M.EKF_VELOCITY_HORIZ | M.EKF_POS_HORIZ_ABS | M.EKF_POS_VERT_ABS
 POSITION_ONLY_MASK = 0b0000_1101_1111_1000  # use lat/lon/alt, ignore vel/acc/yaw
+POSITION_YAW_MASK = POSITION_ONLY_MASK & ~0b0000_0100_0000_0000  # ... and hold the given yaw
 STREAMS_HZ = {
     M.MAVLINK_MSG_ID_GLOBAL_POSITION_INT: 20,
     M.MAVLINK_MSG_ID_ATTITUDE: 20,
@@ -260,7 +261,9 @@ class ArduPilotBackend(DroneBackend):
             raise BackendError(f"takeoff rejected (MAV_RESULT {res})")
         log.info("backend.takeoff.commanded", alt_m=alt_m)
 
-    def goto(self, lat: float, lon: float, alt_rel_m: float, speed_ms: float | None = None) -> None:
+    def goto(
+        self, lat: float, lon: float, alt_rel_m: float, speed_ms: float | None = None, yaw_deg: float | None = None
+    ) -> None:
         if self.telemetry().mode != "GUIDED":
             self.set_mode("GUIDED")
         if speed_ms is not None:
@@ -271,7 +274,7 @@ class ArduPilotBackend(DroneBackend):
                 self._mav.target_system,
                 self._mav.target_component,
                 M.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-                POSITION_ONLY_MASK,
+                POSITION_ONLY_MASK if yaw_deg is None else POSITION_YAW_MASK,
                 int(lat * 1e7),
                 int(lon * 1e7),
                 alt_rel_m,
@@ -281,7 +284,7 @@ class ArduPilotBackend(DroneBackend):
                 0,
                 0,
                 0,
-                0,
+                0 if yaw_deg is None else math.radians(yaw_deg),
                 0,
             )
 

@@ -132,9 +132,11 @@ class MissionRunner:
         tol_m: float = 1.5,
         timeout_s: float = 300,
         on_tick: Callable[[], None] | None = None,
+        hold_heading: bool = False,
     ) -> None:
+        yaw = self.backend.telemetry().heading_deg if hold_heading else None
         try:
-            self.backend.goto(lat, lon, alt, speed)
+            self.backend.goto(lat, lon, alt, speed, yaw_deg=yaw)
         except BackendError as exc:
             raise VehicleError(f"goto rejected: {exc}") from exc
         t0 = time.time()
@@ -358,7 +360,10 @@ class MissionRunner:
             refined: list[Detection] = []
             steps = [a for a in (max(inspect_alt, min(cruise, 14.0)), inspect_alt) if a < cruise + 0.5]
             for alt in dict.fromkeys(steps or [inspect_alt]):
-                self.fly_to(lat, lon, alt, 2.0, tol_m=0.8)
+                # hold the heading on these short moves: turning to face each one spins the
+                # camera and the frames are skipped as unsteady (hard-7011: yaw ~45 deg/s
+                # in the final frames, so a box in plain view was "not in the close-up")
+                self.fly_to(lat, lon, alt, 2.0, tol_m=0.8, hold_heading=True)
                 self._sleep(1.5)
                 found = self._reacquire(analyzer, lat, lon, cand.size_m, n_frames=4)
                 if found:
@@ -366,12 +371,12 @@ class MissionRunner:
                     lat = float(np.dot(w, [d.lat for d in found]) / w.sum())
                     lon = float(np.dot(w, [d.lon for d in found]) / w.sum())
                     refined = found
-            self.fly_to(lat, lon, inspect_alt, 1.5, tol_m=0.5)
+            self.fly_to(lat, lon, inspect_alt, 1.5, tol_m=0.5, hold_heading=True)
             self._sleep(1.5)
             zoom = self._zoom_in(analyzer, cand, lat, lon, inspect_alt)
             if zoom["lat"] is not None:
                 lat, lon = zoom["lat"], zoom["lon"]
-            f = self._fresh_frame(6.0)
+            f = self._steady_frame(6.0, analyzer.cfg.max_rotation_dps)
             if f is None:
                 raise VehicleError("no camera frame at the inspection point for 6 s (video link down?)")
             # crop from detections in *this* frame (boxes from earlier frames do not apply)
@@ -387,7 +392,7 @@ class MissionRunner:
                 log.info("mission.inspect.tele_miss", candidate=cand.id)
                 self.backend.set_zoom(1.0)
                 self._wait_zoom(f.camera.fx / zoom["zoom"])
-                wide = self._fresh_frame(6.0)
+                wide = self._steady_frame(6.0, analyzer.cfg.max_rotation_dps)
                 if wide is not None:
                     f, zoom["zoom"] = wide, 1.0
                     final = self._pick(analyzer.analyze(f, min_score=0.15), lat, lon, cand.size_m, drift_m=3.0)
@@ -444,7 +449,7 @@ class MissionRunner:
                 lat = float(np.dot(w, [d.lat for d in found]) / w.sum())
                 lon = float(np.dot(w, [d.lon for d in found]) / w.sum())
                 out.update(lat=lat, lon=lon)
-                self.fly_to(lat, lon, alt, 1.0, tol_m=0.3)
+                self.fly_to(lat, lon, alt, 1.0, tol_m=0.3, hold_heading=True)
                 self._sleep(1.0)
             out["zoom"] = applied
         return out
@@ -460,6 +465,24 @@ class MissionRunner:
                 return f
             time.sleep(0.1)
         return None
+
+    def _steady_frame(self, timeout_s: float, max_rate_dps: float) -> Frame | None:
+        """A fresh frame taken while the drone was steady enough for the analyzer, which skips
+        frames shot while it rotates; the last fresh frame if none is steady in time."""
+        t0 = time.time()
+        last: Frame | None = None
+        while time.time() - t0 < timeout_s:
+            f = self._fresh_frame(max(0.1, timeout_s - (time.time() - t0)))
+            if f is None:
+                break
+            if f.pose.tilt_rate_dps <= max_rate_dps:
+                return f
+            if last is None or f.seq != last.seq:
+                last = f
+            time.sleep(0.1)
+        if last is not None:
+            log.info("mission.frame.unsteady", rate_dps=round(last.pose.tilt_rate_dps, 1))
+        return last
 
     def _wait_zoom(self, fx_target: float, timeout_s: float = 5.0) -> None:
         t0 = time.time()

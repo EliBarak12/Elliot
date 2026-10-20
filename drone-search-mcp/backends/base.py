@@ -123,8 +123,13 @@ class DroneBackend(abc.ABC):
     def arm_and_takeoff(self, alt_m: float) -> None: ...
 
     @abc.abstractmethod
-    def goto(self, lat: float, lon: float, alt_rel_m: float, speed_ms: float | None = None) -> None:
-        """Start flying to a point; returns once commanded."""
+    def goto(
+        self, lat: float, lon: float, alt_rel_m: float, speed_ms: float | None = None, yaw_deg: float | None = None
+    ) -> None:
+        """Start flying to a point; returns once commanded.
+
+        ``yaw_deg`` holds that heading on the way; None lets the autopilot turn to face the
+        direction of travel (which spins the camera on short re-centring moves)."""
 
     @abc.abstractmethod
     def set_mode(self, mode: str, timeout_s: float = 5.0) -> None:

@@ -300,3 +300,11 @@ Run easy-6000 (person): success, 1.82 m of which **0.12 m** without the GPS bias
 * "object_in_closeup: false" while the close-up clearly showed the person: CLIP gives a
   zoomed top-down person a weak text cue (0.12; score 0.39). The final close-up check runs
   with a lower threshold near the re-acquired position, since the drone is hovering on it.
+
+Run hard-6002: **never flew** — EKF3 stayed unconverged and home unset for the whole
+session. The simulated GPS bias random walk stepped every 0.2 s, so a parked receiver
+appeared to move at ~0.3 m/s and EKF3's pre-arm GPS checks never passed. Fixes for v5:
+the bias is now low-passed over 10 s (still 1–2 m, wandering over minutes, like a real
+receiver); `state.waiting_for` tells the agent what the vehicle still needs before it can
+fly; `plan_search` waits for a `set_search_target` issued in parallel instead of failing
+(agents keep doing this).

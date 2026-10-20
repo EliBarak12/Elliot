@@ -115,6 +115,10 @@ class DroneSearchServer:
             self.runner.frame_dump = out_dir / "frames"
         self.safety.on_reserve(lambda: self.runner.request_abort("battery reserve reached"))
         self.target: TargetSpec | None = None
+        # set while no set_search_target is computing; plan_search waits on it, since agents
+        # often issue set_search_target and plan_search in parallel
+        self._target_pending = threading.Event()
+        self._target_pending.set()
         self.target_info: dict[str, Any] = {}
         self.plans: dict[str, SearchPlan] = {}
         self.tracker = CandidateTracker()
@@ -159,8 +163,24 @@ class DroneSearchServer:
             "gps_fix": t.gps_fix,
             "ekf_ok": t.ekf_ok,
             "busy_with": self.runner.active,
+            "waiting_for": self._waiting_for(t),
             "battery_reserve_triggered": self.safety.state.reserve_triggered,
         }
+
+    def _waiting_for(self, t: Any) -> str | None:
+        """What the vehicle still needs before it can fly, in words an agent can act on."""
+        if t.armed:
+            return None
+        missing = []
+        if t.gps_fix < 3:
+            missing.append("a GPS 3D fix")
+        if not t.ekf_ok:
+            missing.append("the EKF to converge (GPS/compass checks; see get_status.status_text)")
+        if t.home_lat is None:
+            missing.append("home to be set (follows EKF convergence)")
+        if not missing:
+            return None
+        return "ready to fly once it has " + " and ".join(missing) + "; flight tools wait for this automatically"
 
     def respond(self, payload: dict[str, Any], images: list[McpImage] | None = None) -> Any:
         payload["state"] = self.state()
@@ -286,7 +306,11 @@ class DroneSearchServer:
                 raise InvalidArgument(f"cannot read image {p}: {exc}") from exc
         if object_size_m is not None and not 0.05 <= object_size_m <= 30:
             raise InvalidArgument("object_size_m must be between 0.05 and 30 metres")
-        self.target = build_target(text, ref, object_size_m)
+        self._target_pending.clear()
+        try:
+            self.target = build_target(text, ref, object_size_m)
+        finally:
+            self._target_pending.set()
         self.tracker = CandidateTracker(merge_radius_m=max(3.0, self.target.size_m * 0.75))
         self.target_info = {
             "text": text,
@@ -327,6 +351,14 @@ class DroneSearchServer:
             poly = circle_polygon(center_lat, center_lon, radius_m)
         else:
             raise InvalidArgument("give area_polygon, or center_lat + center_lon + radius_m")
+        if self.target is None and altitude_m is None:
+            # give a set_search_target issued in parallel a moment to start, then let it finish
+            t0 = time.time()
+            while self.target is None and time.time() - t0 < 5.0:
+                if not self._target_pending.is_set():
+                    self._target_pending.wait(120)
+                    break
+                time.sleep(0.1)
         if self.target is None and altitude_m is None:
             # The altitude is derived from the target size; planning first gives a plan
             # that would silently have to be redone (seen when an agent ran the two calls

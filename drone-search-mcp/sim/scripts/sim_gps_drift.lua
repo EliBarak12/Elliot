@@ -9,7 +9,12 @@
 --   SCR_USER3: random seed
 
 local DEG_PER_M = 1.0 / 111319.5
-local bx, by = 0.0, 0.0
+local rx, ry = 0.0, 0.0   -- mean-reverting random walk
+local bx, by = 0.0, 0.0   -- applied bias: the walk low-passed over SMOOTH_S
+local SMOOTH_S = 10.0
+-- Without the low-pass the bias stepped every 0.2 s, a parked GPS appeared to move at
+-- ~0.3 m/s and EKF3's pre-arm GPS checks never passed (v4 run hard-6002). Real receiver
+-- error wanders smoothly over minutes.
 local seeded = false
 
 local function gauss()
@@ -24,7 +29,8 @@ local function update()
   if not seeded then
     math.randomseed(math.floor(param:get("SCR_USER3") or 1))
     -- start somewhere on the stationary distribution, not at zero
-    bx, by = sigma * gauss(), sigma * gauss()
+    rx, ry = sigma * gauss(), sigma * gauss()
+    bx, by = rx, ry
     seeded = true
   end
   if sigma <= 0 then
@@ -33,8 +39,11 @@ local function update()
   local dt = 0.2
   local a = math.exp(-dt / tau)
   local q = sigma * math.sqrt(1 - a * a)
-  bx = a * bx + q * gauss()
-  by = a * by + q * gauss()
+  rx = a * rx + q * gauss()
+  ry = a * ry + q * gauss()
+  local k = dt / SMOOTH_S
+  bx = bx + (rx - bx) * k
+  by = by + (ry - by) * k
   param:set("SIM_GPS1_GLTCH_X", bx * DEG_PER_M)
   param:set("SIM_GPS1_GLTCH_Y", by * DEG_PER_M / math.cos(math.rad(47.4)))
   return update, 200

@@ -152,7 +152,7 @@ class MissionRunner:
     ) -> SearchReport:
         t_start = time.time()
         b0 = self.backend.telemetry().battery_pct
-        frames: dict[str, float] = {"n": 0, "last_seq": -1, "analysis_s": 0.0}
+        frames: dict[str, float] = {"n": 0, "last_seq": -1, "analysis_s": 0.0, "last_t": 0.0}
         flown: dict[str, Any] = {"m": 0.0, "last": None}
         covered: set[tuple[int, int]] = set()
         cell = 4.0  # coverage grid, metres
@@ -171,11 +171,14 @@ class MissionRunner:
             if p.alt_rel_m is None or p.alt_rel_m < plan.altitude_m * 0.8:
                 return
             self._save_frame(f)
-            t0 = time.time()
             dets = analyzer.analyze(f)
-            frames["analysis_s"] = (
-                0.8 * frames["analysis_s"] + 0.2 * (time.time() - t0) if frames["n"] else time.time() - t0
-            )
+            # Analysis interval in *vehicle* time (frame stamps): the drone flies in sim time,
+            # and with the simulator at 0.3x real time a wall-clock measure slowed it to
+            # 2.9 m/s although vision kept up (v3 easy-5000). On hardware both clocks agree.
+            if frames["last_t"] > 0:
+                dt = max(0.05, f.timestamp - frames["last_t"])
+                frames["analysis_s"] = 0.8 * frames["analysis_s"] + 0.2 * dt if frames["analysis_s"] else dt
+            frames["last_t"] = f.timestamp
             tracker.note_coverage(f)
             tracker.add(dets)
             self._log_detections(f, dets)

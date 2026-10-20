@@ -252,3 +252,16 @@ Chasing it with a live diagnostic (camera pose from Gazebo vs projection) found:
    (p90 3.3) vs composition 2.40 m (p90 3.8); this run's GPS bias alone was ~2 m.
 
 Also: EKF3 can take >90 s to converge from a cold start under load; arming waits 180 s.
+
+### v3 run easy-5000: success (1.74 m, of which 0.99 m GPS bias) but 753 s — fixes for v4
+
+* The search took 455 s for a 100 m square: the drone averaged 2.9 m/s. The speed governor
+  ("each spot analysed in ≥2 frames") measured the vision interval in wall-clock time while
+  the drone flies in sim time; the simulator ran at ~0.3× real time, so it throttled a
+  drone whose vision was keeping up (0.7 sim-s per frame). Now measured from frame stamps.
+* Proposals capped at 24 per frame (the wider size window + shadow fragments had raised
+  CLIP load, slowing the whole simulation).
+* Zoomed close-ups: the background kernel (a few metres on the ground) became larger than
+  the frame at zoom ×4 and swallowed the object ("object_in_closeup: false" while the
+  image showed it). Kernel capped at half the frame; the object is now proposed.
+* Agent note: it did not use `inspect_top`; the eval system prompt predates it.

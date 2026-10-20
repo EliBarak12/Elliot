@@ -43,7 +43,7 @@ class ProposalConfig:
     k_sigma: float = 3.0
     min_size_m: float = 0.15
     max_size_m: float = 8.0
-    max_proposals: int = 40
+    max_proposals: int = 24
     suppress_shadows: bool = True
     shadow_max_brightness: float = 0.8  # pixel/background brightness below this ...
     shadow_max_chroma: float = 0.06  # ... with chromaticity this close = shadow
@@ -57,7 +57,9 @@ def propose(image: np.ndarray, gsd_m: float, cfg: ProposalConfig | None = None) 
     small = cv2.resize(image, (image.shape[1] // ds, image.shape[0] // ds), interpolation=cv2.INTER_AREA)
     lab = cv2.cvtColor(small, cv2.COLOR_RGB2LAB).astype(np.float32)
     gsd_small = gsd_m * ds
-    k = int(max(15, round(cfg.bg_blur_m / gsd_small))) | 1
+    # background scale: a few metres on the ground, but never more than half the frame
+    # (zoomed close-ups have a tiny GSD; a frame-sized kernel swallowed the object itself)
+    k = int(min(max(15, round(cfg.bg_blur_m / gsd_small)), min(small.shape[:2]) // 2)) | 1
     # median is robust to the objects themselves; run it on a further-downsampled copy
     f = 4
     tiny = cv2.resize(lab, (lab.shape[1] // f, lab.shape[0] // f), interpolation=cv2.INTER_AREA)

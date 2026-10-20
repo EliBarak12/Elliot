@@ -161,5 +161,6 @@ def compare(closeup: Palette | None, reference: Palette | None) -> dict[str, obj
         "reference_object": _describe(reference),
         "colour_difference": round(d, 2),
         "verdict": verdict,
-        "note": "Measured on the central object (shadows excluded); lighting differs between the photos.",
+        "note": "Measured on the central object (shadows excluded); lighting differs between the photos, and a "
+        "partly hidden object is measured together with what covers it (e.g. foliage).",
     }

@@ -60,8 +60,9 @@ Typical flow:
 4. execute_search(plan_id, inspect_top=3) - flies the whole pattern autonomously, then
    inspects the best candidates and returns each close-up next to your reference. Vision
    runs on every frame in code; you do not need to look at raw frames.
-5. Compare the close-ups with the reference yourself. inspect_candidate can fetch more
-   close-ups (e.g. a candidate further down the list) if none of them is the target.
+5. Compare the close-ups with the reference yourself. list_candidates shows candidates
+   beyond the first page (no flying); inspect_candidate fetches more close-ups if none of
+   the inspected ones is the target.
 6. report_finding - report the confirmed candidate (once per target), then return_home.
 
 Every tool response ends with `state`, read from live telemetry after the action.
@@ -483,6 +484,13 @@ class DroneSearchServer:
             payload["next_step"] = (
                 "No candidates. Consider a lower altitude (larger target in pixels), more overlap, or a different area."
             )
+        hidden = len([c for c in report.candidates if c.status != "rejected"]) - len(top)
+        if hidden > 0:
+            # an agent re-flew a whole search just to see candidates beyond the first six (hard-8008)
+            payload["more_candidates"] = (
+                f"{hidden} more candidates are not shown. list_candidates(offset={len(top)}) returns them with "
+                "thumbnails without flying."
+            )
         images = [self._thumb(c) for c in top]
         image_list = [f"{c.id} thumbnail" for c in top]
         if inspect_top and top and not self.safety.state.reserve_triggered:
@@ -524,6 +532,23 @@ class DroneSearchServer:
             left.remove(nxt)
             pos = (nxt.lat, nxt.lon)
         return order
+
+    def list_candidates(self, offset: int, max_candidates: int) -> Any:
+        ranked = [c for c in self.tracker.ranked() if c.status != "rejected"]
+        page = ranked[offset : offset + max_candidates]
+        payload: dict[str, Any] = {
+            "n_candidates_total": len(ranked),
+            "offset": offset,
+            "candidates": [self._candidate_dict(c) for c in page],
+        }
+        if not ranked:
+            payload["next_step"] = "No candidates yet: run execute_search first."
+        elif offset + len(page) < len(ranked):
+            payload["more_candidates"] = f"list_candidates(offset={offset + len(page)}) returns the next ones."
+        images = [self._thumb(c) for c in page]
+        if images:
+            payload["images"] = [f"{c.id} thumbnail" for c in page]
+        return self.respond(payload, images)
 
     def inspect_candidate(self, candidate_id: str, altitude_m: float | None) -> Any:
         self.safety.require_actuation()
@@ -799,6 +824,15 @@ def build_mcp(srv: DroneSearchServer) -> FastMCP:
         pipeline checks every camera frame. Blocks until the pattern is done or aborted, then
         returns ranked, deduplicated candidates with GPS, confidence and a thumbnail each."""
         return srv.call("execute_search", srv.execute_search, plan_id, max_candidates, inspect_top)
+
+    @mcp.tool(annotations=RO)
+    def list_candidates(
+        offset: Annotated[int, Field(description="Skip this many top-ranked candidates.", ge=0)] = 0,
+        max_candidates: Annotated[int, Field(description="How many to return.", ge=1, le=12)] = 12,
+    ) -> Any:
+        """List the candidates found so far, ranked, with GPS, confidence and a thumbnail each.
+        Does not fly: use it to see candidates beyond those execute_search returned."""
+        return srv.call("list_candidates", srv.list_candidates, offset, max_candidates)
 
     @mcp.tool(annotations=FLY)
     def inspect_candidate(

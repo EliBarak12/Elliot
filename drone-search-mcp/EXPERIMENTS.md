@@ -338,3 +338,35 @@ candidate id and responses list their images in order (0b49e37). The
 `object_in_closeup: false` complaints in easy/medium runs are the same heading bug.
 
 Every v5 run has a trace page and a flight video (`output/traces/`, `output/videos/`).
+
+## v6 (commit d95486a) — the v5 fixes, 21 new scenarios
+
+| tier | runs | success | median error | max error | false reports / 20 | median time | median calls |
+|---|---|---|---|---|---|---|---|
+| all | 21 | 81.0% | 1.75 m | 3.54 m | 2.86 | 283 s | 5 |
+| easy | 7 | 100% | 1.72 m | 2.84 m | 0 | 199 s | 5 |
+| medium | 7 | 100% | 1.91 m | 3.54 m | 0 | 301 s | 5 |
+| hard | 7 | 42.9% | 1.32 m | 2.15 m | 8.57 | 373 s | 6 |
+
+Median error without the true GPS bias: 0.56 m. The target became a candidate in 95% of
+runs (v5: 86%). The v5 fixes worked as intended in flight: close-ups were steady and
+labelled, `object_in_closeup` agreed with the images, and no white-vs-beige mistake recurred.
+(The run was restarted once after its first two runs, to replace a colour check that read
+a red backpack's reference as black; a container restart later interrupted it once and it
+resumed from its results file.)
+
+Failures (all hard tier, all objects under or near trees):
+
+| run | what happened | fix (commit) |
+|---|---|---|
+| hard-8002 | blue car under cover never became a candidate; agent correctly reported nothing. The colour check called two white cars "same colours" as the blue reference (it matched the reference's grey windows) | the reference's saturated colour must appear in the close-up (281bdf8) |
+| hard-8011 | false report: a second red backpack; all three close-ups matched the reference's colours and the target (ranked 7th) was never inspected | `lookalikes` note naming matching close-ups and uninspected strong candidates (666805f) |
+| hard-8014 | false report: the decoy backpack; the target was inspected but straight down showed only canopy, and the decoy's colour was measured on sunlit grass | attach the search-time view when the close-up's colours do not match but the search view's do; ignore sunlit/shaded ground in colour measurement (9c53ff6) |
+| hard-8020 | false report: the decoy backpack again; target (a "small red spot under trees", ranked 4th) not inspected | covered by the `lookalikes` note (it would have listed the target) |
+
+Efficiency: hard-8008 succeeded but re-flew the whole search to see candidates beyond the
+first six (10 calls, 528 s) → `list_candidates` pages through them without flying (49990e5).
+Agent-reported confusion also led to `not_seen_in_closeup` (faint reference colours, e.g.
+jeans from above, that the close-up does not show; 6e5d22d).
+
+Every v6 run has a trace page and a flight video (`output/traces/`, `output/videos/`).

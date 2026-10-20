@@ -6,3 +6,4 @@ output/
 eval/results/*/
 *.mp4
 !docs/media/*.mp4
+eval/*.log

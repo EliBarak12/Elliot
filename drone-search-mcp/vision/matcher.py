@@ -138,8 +138,8 @@ def object_mask(ref: np.ndarray) -> np.ndarray:
         spread = float(np.median(np.linalg.norm(members - centers[c], axis=1))) + 1e-3
         dists.append(np.linalg.norm(lab - centers[c], axis=2) / max(12.0, 4 * spread))
     dist = np.min(np.stack(dists), axis=0)
-    mask = (dist > 1.0).astype(np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    mask = cv2.morphologyEx((dist > 1.0).astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
 
     def spans_image(i: int) -> bool:

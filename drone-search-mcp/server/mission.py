@@ -368,6 +368,18 @@ class MissionRunner:
             # CLIP scores a zoomed top-down person poorly (0.12 text cue, run easy-6000) and a
             # false "object_in_closeup: false" contradicts the image the agent is looking at.
             final = self._pick(analyzer.analyze(f, min_score=0.15), lat, lon, cand.size_m, drift_m=3.0)
+            if not final and zoom["zoom"] > 1.0:
+                # The telephoto view is only ~4 m across at 12 m: GPS drift or a canopy edge can
+                # leave the object just outside it, and the agent then sees only grass or shade
+                # (target rejected in hard-7005). Fall back to the wide view, which shows the
+                # whole neighbourhood of the candidate.
+                log.info("mission.inspect.tele_miss", candidate=cand.id)
+                self.backend.set_zoom(1.0)
+                self._wait_zoom(f.camera.fx / zoom["zoom"])
+                wide = self._fresh_frame(6.0)
+                if wide is not None:
+                    f, zoom["zoom"] = wide, 1.0
+                    final = self._pick(analyzer.analyze(f, min_score=0.15), lat, lon, cand.size_m, drift_m=3.0)
             closeup, box = self._closeup(f, final, lat, lon, cand.size_m)
             out_dir.mkdir(parents=True, exist_ok=True)
             path = out_dir / f"closeup_{cand.id}.jpg"

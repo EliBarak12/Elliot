@@ -32,6 +32,34 @@ def test_inspect_reacquires_object_after_gps_drift(tmp_path) -> None:
         b.close()
 
 
+class _TeleMissBackend(FakeBackend):
+    """The object never shows in the telephoto view (off-centre by drift, or a canopy edge)."""
+
+    def render(self, pose):  # type: ignore[no-untyped-def]
+        if self.zoom > 1.0:
+            h, w = self.cam.height, self.cam.width
+            return np.tile(self._grass, (h // 64 + 1, w // 64 + 1, 1))[:h, :w].copy()
+        return super().render(pose)
+
+
+@pytest.mark.slow
+def test_inspect_falls_back_to_wide_view_when_tele_misses(tmp_path) -> None:
+    b = _TeleMissBackend([FakeObject(30, 20, 0.6, (200, 20, 20))], speedup=30)
+    b.connect()
+    try:
+        runner = MissionRunner(b, FlightRecorder(b, tmp_path, enabled=False), EnergyModel())
+        target = build_target("a red box", None, 0.6)
+        lat, lon = offset(*HOME, 30, 20)
+        cand = Candidate(
+            "c1", lat, lon, 0.7, 3, 3, np.zeros((8, 8, 3), np.uint8), CropScore(0.7, 0.7, None, None, 1.0), 0.6, 1
+        )
+        res = runner.run_inspect(cand, FrameAnalyzer(target), 20.0, 8.0, tmp_path)
+        # the agent gets the wide frame with the object in it, not empty telephoto grass
+        assert res["object_in_final_frame"] and res["zoom"] == 1.0 and b.zoom == 1.0
+    finally:
+        b.close()
+
+
 @pytest.mark.slow
 def test_execute_search_with_inspections_end_to_end(tmp_path) -> None:
     import asyncio

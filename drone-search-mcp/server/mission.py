@@ -41,6 +41,17 @@ class SearchReport:
     candidates: list[Candidate] = field(default_factory=list)
 
 
+def choose_zoom(px_at_1x: float, frame_px: int, target_px: float, max_zoom: float) -> float:
+    """Zoom as far as keeps the object within half the frame, and at least to ``target_px``.
+
+    Asking for "just enough" (1.8x for a 1.6 m candidate) fell below the 2x switch point of a
+    wide/tele camera pair and gave an unzoomed close-up of a look-alike (hard-7008). A miss
+    caused by the narrower view is handled by the wide-view fallback in run_inspect.
+    """
+    fit = 0.5 * frame_px / px_at_1x
+    return float(np.clip(max(target_px / px_at_1x, fit), 1.0, max_zoom))
+
+
 class MissionRunner:
     """Owns the vehicle while a routine runs. Only one routine at a time."""
 
@@ -418,7 +429,8 @@ class MissionRunner:
         if self.backend.max_zoom <= 1.0 or f is None:
             return out
         base_fx = f.camera.fx
-        want = float(np.clip(target_px / (cand.size_m * base_fx / alt), 1.0, self.backend.max_zoom))
+        px_at_1x = cand.size_m * base_fx / alt
+        want = choose_zoom(px_at_1x, min(f.camera.width, f.camera.height), target_px, self.backend.max_zoom)
         if want < 1.3:
             return out
         for z in (want,):

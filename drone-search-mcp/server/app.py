@@ -497,7 +497,8 @@ class DroneSearchServer:
             payload["how_to_read"] = (
                 "`images` lists the attached images in order; each image is also labelled with its candidate id. "
                 "Close-ups show the drone view (left) beside your reference (right). Compare each close-up with "
-                "the reference and call report_finding for the one that is the target (or none)."
+                "the reference, including colours and other details (look-alikes of the same kind are common), and call "
+                "report_finding for the one that is the target (or none)."
             )
         if images:
             payload["images"] = image_list
@@ -579,7 +580,9 @@ class DroneSearchServer:
             "position_refined_by_m": round(res["refined_shift_m"], 1),
             "closeup_image_path": res["closeup_path"],
             "question_for_you": (
-                f"Does the close-up show {self.target.label}? If yes, call report_finding("
+                f"Does the close-up show {self.target.label}? Check the distinguishing details (colours, "
+                "clothing, markings) against the reference: the area may hold look-alikes of the same kind. "
+                f"If yes, call report_finding("
                 f"'{c.id}', confidence, notes). If not, inspect the next candidate."
             ),
         }

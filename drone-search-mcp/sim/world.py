@@ -185,11 +185,12 @@ def world_sdf(scenario: dict[str, Any] | None = None, name: str = "search_field"
     return "".join(parts)
 
 
-def studio_sdf(model_uri: str, cam_dist: float, cam_pitch: float, cam_yaw: float) -> str:
-    """A neutral backdrop with one object and an oblique camera, for reference photos."""
+def studio_sdf(model_uri: str, cam_dist: float, cam_pitch: float, cam_yaw: float, aim_z: float = 0.0) -> str:
+    """A neutral backdrop with one object and an oblique camera, for reference photos.
+    The camera looks at height ``aim_z`` (mid-height of tall objects, so they are not cut)."""
     cx = -cam_dist * math.cos(cam_pitch) * math.cos(cam_yaw)
     cy = -cam_dist * math.cos(cam_pitch) * math.sin(cam_yaw)
-    cz = cam_dist * math.sin(cam_pitch)
+    cz = aim_z + cam_dist * math.sin(cam_pitch)
     return f"""<?xml version="1.0" ?>
 <sdf version="1.9">
   <world name="studio">

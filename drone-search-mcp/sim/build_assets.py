@@ -311,6 +311,41 @@ def fix_texture_refs() -> None:
         mtl.write_text("\n".join(lines) + "\n")
 
 
+def uniquify_materials() -> None:
+    """Make every material and texture name unique per model.
+
+    Ogre caches materials and textures by *name*. The three Fuel hatchbacks all define a
+    material "Hatchback" with texture "hatchback.png", so in a scene with several of them
+    every car rendered with whichever loaded first: the white "distractor" was a second blue
+    car (found when an agent reported it, run hard-3005). Prefix names with the model slug.
+    """
+    for model in (GEN / "models").iterdir():
+        slug = model.name
+        for mtl in model.rglob("*.mtl"):
+            txt = mtl.read_text(errors="ignore")
+            names = re.findall(r"^\s*newmtl\s+(\S+)", txt, flags=re.M)
+            for n in names:
+                if n.startswith(f"{slug}__"):
+                    continue
+                txt = re.sub(rf"^(\s*newmtl\s+){re.escape(n)}\s*$", rf"\g<1>{slug}__{n}", txt, flags=re.M)
+                for obj in mtl.parent.glob("*.obj"):
+                    o = obj.read_text(errors="ignore")
+                    o = re.sub(rf"^(usemtl\s+){re.escape(n)}\s*$", rf"\g<1>{slug}__{n}", o, flags=re.M)
+                    obj.write_text(o)
+            lines = []
+            for line in txt.splitlines():
+                m = re.match(r"(\s*map_\w+\s+)(\S+)\s*$", line)
+                if m:
+                    src = (mtl.parent / m.group(2)).resolve()
+                    if src.exists() and not src.name.startswith(f"{slug}__"):
+                        dst = src.with_name(f"{slug}__{src.name}")
+                        if not dst.exists():
+                            shutil.copy(src, dst)
+                        line = m.group(1) + os.path.relpath(dst, mtl.parent)
+                lines.append(line)
+            mtl.write_text("\n".join(lines) + "\n")
+
+
 def main() -> None:
     import json
 
@@ -322,6 +357,7 @@ def main() -> None:
     derive_models(a.ardupilot_gazebo)
     localise_fuel_models()
     fix_texture_refs()
+    uniquify_materials()
     (GEN / "camera.json").write_text(json.dumps(CAMERA, indent=2))
     print(f"assets written to {GEN}")
 

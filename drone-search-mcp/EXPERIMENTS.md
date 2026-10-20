@@ -170,3 +170,24 @@ the close-up from detections in the *final* frame (it used boxes from an earlier
 frame). If nothing is re-detected the agent gets the full frame too, plus
 `object_in_closeup: false`. Test: `tests/test_inspect_reacquire.py` (candidate 4 m off →
 re-centred within 1 m).
+
+### v2 run hard-3005: false report — caused by the simulator, not the agent
+
+Target: blue hatchback, occluded under a tree. The agent reported "c6", a blue hatchback,
+with confidence 0.55 and a note that c5 looked identical. Ground truth said c6 was the
+*white* car. Both close-ups do show blue hatchbacks: **all three Fuel hatchbacks declare a
+material named `Hatchback` with texture `hatchback.png`, and Ogre caches materials by name,
+so in a scene with several of them every car rendered blue.** Single-object reference
+renders never showed it. Every scenario with a red/white hatchback distractor was unfair
+until now. Fix: asset build prefixes every material and texture with the model slug
+(verified: white, red and blue render side by side). Note: the running v2 eval shares the
+generated assets, so v2 runs 7+ have the fix, runs 1–6 did not.
+
+Second problem in the same run: the reference photo's top border is sky. The single-median
+background picked the sky strip as the "object", CLIP labelled it "grey person", and the
+agent was shown that crop as the reference ("I couldn't view the reference image myself").
+Fixes: background = k-means clusters of border colours (a pixel is foreground only if far
+from all of them); regions spanning the image edge to edge are rejected; reference renders
+aim at the object's mid-height so tall objects (people) are not cut off.
+
+Open: the occluded target never became a candidate (to diagnose from the saved frames).

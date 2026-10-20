@@ -19,8 +19,9 @@ def test_inspect_reacquires_object_after_gps_drift(tmp_path) -> None:
         runner = MissionRunner(b, FlightRecorder(b, tmp_path, enabled=False), EnergyModel())
         target = build_target("a red box", None, 0.6)
         lat, lon = offset(*HOME, 30 + 3.0, 20 - 2.6)
-        cand = Candidate("c1", lat, lon, 0.7, 3, 3, np.zeros((8, 8, 3), np.uint8), CropScore(0.7, 0.7, None, None, 1.0),
-                         0.6, 1)
+        cand = Candidate(
+            "c1", lat, lon, 0.7, 3, 3, np.zeros((8, 8, 3), np.uint8), CropScore(0.7, 0.7, None, None, 1.0), 0.6, 1
+        )
         res = runner.run_inspect(cand, FrameAnalyzer(target), 20.0, 8.0, tmp_path)
         true = offset(*HOME, 30, 20)
         assert res["redetected"] and res["object_in_final_frame"]

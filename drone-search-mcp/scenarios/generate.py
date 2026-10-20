@@ -57,7 +57,7 @@ TARGETS: dict[str, dict[str, Any]] = {
         "uri": "model://blue_car",
         "text": "a blue hatchback car",
         "size_m": 4.2,
-        "ref": {"dist": 11.0, "pitch": (12, 35)},
+        "ref": {"dist": 12.0, "pitch": (12, 35), "aim_z": 0.7},
         "lookalikes": [
             "model://red_car",
             "model://white_car",
@@ -71,7 +71,7 @@ TARGETS: dict[str, dict[str, Any]] = {
         "uri": "model://person_standing",
         "text": "a person in a white t-shirt and blue jeans",
         "size_m": 0.6,
-        "ref": {"dist": 4.5, "pitch": (5, 25)},
+        "ref": {"dist": 6.5, "pitch": (5, 25), "aim_z": 0.9},
         "lookalikes": ["model://person_casual", "model://white_cylinder", "model://postbox"],
     },
     "white_box": {
@@ -317,6 +317,8 @@ def render_reference(info: dict[str, Any]) -> bool:
         f"{rng.uniform(*ref['pitch']):.1f}",
         "--yaw",
         f"{rng.uniform(0, 360):.1f}",
+        "--aim-z",
+        str(ref.get("aim_z", 0.0)),
     ]
     return subprocess.run(cmd, capture_output=True, timeout=240).returncode == 0
 

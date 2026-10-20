@@ -110,27 +110,50 @@ def guess_object_noun(text: str) -> str | None:
 
 
 def object_mask(ref: np.ndarray) -> np.ndarray:
-    """Foreground mask of a reference photo. Assumes the object is roughly central and the
-    border pixels are background (true for studio shots and most "lost item" photos)."""
+    """Foreground mask of a reference photo.
+
+    The background is whatever dominates the image border - often more than one colour
+    (floor + sky, grass + road), so border pixels are clustered and a pixel is foreground
+    only if it is far from *every* background cluster. Regions that run along the border
+    (horizon bands, table edges) are not the object; a single median background picked the
+    sky strip of a car photo and labelled it "grey person" (run hard-3005).
+    """
     lab = cv2.cvtColor(ref, cv2.COLOR_RGB2LAB).astype(np.float32)
     h, w = lab.shape[:2]
     b = max(2, min(h, w) // 20)
     border = np.concatenate(
         [lab[:b].reshape(-1, 3), lab[-b:].reshape(-1, 3), lab[:, :b].reshape(-1, 3), lab[:, -b:].reshape(-1, 3)]
     )
-    bg = np.median(border, axis=0)
-    spread = np.median(np.linalg.norm(border - bg, axis=1)) + 1e-3
-    dist = np.linalg.norm(lab - bg, axis=2)
-    mask = (dist > max(12.0, 4 * spread)).astype(np.uint8)
+    k = 3
+    _, lbl, centers = cv2.kmeans(
+        border, k, None, (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0), 3, cv2.KMEANS_PP_CENTERS
+    )
+    lbl = lbl.ravel()
+    dists = []
+    for c in range(k):
+        members = border[lbl == c]
+        if len(members) < 0.05 * len(border):  # a few border pixels of the object itself
+            continue
+        spread = float(np.median(np.linalg.norm(members - centers[c], axis=1))) + 1e-3
+        dists.append(np.linalg.norm(lab - centers[c], axis=2) / max(12.0, 4 * spread))
+    dist = np.min(np.stack(dists), axis=0)
+    mask = (dist > 1.0).astype(np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
-    if n <= 1:
+
+    def spans_image(i: int) -> bool:
+        # horizon bands / table edges run edge to edge; a tall subject cut by one edge does not
+        x, y, bw, bh = stats[i, 0], stats[i, 1], stats[i, 2], stats[i, 3]
+        return bool((x <= 1 and x + bw >= w - 1) or (y <= 1 and y + bh >= h - 1))
+
+    cands = [i for i in range(1, n) if stats[i, 4] > 0.001 * h * w and not spans_image(i)]
+    if not cands:
         m = np.zeros((h, w), np.uint8)
         m[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4] = 1
         return m
     # largest component closest to the centre
     best = max(
-        range(1, n),
+        cands,
         key=lambda i: (
             stats[i, 4]
             / (1 + math.hypot(stats[i, 0] + stats[i, 2] / 2 - w / 2, stats[i, 1] + stats[i, 3] / 2 - h / 2) / max(h, w))

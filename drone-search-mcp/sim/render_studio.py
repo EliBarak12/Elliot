@@ -23,10 +23,10 @@ sys.path.insert(0, str(HERE.parent))
 from sim.world import studio_sdf  # noqa: E402
 
 
-def render(model: str, out: Path, dist: float, pitch_deg: float, yaw_deg: float) -> bool:
+def render(model: str, out: Path, dist: float, pitch_deg: float, yaw_deg: float, aim_z: float = 0.0) -> bool:
     with tempfile.TemporaryDirectory() as td:
         world = Path(td) / "studio.sdf"
-        world.write_text(studio_sdf(model, dist, math.radians(pitch_deg), math.radians(yaw_deg)))
+        world.write_text(studio_sdf(model, dist, math.radians(pitch_deg), math.radians(yaw_deg), aim_z))
         env = dict(os.environ)
         env["GZ_PARTITION"] = f"studio_{os.getpid()}"
         gz = subprocess.Popen(
@@ -67,8 +67,9 @@ def main() -> int:
     p.add_argument("--dist", type=float, default=3.0)
     p.add_argument("--pitch", type=float, default=30.0)
     p.add_argument("--yaw", type=float, default=35.0)
+    p.add_argument("--aim-z", type=float, default=0.0, help="height the camera looks at")
     a = p.parse_args()
-    return 0 if render(a.model, a.out, a.dist, a.pitch, a.yaw) else 1
+    return 0 if render(a.model, a.out, a.dist, a.pitch, a.yaw, a.aim_z) else 1
 
 
 if __name__ == "__main__":

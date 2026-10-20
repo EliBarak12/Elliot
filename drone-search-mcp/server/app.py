@@ -98,6 +98,9 @@ class DroneSearchServer:
         self.energy = EnergyModel()
         self.recorder = FlightRecorder(backend, out_dir, context=self._recording_context, enabled=record)
         self.runner = MissionRunner(backend, self.recorder, self.energy)
+        self.runner.detection_log = out_dir / "detections.jsonl"
+        if os.environ.get("DSM_SAVE_FRAMES") == "1":
+            self.runner.frame_dump = out_dir / "frames"
         self.safety.on_reserve(lambda: self.runner.request_abort("battery reserve reached"))
         self.target: TargetSpec | None = None
         self.target_info: dict[str, Any] = {}
@@ -212,6 +215,11 @@ class DroneSearchServer:
             else round(distance_m(t.home_lat, t.home_lon, c.lat, c.lon), 1),  # type: ignore[arg-type]
             "status": c.status,
         }
+
+    def _dump_candidates(self) -> None:
+        """All candidates to disk (the response only carries the top few)."""
+        rows = [self._candidate_dict(c) for c in self.tracker.ranked()]
+        (self.out_dir / "candidates.json").write_text(json.dumps(rows, indent=1, default=_json_default))
 
     def _thumb(self, c: Candidate) -> McpImage:
         return _jpeg(c.best_crop, 160, 80)
@@ -363,6 +371,7 @@ class DroneSearchServer:
         finally:
             self.runner.end()
         top = [c for c in report.candidates if c.status != "rejected"][:max_candidates]
+        self._dump_candidates()
         self.last_search = {"plan_id": plan_id, "completed": report.completed}
         payload = {
             "plan_id": plan_id,
@@ -417,6 +426,7 @@ class DroneSearchServer:
         c.inspected, c.status = True, "inspected"
         c.lat, c.lon = res["lat"], res["lon"]
         c.closeup_path, c.closeup_score = res["closeup_path"], res["closeup_score"]
+        self._dump_candidates()
         cues = res["cues"]
         payload = {
             "candidate_id": c.id,
@@ -693,6 +703,8 @@ def main(argv: list[str] | None = None) -> None:
     )
     p.add_argument("--no-record", action="store_true")
     p.add_argument("--log-level", default=os.environ.get("DSM_LOG_LEVEL", "INFO"))
+    p.add_argument("--transport", choices=["stdio", "http"], default="stdio")
+    p.add_argument("--port", type=int, default=8765)
     a = p.parse_args(argv)
     _configure_logging(a.log_level)
     backend: DroneBackend
@@ -706,7 +718,11 @@ def main(argv: list[str] | None = None) -> None:
         backend = FakeBackend()
     srv = DroneSearchServer(backend, SafetyConfig(allow_actuation=a.allow_actuation), a.output, record=not a.no_record)
     log.info("server.start", backend=a.backend, actuation=a.allow_actuation, output=str(a.output))
-    build_mcp(srv).run(show_banner=False)
+    mcp = build_mcp(srv)
+    if a.transport == "http":
+        mcp.run(transport="http", host="127.0.0.1", port=a.port, show_banner=False)
+    else:
+        mcp.run(show_banner=False)
 
 
 if __name__ == "__main__":

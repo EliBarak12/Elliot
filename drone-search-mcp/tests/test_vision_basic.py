@@ -68,7 +68,8 @@ def _det(n: float, e: float, score: float) -> Detection:
 def test_tracker_merges_nearby_and_ranks() -> None:
     t = CandidateTracker(merge_radius_m=3)
     t.add([_det(10, 10, 0.6), _det(40, 0, 0.9)])
-    t.add([_det(11, 10.5, 0.7), _det(10.5, 9.5, 0.65)])
+    t.add([_det(11, 10.5, 0.7)])
+    t.add([_det(10.5, 9.5, 0.65)])
     assert len(t.candidates) == 2
     a = next(c for c in t.candidates.values() if c.n_obs == 3)
     lat, lon = offset(*HOME, 10.5, 10)
@@ -89,3 +90,12 @@ def test_tracker_merges_nearby_and_ranks() -> None:
     t.note_coverage(f)
     assert a.n_frames_covered == 1  # 10 m away: inside a 38 x 29 m footprint
     assert next(c for c in t.candidates.values() if c.n_obs == 1).n_frames_covered == 0
+
+
+def test_tracker_one_observation_per_frame() -> None:
+    t = CandidateTracker(merge_radius_m=3)
+    # object + its shadow, 1.5 m apart, in the same frame: one observation, best score kept
+    t.add([_det(0, 20, 0.5), _det(0, 21.5, 0.8)])
+    assert len(t.candidates) == 1
+    c = next(iter(t.candidates.values()))
+    assert c.n_obs == 1 and c.best_score == 0.8

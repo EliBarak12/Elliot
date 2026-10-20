@@ -34,6 +34,8 @@ class Detection:
     frame_seq: int
     alt_m: float
     crop: np.ndarray  # context crop, RGB
+    pixel: tuple[float, float] = (0.0, 0.0)
+    candidate_id: str | None = None
 
 
 @dataclass
@@ -93,7 +95,7 @@ class FrameAnalyzer:
             g = pixel_to_ground(u, v, frame.camera, pose, pose.gimbal_pitch_deg)
             if g is None:
                 continue
-            dets.append(Detection(g.lat, g.lon, s.score, s, box, size, frame.seq, pose.alt_rel_m, c))
+            dets.append(Detection(g.lat, g.lon, s.score, s, box, size, frame.seq, pose.alt_rel_m, c, (u, v)))
         return dets
 
 
@@ -140,12 +142,26 @@ class CandidateTracker:
         self._lock = threading.Lock()
 
     def add(self, dets: list[Detection]) -> list[Candidate]:
-        touched = []
+        """Fold one frame's detections into candidates.
+
+        Within a frame, detections closer than the merge radius are one object (e.g. an
+        object and its own shadow split into two blobs); keep the strongest. Each candidate
+        takes at most one observation per frame, so ``n_obs`` counts frames, not blobs.
+        """
+        dets = sorted(dets, key=lambda d: d.score, reverse=True)
+        kept: list[Detection] = []
+        for d in dets:
+            radius = max(self.merge_radius_m, 0.75 * d.size_m)
+            if all(distance_m(k.lat, k.lon, d.lat, d.lon) >= radius for k in kept):
+                kept.append(d)
+        touched: list[Candidate] = []
         with self._lock:
-            for d in dets:
+            for d in kept:
                 radius = max(self.merge_radius_m, 0.75 * d.size_m)
                 best, best_d = None, float("inf")
                 for c in self.candidates.values():
+                    if c in touched:
+                        continue
                     dist = distance_m(c.lat, c.lon, d.lat, d.lon)
                     if dist < radius and dist < best_d:
                         best, best_d = c, dist
@@ -162,6 +178,7 @@ class CandidateTracker:
                 if d.score > best.best_score or best.n_obs == 1:
                     best.best_score, best.best_crop, best.best_cues = d.score, d.crop, d.cues
                     best.size_m = d.size_m
+                d.candidate_id = best.id
                 touched.append(best)
         return touched
 
@@ -170,8 +187,8 @@ class CandidateTracker:
         pose = frame.pose
         if pose.lat is None or pose.lon is None or pose.alt_rel_m is None or pose.alt_rel_m < 2:
             return
-        half_w = frame.camera.width / 2 * pose.alt_rel_m / frame.camera.fx * 0.9
-        half_h = frame.camera.height / 2 * pose.alt_rel_m / frame.camera.fy * 0.9
+        half_w = (frame.camera.width / 2 - 8) * pose.alt_rel_m / frame.camera.fx
+        half_h = (frame.camera.height / 2 - 8) * pose.alt_rel_m / frame.camera.fy
         with self._lock:
             for c in self.candidates.values():
                 n, e = ne_between(pose.lat, pose.lon, c.lat, c.lon)

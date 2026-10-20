@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "drone-search": {
+      "type": "stdio",
+      "command": ".venv/bin/python",
+      "args": ["-m", "server", "--allow-actuation"],
+      "env": {}
+    }
+  }
+}

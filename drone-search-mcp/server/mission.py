@@ -3,6 +3,8 @@ inspect a candidate from close up. The LLM chooses *what*; this module flies."""
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import math
 import threading
 import time
@@ -50,6 +52,8 @@ class MissionRunner:
         self.abort_reason: str | None = None
         self.active: str | None = None
         self.progress: dict[str, Any] = {}
+        self.detection_log: Path | None = None
+        self.frame_dump: Path | None = None
         self._lock = threading.Lock()
 
     # ---------------------------------------------------------------- basics
@@ -166,13 +170,15 @@ class MissionRunner:
             p = f.pose
             if p.alt_rel_m is None or p.alt_rel_m < plan.altitude_m * 0.8:
                 return
+            self._save_frame(f)
             t0 = time.time()
             dets = analyzer.analyze(f)
             frames["analysis_s"] = (
                 0.8 * frames["analysis_s"] + 0.2 * (time.time() - t0) if frames["n"] else time.time() - t0
             )
-            tracker.add(dets)
             tracker.note_coverage(f)
+            tracker.add(dets)
+            self._log_detections(f, dets)
             frames["n"] += 1
             self._mark_coverage(f, ref, covered, cell)
             self.recorder.note_detections(f, dets)
@@ -235,6 +241,63 @@ class MissionRunner:
             candidates=len(report.candidates),
         )
         return report
+
+    def _save_frame(self, f: Frame) -> None:
+        """Optionally keep full-resolution frames + poses for offline vision benchmarks."""
+        if self.frame_dump is None:
+            return
+        self.frame_dump.mkdir(parents=True, exist_ok=True)
+        name = f"{f.seq:06d}.jpg"
+        cv2.imwrite(
+            str(self.frame_dump / name), cv2.cvtColor(f.image, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92]
+        )
+        p = f.pose
+        with open(self.frame_dump / "frames.jsonl", "a") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "file": name,
+                        "seq": f.seq,
+                        "t": f.timestamp,
+                        "camera": dataclasses.asdict(f.camera),
+                        "pose": {k: v for k, v in p.as_dict().items() if k != "status_text"},
+                    }
+                )
+                + "\n"
+            )
+
+    def _log_detections(self, f: Frame, dets: list[Detection]) -> None:
+        """Append every detection with the pose it was projected from (offline diagnosis)."""
+        if self.detection_log is None or not dets:
+            return
+        p = f.pose
+        with open(self.detection_log, "a") as fh:
+            for d in dets:
+                fh.write(
+                    json.dumps(
+                        {
+                            "seq": f.seq,
+                            "t": f.timestamp,
+                            "lat": d.lat,
+                            "lon": d.lon,
+                            "score": round(d.score, 3),
+                            "text": d.cues.text,
+                            "image": d.cues.image,
+                            "color": d.cues.color,
+                            "size_m": round(d.size_m, 2),
+                            "u": round(d.pixel[0], 1),
+                            "v": round(d.pixel[1], 1),
+                            "cand": d.candidate_id,
+                            "drone": [p.lat, p.lon, p.alt_rel_m],
+                            "yaw": round(p.yaw_rad, 4),
+                            "roll": round(p.roll_rad, 4),
+                            "pitch": round(p.pitch_rad, 4),
+                            "rate_dps": round(p.tilt_rate_dps, 2),
+                            "speed": round(p.groundspeed_ms, 2),
+                        }
+                    )
+                    + "\n"
+                )
 
     def _speed_for(self, plan: SearchPlan, analysis_s: float) -> float:
         """Slow down if vision can't keep up: each ground spot should be analysed in >= 2 frames."""

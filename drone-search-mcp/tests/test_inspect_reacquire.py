@@ -87,7 +87,7 @@ def test_execute_search_with_inspections_end_to_end(tmp_path) -> None:
             assert len(body["inspections"]) == 1
             ins = body["inspections"][0]
             assert ins["object_in_closeup"] and ins["zoom"] > 1.5
-            assert ins["colour_check"]["verdict"] == "same tint as the reference"
+            assert ins["colour_check"]["verdict"] == "same colours as the reference"
             assert distance_m(ins["lat"], ins["lon"], *offset(*HOME, 25, 15)) < 1.0
             images = [x for x in r.content if x.type == "image"]
             assert len(images) == len(body["candidates"]) + 1  # thumbnails + one composite close-up

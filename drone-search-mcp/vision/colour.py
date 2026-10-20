@@ -4,6 +4,10 @@ An agent looking at a dim, compressed close-up reported a beige box as "a white 
 (hard-7011, hard-7017). In CIELAB the two differ clearly (white box b* ~2, beige box b* ~10
 on the field; reference white box b* ~1), so the server measures it instead of leaving it to
 the eye.
+
+Objects are often multi-coloured (a red backpack with a black front panel: a single median
+read its reference as "black", medium-8001), so each object is summarised as a small
+palette and every close-up colour is matched to the nearest reference colour.
 """
 
 from __future__ import annotations
@@ -27,22 +31,51 @@ def _lab(img: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return lab[..., 0] * 100 / 255, lab[..., 1] - 128, lab[..., 2] - 128
 
 
-def _median(L: np.ndarray, a: np.ndarray, b: np.ndarray, keep: np.ndarray) -> dict[str, float] | None:
-    if keep.sum() < 20:
+Palette = list[dict[str, float]]  # [{"L", "a", "b", "share"}], largest share first
+
+# lightness counts a little (white vs black are both colourless), tint counts fully
+L_WEIGHT = 0.2
+
+
+def _palette(L: np.ndarray, a: np.ndarray, b: np.ndarray, keep: np.ndarray, k: int = 3) -> Palette | None:
+    """Main colours of the masked pixels (k-means in CIELAB, clusters under 12% dropped)."""
+    n = int(keep.sum())
+    if n < 20:
         return None
-    return {"L": float(np.median(L[keep])), "a": float(np.median(a[keep])), "b": float(np.median(b[keep]))}
+    px = np.stack([L[keep], a[keep], b[keep]], axis=1).astype(np.float32)
+    if n > 5000:
+        px = px[np.random.default_rng(0).choice(n, 5000, replace=False)]
+    k = min(k, len(px))
+    _, labels, centers = cv2.kmeans(
+        px,
+        k,
+        np.zeros((len(px), 1), np.int32),
+        (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 0.5),
+        3,
+        cv2.KMEANS_PP_CENTERS,
+    )
+    shares = np.bincount(np.asarray(labels, np.int64).ravel(), minlength=k) / len(px)
+    out = [
+        {"L": float(c[0]), "a": float(c[1]), "b": float(c[2]), "share": float(sh)}
+        for c, sh in zip(centers, shares, strict=True)
+        if sh >= 0.12
+    ]
+    total = sum(c["share"] for c in out)
+    for c in out:
+        c["share"] /= total
+    return sorted(out, key=lambda c: -c["share"])
 
 
-def reference_colour(ref: np.ndarray) -> dict[str, float] | None:
-    """Median CIELAB colour (L 0-100, a, b) of the object in a reference photo."""
+def reference_colour(ref: np.ndarray) -> Palette | None:
+    """Main CIELAB colours (L 0-100, a, b) of the object in a reference photo."""
     if ref.size == 0 or min(ref.shape[:2]) < 8:
         return None
     L, a, b = _lab(ref)
-    return _median(L, a, b, object_mask(ref).astype(bool))
+    return _palette(L, a, b, object_mask(ref).astype(bool))
 
 
-def closeup_colour(img: np.ndarray) -> dict[str, float] | None:
-    """Median CIELAB colour of the central object in a top-down close-up.
+def closeup_colour(img: np.ndarray) -> Palette | None:
+    """Main CIELAB colours of the central object in a top-down close-up.
 
     The background is the ground around it (the crop border). Shadows - darker versions of
     the ground colour, which join a box's outline from above - and edge pixels blended with
@@ -67,7 +100,7 @@ def closeup_colour(img: np.ndarray) -> dict[str, float] | None:
         range(1, n),
         key=lambda i: stats[i, 4] / (1 + math.hypot(cent[i][0] - w / 2, cent[i][1] - h / 2) / max(h, w) * 4),
     )
-    return _median(L, a, b, labels == best)
+    return _palette(L, a, b, labels == best)
 
 
 def colour_name(c: dict[str, float]) -> str:
@@ -79,22 +112,36 @@ def colour_name(c: dict[str, float]) -> str:
     return f"pale {name}" if chroma < 15 and c["L"] > 60 else name
 
 
-def compare(closeup: dict[str, float] | None, reference: dict[str, float] | None) -> dict[str, object] | None:
-    """Tint difference (a*/b* distance, lighting-level independent) with a plain verdict."""
-    if closeup is None or reference is None:
+def _distance(c: dict[str, float], r: dict[str, float]) -> float:
+    """Colour distance relative to the reference colour's saturation: sunlight and shading
+    shift a saturated red by far more (in absolute units) than a white, and a red target
+    measured 6.7 from its reference while white objects measure ~2 from theirs."""
+    d = math.sqrt((c["a"] - r["a"]) ** 2 + (c["b"] - r["b"]) ** 2 + (L_WEIGHT * (c["L"] - r["L"])) ** 2)
+    return d / (math.hypot(r["a"], r["b"]) + 10.0)
+
+
+def _describe(p: Palette) -> str:
+    return ", ".join(f"{colour_name(c)} {round(100 * c['share'])}%" for c in p)
+
+
+def compare(closeup: Palette | None, reference: Palette | None) -> dict[str, object] | None:
+    """How far the close-up's colours are from the nearest reference colours (share-weighted;
+    mostly tint, so lighting level matters little), with a plain verdict."""
+    if not closeup or not reference:
         return None
-    d = math.hypot(closeup["a"] - reference["a"], closeup["b"] - reference["b"])
-    # v5 close-ups: white objects measured 1.4-2.2 from a white reference, beige boxes 8.1-10.0
-    if d < 4:
-        verdict = "same tint as the reference"
-    elif d < 7:
-        verdict = "slightly different tint from the reference (check it is not a look-alike)"
+    d = sum(c["share"] * min(_distance(c, r) for r in reference) for c in closeup)
+    # v5/v6 close-ups: white objects 0.11-0.25 from a white reference, beige boxes 0.75-0.95,
+    # red backpacks 0.11-0.39 from a red one, red vs white ~4
+    if d < 0.45:
+        verdict = "same colours as the reference"
+    elif d < 0.65:
+        verdict = "slightly different colours from the reference (check it is not a look-alike)"
     else:
-        verdict = "clearly different tint from the reference (e.g. beige vs white): likely a look-alike"
+        verdict = "clearly different colours from the reference (e.g. beige vs white): likely a look-alike"
     return {
-        "closeup_object": colour_name(closeup),
-        "reference_object": colour_name(reference),
-        "tint_difference": round(d, 1),
+        "closeup_object": _describe(closeup),
+        "reference_object": _describe(reference),
+        "colour_difference": round(d, 2),
         "verdict": verdict,
-        "note": "Measured on the central object (shadows excluded); people and multi-coloured objects mix colours.",
+        "note": "Measured on the central object (shadows excluded); lighting differs between the photos.",
     }

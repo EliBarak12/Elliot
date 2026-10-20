@@ -42,7 +42,7 @@ from server.mission import MissionRunner
 from server.planner import EnergyModel, SearchPlan, circle_polygon, make_plan
 from server.recorder import FlightRecorder
 from server.safety import SafetyConfig, SafetyGate
-from vision.colour import closeup_colour, reference_colour
+from vision.colour import Palette, closeup_colour, reference_colour
 from vision.colour import compare as compare_colour
 from vision.matcher import TargetSpec, build_target
 from vision.pipeline import AnalyzerConfig, Candidate, CandidateTracker, FrameAnalyzer
@@ -140,7 +140,7 @@ class DroneSearchServer:
         self._target_pending = threading.Event()
         self._target_pending.set()
         self.target_info: dict[str, Any] = {}
-        self.ref_colour: dict[str, float] | None = None
+        self.ref_colour: Palette | None = None
         self.plans: dict[str, SearchPlan] = {}
         self.tracker = CandidateTracker()
         self.analyzer_cfg = AnalyzerConfig()
@@ -502,7 +502,7 @@ class DroneSearchServer:
                 "`images` lists the attached images in order; each image is also labelled with its candidate id. "
                 "Close-ups show the drone view (left) beside your reference (right). Compare each close-up with "
                 "the reference, including colours and other details (look-alikes of the same kind are common; "
-                "`colour_check` gives the measured tint), and call "
+                "`colour_check` compares the measured colours), and call "
                 "report_finding for the one that is the target (or none)."
             )
         if images:

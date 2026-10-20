@@ -132,6 +132,18 @@ def _distance(c: dict[str, float], r: dict[str, float]) -> float:
     return d / (math.hypot(r["a"], r["b"]) + 10.0)
 
 
+def _same_hue(c: dict[str, float], r: dict[str, float]) -> bool:
+    """Is the saturated reference colour ``r`` present as ``c``, whatever its shading?
+
+    A reference often holds the same red twice (lit and shaded faces); a close-up from above
+    shows one of them. Requiring each by full distance called a red close-up "red missing"
+    against a red reference (hard-9002), so presence is judged by hue and saturation only.
+    """
+    c_chroma, r_chroma = math.hypot(c["a"], c["b"]), math.hypot(r["a"], r["b"])
+    dh = abs((math.degrees(math.atan2(c["b"], c["a"]) - math.atan2(r["b"], r["a"])) + 180) % 360 - 180)
+    return dh < 30 and c_chroma >= 0.4 * r_chroma
+
+
 def _describe(p: Palette) -> str:
     return ", ".join(f"{colour_name(c)} {round(100 * c['share'])}%" for c in p)
 
@@ -150,7 +162,7 @@ def compare(closeup: Palette | None, reference: Palette | None) -> dict[str, obj
         for r in reference
         if r["share"] >= 0.25
         and math.hypot(r["a"], r["b"]) >= KEY_CHROMA
-        and not any(c["share"] >= 0.15 and _distance(c, r) < 0.45 for c in closeup)
+        and not any(c["share"] >= 0.15 and _same_hue(c, r) for c in closeup)
     ]
     # v5/v6 close-ups: white objects 0.11-0.25 from a white reference, beige boxes 0.75-0.95,
     # red backpacks 0.11-0.39 from a red one, red vs white ~4
@@ -167,14 +179,15 @@ def compare(closeup: Palette | None, reference: Palette | None) -> dict[str, obj
         verdict = "clearly different colours from the reference (e.g. beige vs white): likely a look-alike"
     # faint but sizeable reference colours that are absent (e.g. jeans seen from above): not a
     # mismatch, but say so, or "same colours" reads as a contradiction (medium-8019)
-    unseen = [
-        colour_name(r)
-        for r in reference
-        if r not in missing
-        and r["share"] >= 0.25
-        and math.hypot(r["a"], r["b"]) >= 8
-        and not any(_distance(c, r) < 0.45 for c in closeup)
-    ]
+    missing_names = {colour_name(r) for r in missing}
+    unseen = sorted(
+        {
+            colour_name(r)
+            for r in reference
+            if r["share"] >= 0.25 and math.hypot(r["a"], r["b"]) >= 8 and not any(_same_hue(c, r) for c in closeup)
+        }
+        - missing_names
+    )
     out: dict[str, object] = {
         "closeup_object": _describe(closeup),
         "reference_object": _describe(reference),

@@ -95,3 +95,13 @@ def test_faint_jeans_blue_is_not_required_from_above() -> None:
     assert r is not None and "missing" not in str(r["verdict"])
     # ...but it is named, so "same colours" does not read as a contradiction (medium-8019)
     assert "blue" in str(r["not_seen_in_closeup"])
+
+
+def test_shaded_and_lit_reds_in_the_reference_both_count_as_present() -> None:
+    # hard-9002: the reference held a lit and a shaded red; a red close-up matched only one
+    # and was called "red missing"
+    ref = _reference((200, 35, 30))
+    ref[130:170, 120:220] = (95, 15, 15)  # shaded face of the same red
+    r = compare(closeup_colour(_aerial((170, 35, 30))), reference_colour(ref))
+    assert r is not None and r["verdict"] == "same colours as the reference"
+    assert "not_seen_in_closeup" not in r

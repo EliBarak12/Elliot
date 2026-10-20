@@ -125,8 +125,9 @@ def object_mask(ref: np.ndarray) -> np.ndarray:
         [lab[:b].reshape(-1, 3), lab[-b:].reshape(-1, 3), lab[:, :b].reshape(-1, 3), lab[:, -b:].reshape(-1, 3)]
     )
     k = 3
+    best_labels = np.zeros((len(border), 1), np.int32)
     _, lbl, centers = cv2.kmeans(
-        border, k, None, (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0), 3, cv2.KMEANS_PP_CENTERS
+        border, k, best_labels, (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0), 3, cv2.KMEANS_PP_CENTERS
     )
     lbl = lbl.ravel()
     dists = []

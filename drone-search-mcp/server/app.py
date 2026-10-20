@@ -102,6 +102,24 @@ def _jpeg(img: np.ndarray, max_side: int, quality: int = 85, stretch: bool = Tru
     return McpImage(data=buf.getvalue(), format="jpeg")
 
 
+def _caption(img: np.ndarray, text: str, scale: float = 0.6) -> np.ndarray:
+    """Burn a label into the top-left corner: images reach the agent as an unlabelled list,
+    and it had to guess which thumbnail belonged to which candidate (hard-7002)."""
+    out = img.copy()
+    y = int(22 * scale / 0.6)
+    cv2.putText(out, text, (6, y), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 3, cv2.LINE_AA)
+    cv2.putText(out, text, (6, y), cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 1, cv2.LINE_AA)
+    return out
+
+
+def _fit(img: np.ndarray, side: int) -> np.ndarray:
+    """Scale so the longer side is ``side`` pixels (up or down)."""
+    h, w = img.shape[:2]
+    s = side / max(h, w)
+    interp = cv2.INTER_AREA if s < 1 else cv2.INTER_CUBIC
+    return cv2.resize(img, (max(1, round(w * s)), max(1, round(h * s))), interpolation=interp)
+
+
 class DroneSearchServer:
     def __init__(self, backend: DroneBackend, safety_cfg: SafetyConfig, out_dir: Path, record: bool = True) -> None:
         self.backend = backend
@@ -248,18 +266,18 @@ class DroneSearchServer:
             "status": c.status,
         }
 
-    def _with_reference(self, closeup: np.ndarray) -> np.ndarray:
+    def _with_reference(self, closeup: np.ndarray, title: str = "drone close-up") -> np.ndarray:
         """Close-up and reference side by side, so look-alikes can be told apart directly
         (the agent mistook a target close-up for 'a plain red block' without one, medium-3007)."""
         ref = self.target.ref_crop if self.target is not None else None
         h = 384
         a = cv2.resize(closeup, (int(closeup.shape[1] * h / closeup.shape[0]), h), interpolation=cv2.INTER_AREA)
         if ref is None:
-            return a
+            return _caption(_stretch(a), title)
         r = cv2.resize(ref, (int(ref.shape[1] * h / ref.shape[0]), h), interpolation=cv2.INTER_AREA)
         sep = np.full((h, 6, 3), 255, np.uint8)
         out = np.hstack([_stretch(a), sep, r])
-        for x, label in ((8, "drone close-up"), (a.shape[1] + 14, "reference")):
+        for x, label in ((8, title), (a.shape[1] + 14, "reference")):
             cv2.putText(out, label, (x, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
             cv2.putText(out, label, (x, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
         return out
@@ -270,7 +288,7 @@ class DroneSearchServer:
         (self.out_dir / "candidates.json").write_text(json.dumps(rows, indent=1, default=_json_default))
 
     def _thumb(self, c: Candidate) -> McpImage:
-        return _jpeg(c.best_crop, 160, 80)
+        return _jpeg(_caption(_fit(_stretch(c.best_crop), 160), c.id, 0.5), 160, 80, stretch=False)
 
     # ----------------------------------------------------------------- tools
     def get_status(self) -> Any:
@@ -462,6 +480,7 @@ class DroneSearchServer:
                 "No candidates. Consider a lower altitude (larger target in pixels), more overlap, or a different area."
             )
         images = [self._thumb(c) for c in top]
+        image_list = [f"{c.id} thumbnail" for c in top]
         if inspect_top and top and not self.safety.state.reserve_triggered:
             inspections: list[dict[str, Any]] = []
             payload["inspections"] = inspections
@@ -472,13 +491,16 @@ class DroneSearchServer:
                     inspections.append({"candidate_id": c.id, "error": exc.to_dict()["error"]})
                     break
                 ins.pop("question_for_you", None)
+                image_list += ins.pop("images")
                 inspections.append(ins)
                 images += ins_images
             payload["how_to_read"] = (
-                "Candidate thumbnails come first, in order; then one close-up per inspection (left: drone, right: "
-                "reference), in the order of `inspections`. Compare each close-up with the reference and call "
-                "report_finding for the one that is the target (or none)."
+                "`images` lists the attached images in order; each image is also labelled with its candidate id. "
+                "Close-ups show the drone view (left) beside your reference (right). Compare each close-up with "
+                "the reference and call report_finding for the one that is the target (or none)."
             )
+        if images:
+            payload["images"] = image_list
         return self.respond(payload, images)
 
     def _inspection_order(self, cands: list[Candidate]) -> list[Candidate]:
@@ -561,15 +583,18 @@ class DroneSearchServer:
                 f"'{c.id}', confidence, notes). If not, inspect the next candidate."
             ),
         }
-        images = [_jpeg(self._with_reference(res["closeup"]), 768, 90, stretch=False)]
+        images = [_jpeg(self._with_reference(res["closeup"], f"{c.id} close-up"), 768, 90, stretch=False)]
+        payload["images"] = [f"{c.id} close-up beside reference"]
         if not res["object_in_final_frame"]:
-            # nothing re-detected: show the whole view instead of an empty centre crop, so the
-            # agent can judge for itself whether the object is in sight
+            # nothing found in the last frame: show the whole view instead of an empty centre
+            # crop, so the agent can judge for itself whether the object is in sight
+            seen = "was re-detected on the approach but not" if res["redetected"] else "was not re-detected"
             payload["note"] = (
-                "Vision did not re-detect the object in the final close-up frame; the first image "
-                "is the centre of the view, the second the full frame at inspection altitude."
+                f"The object {seen} in the final close-up frame, so the close-up is the centre of the "
+                "view; the full frame at inspection altitude follows it."
             )
-            images.append(_jpeg(res["full_frame"], 768, 85))
+            images.append(_jpeg(_caption(_stretch(res["full_frame"]), f"{c.id} full frame"), 768, 85, stretch=False))
+            payload["images"].append(f"{c.id} full frame at inspection altitude")
         return payload, images
 
     def capture_image(self) -> Any:

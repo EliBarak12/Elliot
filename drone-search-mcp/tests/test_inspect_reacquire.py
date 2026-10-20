@@ -62,6 +62,10 @@ def test_execute_search_with_inspections_end_to_end(tmp_path) -> None:
             assert distance_m(ins["lat"], ins["lon"], *offset(*HOME, 25, 15)) < 1.0
             images = [x for x in r.content if x.type == "image"]
             assert len(images) == len(body["candidates"]) + 1  # thumbnails + one composite close-up
+            # every attached image is named, in order, so the agent need not guess (hard-7002)
+            assert len(body["images"]) == len(images)
+            assert body["images"][0] == f"{body['candidates'][0]['candidate_id']} thumbnail"
+            assert body["images"][-1] == f"{ins['candidate_id']} close-up beside reference"
             r = await c.call_tool("report_finding", {"candidate_id": ins["candidate_id"], "confidence": 0.9})
             assert json.loads(r.content[0].text)["total_findings"] == 1
 

@@ -72,3 +72,46 @@ def test_lookalike_note_names_matching_closeups_and_uninspected_candidates(tmp_p
     assert note["not_inspected"] == ["c4", "c5", "c6", "c7"]
     # one match is no evidence of look-alikes
     assert srv._lookalike_note(inspections[1:]) is None
+
+
+def _scene(obj: tuple[int, int, int] | None, ground: tuple[int, int, int]) -> np.ndarray:
+    img = np.zeros((200, 200, 3), np.uint8)
+    img[:] = ground
+    if obj is not None:
+        img[70:130, 70:130] = obj
+    return np.clip(img + np.random.default_rng(1).normal(0, 3, img.shape), 0, 255).astype(np.uint8)
+
+
+def test_inspection_attaches_search_view_when_canopy_hides_the_object(tmp_path, monkeypatch) -> None:
+    # hard-8014: the target was inspected, but straight down it was under leaves; the agent
+    # called it foliage. The search had seen it from an angle with the right colours.
+    from vision.colour import reference_colour
+    from vision.matcher import build_target
+
+    b = FakeBackend([], speedup=30)
+    b.connect()
+    (tmp_path / "out").mkdir()
+    srv = DroneSearchServer(b, SafetyConfig(allow_actuation=True), tmp_path / "out", record=False)
+    srv.target = build_target("a red backpack", None, 0.6)
+    ref = np.full((240, 320, 3), 190, np.uint8)
+    ref[90:170, 120:220] = (180, 30, 30)
+    srv.ref_colour = reference_colour(ref)
+    c = _cand(1)
+    c.best_crop = _scene((175, 35, 30), (60, 100, 40))  # search pass: red object on grass
+    canopy = _scene((70, 70, 68), (35, 50, 25))  # close-up: all leaves, a grey trunk in the middle
+
+    def fake_inspect(cand, analyzer, search_alt, alt, out_dir):  # type: ignore[no-untyped-def]
+        return {
+            "closeup": canopy, "full_frame": canopy, "object_in_final_frame": True, "closeup_path": "x.jpg",
+            "frame_path": "y.jpg", "lat": cand.lat, "lon": cand.lon, "refined_shift_m": 0.0, "redetected": True,
+            "closeup_score": 0.3, "alt_m": 12.0, "zoom": 4.0, "cues": None,
+        }  # fmt: skip
+
+    monkeypatch.setattr(srv.runner, "run_inspect", fake_inspect)
+    try:
+        payload, images = srv._inspect(c, None)
+    finally:
+        b.close()
+    assert payload["colour_check"]["verdict"].startswith("clearly different")
+    assert payload["search_view"]["colour_check"]["verdict"] == "same colours as the reference"
+    assert len(images) == len(payload["images"]) == 2 and "search view" in payload["images"][1]

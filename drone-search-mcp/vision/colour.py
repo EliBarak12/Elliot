@@ -95,7 +95,16 @@ def closeup_colour(img: np.ndarray) -> Palette | None:
     dist = np.sqrt((L - gL) ** 2 + (a - ga) ** 2 + (b - gb) ** 2)
     r = np.clip(L / max(gL, 1.0), 0.0, 1.0)
     shadow = (0.85 * gL > L) & (np.hypot(a - ga * r, b - gb * r) < 8)
-    fg = cv2.erode(((dist > 15) & ~shadow).astype(np.uint8), np.ones((3, 3), np.uint8), iterations=2)
+    # sunlit or shaded patches of the same ground (or canopy) at any lightness: same hue, similar
+    # saturation. Grass in a patch of sun next to tree shade was measured as the object
+    # (hard-8014). A beige box keeps its place: near grass in hue but far less saturated.
+    g_chroma = math.hypot(ga, gb)
+    if g_chroma >= 8:
+        dh = np.abs((np.degrees(np.arctan2(b, a)) - math.degrees(math.atan2(gb, ga)) + 180) % 360 - 180)
+        ground_like = (dh < 25) & (np.hypot(a, b) >= 0.5 * g_chroma)
+    else:
+        ground_like = np.zeros_like(shadow)
+    fg = cv2.erode(((dist > 15) & ~shadow & ~ground_like).astype(np.uint8), np.ones((3, 3), np.uint8), iterations=2)
     n, labels, stats, cent = cv2.connectedComponentsWithStats(fg)
     if n <= 1:
         return None

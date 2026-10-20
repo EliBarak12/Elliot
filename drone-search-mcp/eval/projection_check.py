@@ -20,6 +20,7 @@ import math
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -65,7 +66,7 @@ def main() -> int:
     b.arm_and_takeoff(a.alt)
     while (b.telemetry().alt_rel_m or 0) < a.alt - 1:
         time.sleep(0.3)
-    rows = []
+    rows: list[dict[str, Any]] = []
     last_seq = -1
     for k in range(a.passes):
         north = 45 if k % 2 == 0 else -40
@@ -126,10 +127,11 @@ def main() -> int:
                 f"speed {sp:.1f} m/s  => implied time offset {al.mean() / sp:+.3f} s"
             )
     for lo, hi in ((0, 2), (2, 5), (5, 10), (10, 1000)):
-        rs = [r["err"] for r in rows if lo <= r["rate_dps"] < hi]
-        if rs:
+        errs_bin = [float(r["err"]) for r in rows if lo <= r["rate_dps"] < hi]
+        if errs_bin:
             print(
-                f"rotation rate {lo}-{hi} deg/s: n={len(rs)} median {np.median(rs):.2f} m  p90 {np.percentile(rs, 90):.2f} m"
+                f"rotation rate {lo}-{hi} deg/s: n={len(errs_bin)} median {np.median(errs_bin):.2f} m  "
+                f"p90 {np.percentile(errs_bin, 90):.2f} m"
             )
     errs = np.array([r["err"] for r in rows])
     print(f"overall error: median {np.median(errs):.2f} m, p90 {np.percentile(errs, 90):.2f} m")

@@ -89,7 +89,7 @@ TARGETS: dict[str, dict[str, Any]] = {
     },
 }
 SMALL_VARIANT = {"white_box": "model://small_white_box"}
-TIERS = {
+TIERS: dict[str, dict[str, Any]] = {
     "easy": {"side_m": 80, "n_targets": (1, 1), "n_distractors": (0, 0), "wind": False},
     "medium": {"side_m": 100, "n_targets": (1, 3), "n_distractors": (3, 6), "wind": False},
     "hard": {"side_m": 120, "n_targets": (1, 3), "n_distractors": (4, 7), "wind": True},

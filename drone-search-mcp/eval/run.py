@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -22,13 +24,77 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from common.geo import distance_m, offset  # noqa: E402
 from eval.agents import run_agent  # noqa: E402
-from eval.score import ground_truth, markdown_table, score_candidates, score_findings, summarize  # noqa: E402
+from eval.score import MATCH_RADIUS_M, ground_truth, markdown_table, score_candidates, score_findings, summarize  # noqa: E402
 from scenarios.generate import generate, render_reference  # noqa: E402
 
 
 def sh(cmd: list[str], timeout: float = 300) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=ROOT)
+
+
+class SimTruthMonitor:
+    """Evaluation-only telemetry on SITL's spare port (5762), never seen by the agent.
+
+    Samples battery and the *true* injected GPS bias (SIM_GPS1_GLTCH_X/Y, driven by
+    sim_gps_drift.lua) so each reported position error can be split into "GPS said the
+    drone was elsewhere" and "our camera/vision maths was off".
+    """
+
+    def __init__(self, path: Path, period_s: float = 2.0) -> None:
+        self.path = path
+        self.period_s = period_s
+        self.samples: list[dict[str, float | None]] = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=15)
+        self.path.write_text("\n".join(json.dumps(s) for s in self.samples) + "\n")
+
+    def _run(self) -> None:
+        os.environ.setdefault("MAVLINK20", "1")
+        from pymavlink import mavutil
+
+        try:
+            m = mavutil.mavlink_connection("tcp:127.0.0.1:5762", source_system=252, dialect="ardupilotmega")
+            if m.wait_heartbeat(timeout=10) is None:
+                return
+            m.mav.request_data_stream_send(m.target_system, m.target_component, 0, 2, 1)
+            while not self._stop.is_set():
+                s: dict[str, float | None] = {"t": time.time(), "battery": None, "bias_x_deg": None, "bias_y_deg": None}
+                for name, key in (("SIM_GPS1_GLTCH_X", "bias_x_deg"), ("SIM_GPS1_GLTCH_Y", "bias_y_deg")):
+                    m.mav.param_request_read_send(m.target_system, m.target_component, name.encode(), -1)
+                    r = m.recv_match(type="PARAM_VALUE", blocking=True, timeout=2)
+                    if r is not None and r.param_id == name:
+                        s[key] = float(r.param_value)
+                st = m.recv_match(type="SYS_STATUS", blocking=True, timeout=2)
+                if st is not None and st.battery_remaining >= 0:
+                    s["battery"] = float(st.battery_remaining)
+                self.samples.append(s)
+                self._stop.wait(self.period_s)
+            m.close()
+        except OSError:
+            return
+
+    def battery(self, first: bool) -> float | None:
+        vals = [s["battery"] for s in self.samples if s["battery"] is not None]
+        return (vals[0] if first else vals[-1]) if vals else None
+
+    def bias_ne_at(self, t: float, lat: float) -> tuple[float, float] | None:
+        rows = [s for s in self.samples if s["bias_x_deg"] is not None and s["bias_y_deg"] is not None]
+        if not rows:
+            return None
+        s = min(rows, key=lambda r: abs(float(r["t"] or 0) - t))
+        return (
+            float(s["bias_x_deg"] or 0) * 111319.5,
+            float(s["bias_y_deg"] or 0) * 111319.5 * math.cos(math.radians(lat)),
+        )
 
 
 def battery_now() -> float | None:
@@ -48,6 +114,27 @@ def battery_now() -> float | None:
         return None
 
 
+def gps_error_split(findings: list[dict[str, Any]], gt: dict[str, Any], mon: SimTruthMonitor) -> dict[str, Any]:
+    """Error of the best matching report with the true GPS bias at report time removed."""
+    target = next(o for o in gt["objects"] if o["role"] == "mission_target")
+    best = None
+    for f in findings:
+        e = distance_m(f["lat"], f["lon"], target["lat"], target["lon"])
+        if e <= MATCH_RADIUS_M and (best is None or e < best[0]):
+            best = (e, f)
+    if best is None:
+        return {}
+    bias = mon.bias_ne_at(best[1]["reported_at"], target["lat"])
+    if bias is None:
+        return {}
+    # the EKF follows the biased GPS, so reports are shifted by +bias; undo it
+    lat, lon = offset(best[1]["lat"], best[1]["lon"], -bias[0], -bias[1])
+    return {
+        "gps_bias_m": round(math.hypot(*bias), 2),
+        "error_without_gps_bias_m": round(distance_m(lat, lon, target["lat"], target["lon"]), 2),
+    }
+
+
 def run_one(i: int, tier: str, seed: int, a: argparse.Namespace, out_root: Path) -> dict[str, Any]:
     info = generate(tier, seed, mode=a.mode)
     sid = info["id"]
@@ -62,15 +149,21 @@ def run_one(i: int, tier: str, seed: int, a: argparse.Namespace, out_root: Path)
         row["error"] = f"sim_up failed: {up.stdout[-300:]} {up.stderr[-300:]}"
         return row
     time.sleep(3)
-    b0 = battery_now()
+    mon = SimTruthMonitor(run_dir / "sim_truth.jsonl")
+    mon.start()
+    time.sleep(4)
+    b0 = mon.battery(first=True)
     t0 = time.time()
     res = run_agent(a.agent, info["mission"], run_dir, a.model, a.max_minutes * 60)
     row["wall_s"] = round(time.time() - t0)
-    b1 = battery_now()
+    time.sleep(3)
+    mon.stop()
+    b1 = mon.battery(first=False)
     findings_p = run_dir / "server" / "findings.json"
     findings = json.loads(findings_p.read_text()) if findings_p.exists() else []
     gt = ground_truth(sid)
     row.update(score_findings(findings, gt, t0))
+    row.update(gps_error_split(findings, gt, mon))
     cands_p = run_dir / "server" / "candidates.json"
     if cands_p.exists():
         row.update(score_candidates(json.loads(cands_p.read_text()), gt))

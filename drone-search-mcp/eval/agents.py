@@ -162,17 +162,21 @@ async def _run_api(mission: dict[str, Any], out_dir: Path, model: str, timeout_s
     try:
         transport = StdioTransport(command=cmd[0], args=cmd[1:], env=dict(os.environ))
         async with Client(transport, timeout=timeout_s) as mcp:
-            tools = [
+            tools: Any = [
                 {"name": t.name, "description": t.description or "", "input_schema": t.inputSchema}
                 for t in await mcp.list_tools()
             ]
-            messages: list[dict[str, Any]] = [{"role": "user", "content": mission_prompt(mission)}]
+            messages: Any = [{"role": "user", "content": mission_prompt(mission)}]
             for _ in range(40):
                 if time.time() > t_end:
                     res.error = f"agent timed out after {timeout_s:.0f}s"
                     break
                 resp = client.messages.create(
-                    model=model, max_tokens=2048, system=SYSTEM_PROMPT, tools=tools, messages=messages
+                    model=model,
+                    max_tokens=2048,
+                    system=SYSTEM_PROMPT,
+                    tools=tools,
+                    messages=messages,
                 )
                 res.turns += 1
                 res.input_tokens += resp.usage.input_tokens

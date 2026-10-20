@@ -41,6 +41,7 @@ scripts/sim_up.sh --scenario scenarios/runs/medium-0007/scenario.json
 claude mcp add drone-search -- "$PWD/.venv/bin/python" -m server --allow-actuation
 claude    # "Find the object in scenarios/runs/medium-0007/reference.png inside <polygon>"
 .venv/bin/python scripts/make_video.py output/<timestamp>      # annotated flight video
+.venv/bin/python eval/trace_report.py eval/results/<ver>/<scenario> # full agent trace (every tool call + response) as HTML
 scripts/sim_down.sh
 ```
 

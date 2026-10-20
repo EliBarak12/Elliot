@@ -26,7 +26,14 @@ sys.path.insert(0, str(ROOT))
 
 from common.geo import distance_m, offset  # noqa: E402
 from eval.agents import run_agent  # noqa: E402
-from eval.score import MATCH_RADIUS_M, ground_truth, markdown_table, score_candidates, score_findings, summarize  # noqa: E402
+from eval.score import (  # noqa: E402
+    MATCH_RADIUS_M,
+    ground_truth,
+    markdown_table,
+    score_candidates,
+    score_findings,
+    summarize,
+)
 from scenarios.generate import generate, render_reference  # noqa: E402
 
 
@@ -241,6 +248,9 @@ def main() -> int:
             sh([str(ROOT / "scripts" / "sim_down.sh")])
         with open(results, "a") as fh:
             fh.write(json.dumps(row) + "\n")
+        run_dir = out_root / row["id"]
+        if (run_dir / "transcript.jsonl").exists():
+            sh([sys.executable, str(ROOT / "eval" / "trace_report.py"), str(run_dir)], timeout=120)
         print(
             f"[eval]   success={row.get('success')} err={row.get('position_error_m')} "
             f"fp={row.get('false_reports')} calls={row.get('tool_calls')} error={row.get('error')}",

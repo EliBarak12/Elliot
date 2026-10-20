@@ -61,6 +61,28 @@ SYNONYMS = {
     "parcel": "box",
     "truck": "pickup truck",
 }
+# Height above ground (m). Off nadir a tall object is seen partly from the side, so its
+# image footprint grows by about height * (ground offset / altitude): a standing person
+# 10 m off-centre at 15 m spans ~1.5 m, not their 0.5 m shoulder width (run medium-2001).
+HEIGHTS = {
+    "backpack": 0.3,
+    "car": 1.5,
+    "person": 1.75,
+    "box": 0.4,
+    "suitcase": 0.4,
+    "bucket": 0.35,
+    "tarp": 0.0,
+    "shipping container": 1.4,
+    "pickup truck": 1.8,
+    "SUV": 1.8,
+    "cardboard box": 0.4,
+    "bag": 0.3,
+    "bicycle": 1.0,
+    "barrel": 0.9,
+    "mailbox": 1.3,
+    "tent": 1.5,
+    "dog": 0.6,
+}
 BACKGROUND_PROMPTS = [
     "grass",
     "a patch of grass",
@@ -144,6 +166,11 @@ class TargetSpec:
     ref_hist: np.ndarray | None
     ref_crop: np.ndarray | None
     neg_labels: list[str] = field(default_factory=list)
+    height_m: float = 0.3
+
+    def expected_size_m(self, off_nadir_ratio: float) -> float:
+        """Expected largest image footprint (m on the ground) at a given ground offset/altitude."""
+        return self.size_m + self.height_m * off_nadir_ratio
 
 
 def infer_label(ref: np.ndarray) -> tuple[str, float]:
@@ -196,8 +223,20 @@ def build_target(text: str | None, reference: np.ndarray | None, size_m: float |
     others = [f"a {o}" for o in OBJECTS if o != noun and (noun is None or noun not in o and o not in noun)]
     neg_labels = BACKGROUND_PROMPTS + others
     neg_emb = clip.texts([AERIAL_TEMPLATES[0].format(n) for n in neg_labels])
+    height = HEIGHTS.get(noun, 0.5) if noun else 0.5
     return TargetSpec(
-        text, label, inferred, size, reference is not None, text_emb, neg_emb, ref_emb, ref_hist, ref_crop, neg_labels
+        text,
+        label,
+        inferred,
+        size,
+        reference is not None,
+        text_emb,
+        neg_emb,
+        ref_emb,
+        ref_hist,
+        ref_crop,
+        neg_labels,
+        height,
     )
 
 
@@ -216,6 +255,7 @@ def score_crops(
     blob_masks: list[np.ndarray | None],
     blob_crops: list[np.ndarray],
     sizes_m: list[float],
+    expected_sizes_m: list[float] | None = None,
 ) -> list[CropScore]:
     """Score crops (with context) for being the target. ``blob_crops`` are tight crops
     matching ``blob_masks`` for colour statistics."""
@@ -237,7 +277,8 @@ def score_crops(
         s_col = None
         if target.ref_hist is not None and blob_crops[i].size:
             s_col = hist_similarity(hs_hist(blob_crops[i], blob_masks[i]), target.ref_hist)
-        ratio = math.log(max(sizes_m[i], 1e-3) / target.size_m)
+        expected = expected_sizes_m[i] if expected_sizes_m else target.size_m
+        ratio = math.log(max(sizes_m[i], 1e-3) / expected)
         s_size = float(math.exp(-0.5 * (ratio / 0.7) ** 2))
         parts, weights = [p_text], [0.5]
         if s_img is not None:

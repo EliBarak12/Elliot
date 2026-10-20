@@ -17,7 +17,7 @@ import structlog
 from backends.base import Frame
 from common.geo import distance_m, ne_between
 from vision.matcher import CropScore, TargetSpec, score_crops
-from vision.projection import ground_sample_distance_m, pixel_to_ground
+from vision.projection import ground_sample_distance_m, pixel_to_ground, undistort
 from vision.proposals import ProposalConfig, crop_square, propose
 
 log = structlog.get_logger(__name__)
@@ -69,7 +69,7 @@ class FrameAnalyzer:
             **{
                 **pc.__dict__,
                 "min_size_m": max(0.12, self.target.size_m * 0.25),
-                "max_size_m": max(1.5, self.target.size_m * 2.5),
+                "max_size_m": max(3.0, self.target.size_m * 4.0),
             }
         )
         props = propose(frame.image, gsd, pc)
@@ -86,7 +86,11 @@ class FrameAnalyzer:
                 m = cv2.resize(m, (p.x1 - p.x0, p.y1 - p.y0), interpolation=cv2.INTER_NEAREST)
             masks.append(m)
             sizes.append(p.size_px * gsd)
-        scores = score_crops(self.target, crops, masks, tight, sizes)
+        expected = []
+        for p in props:
+            xr, yd = undistort(*p.center, frame.camera)
+            expected.append(self.target.expected_size_m(math.hypot(xr, yd)))
+        scores = score_crops(self.target, crops, masks, tight, sizes, expected)
         dets = []
         for p, s, box, c, size in zip(props, scores, boxes, crops, sizes, strict=True):
             if s.score < self.cfg.min_score:

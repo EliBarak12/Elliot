@@ -119,3 +119,38 @@ default for every eval (`scenarios/generate.py --ideal` turns them off for debug
 * What is left (~1–2 m) is the GPS/EKF absolute error every non-RTK drone has; it goes
   straight into reported positions. On hardware: RTK or a ground control point would
   remove it.
+
+---
+
+## v1 — baseline under real-world conditions (stopped after 2 runs)
+
+| run | target | result | note |
+|---|---|---|---|
+| easy-2000 | – | success, 3.54 m, 0 FP, 7 calls | |
+| medium-2001 | person (white t-shirt) | **miss**, 0 reports, 11 calls | target never became a candidate |
+
+Stopped early on purpose: each eval run starts a fresh server from the working tree, so
+fixing code mid-eval would mix versions. Evals now run from a frozen git-worktree snapshot
+(`scripts/eval_snapshot.sh`).
+
+Diagnosis of medium-2001 (replaying the saved frames, `eval/vision_bench.py`): the person
+is clearly visible, contrast 73 vs threshold 18, yet **zero proposals**. Two compounding
+causes, both invisible in the ideal sim:
+1. With a random low sun the person's cast shadow glued onto the blob, and
+2. off nadir a *standing* person is seen partly from the side (head to feet): the image
+   footprint was 1.75 m against an assumed 0.6 m "size from above" and a 1.5 m cap.
+
+The agent's own note: "thumbnails too dark and small to judge; every close-up came back
+with redetected_up_close false" — it correctly reported nothing rather than guessing.
+
+## v2 — shadows, tall objects, legible images
+
+* Shadow suppression in proposals: pixels darker than the local background (<0.8×) with
+  the same normalised-RGB chromaticity are removed from the blob mask (Lab chroma is not
+  brightness-invariant; a darkened green shifts a/b by ~20).
+* Height-aware size prior: each object type has footprint + height; the expected blob size
+  per detection is `footprint + height × (ground offset / altitude)`. Proposal size window
+  widened to max(3 m, 4× footprint); the scorer's size prior does the discrimination.
+* Thumbnails and close-ups shown to the LLM are contrast-stretched (vision still sees raw).
+
+On the medium-2001 frame: person proposal recovered (text cue 0.83), size factor 0.31 → 0.88.

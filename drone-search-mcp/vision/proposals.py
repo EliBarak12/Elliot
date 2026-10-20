@@ -44,6 +44,9 @@ class ProposalConfig:
     min_size_m: float = 0.15
     max_size_m: float = 8.0
     max_proposals: int = 40
+    suppress_shadows: bool = True
+    shadow_max_brightness: float = 0.8  # pixel/background brightness below this ...
+    shadow_max_chroma: float = 0.06  # ... with chromaticity this close = shadow
     border_px: int = 4
 
 
@@ -70,6 +73,18 @@ def propose(image: np.ndarray, gsd_m: float, cfg: ProposalConfig | None = None) 
         cfg.min_contrast, float(np.median(dist) + cfg.k_sigma * 1.4826 * np.median(np.abs(dist - np.median(dist))))
     )
     mask = (dist > thr).astype(np.uint8)
+    if cfg.suppress_shadows:
+        # Cast shadows: darker than the local background but the same hue/chroma. With a low
+        # sun they glue onto the object and push the blob past the size window (a person and
+        # their shadow measured ~2 m in run medium-2001). Drop those pixels from the mask.
+        # Lab chroma is not brightness-invariant, so compare normalised RGB chromaticity.
+        bg_rgb = cv2.cvtColor(np.clip(bg, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB).astype(np.float32) + 1
+        px = small.astype(np.float32) + 1
+        s_px, s_bg = px.sum(axis=2), bg_rgb.sum(axis=2)
+        chroma_shift = np.abs(px / s_px[..., None] - bg_rgb / s_bg[..., None]).sum(axis=2)
+        ratio = s_px / s_bg
+        shadow = (ratio < cfg.shadow_max_brightness) & (ratio > 0.15) & (chroma_shift < cfg.shadow_max_chroma)
+        mask[shadow] = 0
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)

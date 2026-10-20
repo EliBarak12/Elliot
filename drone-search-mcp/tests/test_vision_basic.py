@@ -5,7 +5,7 @@ from backends.fake import HOME
 from common.geo import distance_m, offset
 from vision.matcher import CropScore, guess_object_noun, hist_similarity, hs_hist, object_mask
 from vision.pipeline import CandidateTracker, Detection
-from vision.proposals import crop_square, propose
+from vision.proposals import ProposalConfig, crop_square, propose
 
 
 def grass(h: int = 480, w: int = 640) -> np.ndarray:
@@ -99,3 +99,22 @@ def test_tracker_one_observation_per_frame() -> None:
     assert len(t.candidates) == 1
     c = next(iter(t.candidates.values()))
     assert c.n_obs == 1 and c.best_score == 0.8
+
+
+def test_shadow_is_not_part_of_the_object() -> None:
+    img = grass()
+    img[200:220, 300:320] = (230, 230, 230)  # 0.6 m white object at 3 cm/px
+    img[215:235, 260:305] = (img[215:235, 260:305] * 0.45).astype(np.uint8)  # cast shadow, same hue
+    p = propose(img, gsd_m=0.03)[0]
+    assert p.size_px * 0.03 < 0.9, "shadow merged into the blob"
+    assert propose(img, gsd_m=0.03, cfg=ProposalConfig(suppress_shadows=False))[0].size_px * 0.03 > 1.2
+
+
+def test_tall_objects_expected_larger_off_nadir() -> None:
+    from vision.matcher import TargetSpec
+
+    t = TargetSpec(
+        "a person", "a person", None, 0.5, False, np.zeros((1, 2)), np.zeros((1, 2)), None, None, None, height_m=1.75
+    )
+    assert t.expected_size_m(0.0) == 0.5
+    assert t.expected_size_m(0.6) == 0.5 + 1.75 * 0.6

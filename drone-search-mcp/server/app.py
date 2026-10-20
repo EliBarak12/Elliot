@@ -80,7 +80,18 @@ def _configure_logging(level: str) -> None:
     )
 
 
-def _jpeg(img: np.ndarray, max_side: int, quality: int = 85) -> McpImage:
+def _stretch(img: np.ndarray) -> np.ndarray:
+    """Percentile contrast stretch for images shown to the LLM: real video is often dark or
+    flat (auto-exposure, vignetting) and an agent judged thumbnails "too dark" (medium-2001)."""
+    lo, hi = np.percentile(img, (1, 99))
+    if hi - lo < 10:
+        return img
+    return np.clip((img.astype(np.float32) - lo) * (255.0 / (hi - lo)), 0, 255).astype(np.uint8)
+
+
+def _jpeg(img: np.ndarray, max_side: int, quality: int = 85, stretch: bool = True) -> McpImage:
+    if stretch:
+        img = _stretch(img)
     h, w = img.shape[:2]
     s = min(1.0, max_side / max(h, w))
     if s < 1:

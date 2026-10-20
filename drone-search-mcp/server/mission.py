@@ -541,7 +541,9 @@ class MissionRunner:
         h, w = f.image.shape[:2]
         alt = f.pose.alt_rel_m or 10.0
         px_per_m = f.camera.fx / alt
-        half = int(np.clip(size_m * px_per_m * 2.0, 96, 360))
+        # the object fills about half the crop: with 2x margin on each side a backpack was ~60 px
+        # of a 720 px close-up, too small to tell from a look-alike backpack (hard-9002)
+        half = int(np.clip(size_m * px_per_m * 1.1, 64, 360))
         if dets:
             d = max(dets, key=lambda d: d.score)
             x0, y0, x1, y1 = d.bbox

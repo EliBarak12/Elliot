@@ -93,3 +93,5 @@ def test_faint_jeans_blue_is_not_required_from_above() -> None:
     ref[130:170, 120:220] = (60, 75, 100)  # jeans
     r = compare(closeup_colour(_aerial((205, 205, 203))), reference_colour(ref))
     assert r is not None and "missing" not in str(r["verdict"])
+    # ...but it is named, so "same colours" does not read as a contradiction (medium-8019)
+    assert "blue" in str(r["not_seen_in_closeup"])

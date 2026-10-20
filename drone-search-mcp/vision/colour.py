@@ -165,7 +165,17 @@ def compare(closeup: Palette | None, reference: Palette | None) -> dict[str, obj
         verdict = "slightly different colours from the reference (check it is not a look-alike)"
     else:
         verdict = "clearly different colours from the reference (e.g. beige vs white): likely a look-alike"
-    return {
+    # faint but sizeable reference colours that are absent (e.g. jeans seen from above): not a
+    # mismatch, but say so, or "same colours" reads as a contradiction (medium-8019)
+    unseen = [
+        colour_name(r)
+        for r in reference
+        if r not in missing
+        and r["share"] >= 0.25
+        and math.hypot(r["a"], r["b"]) >= 8
+        and not any(_distance(c, r) < 0.45 for c in closeup)
+    ]
+    out: dict[str, object] = {
         "closeup_object": _describe(closeup),
         "reference_object": _describe(reference),
         "colour_difference": round(d, 2),
@@ -173,3 +183,6 @@ def compare(closeup: Palette | None, reference: Palette | None) -> dict[str, obj
         "note": "Measured on the central object (shadows excluded); lighting differs between the photos, and a "
         "partly hidden object is measured together with what covers it (e.g. foliage).",
     }
+    if unseen:
+        out["not_seen_in_closeup"] = f"{', '.join(unseen)} (faint or small in the reference; may be hidden from above)"
+    return out

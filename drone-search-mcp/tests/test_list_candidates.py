@@ -55,3 +55,20 @@ def test_list_candidates_before_any_search(tmp_path) -> None:
             assert body["candidates"] == [] and "execute_search" in body["next_step"]
 
     asyncio.run(run())
+
+
+def test_lookalike_note_names_matching_closeups_and_uninspected_candidates(tmp_path) -> None:
+    # hard-8011: three red close-ups all matched the reference's colours; the agent reported
+    # one by shape and never inspected the real target, ranked 7th
+    srv = DroneSearchServer(FakeBackend([]), SafetyConfig(allow_actuation=True), tmp_path / "out", record=False)
+    for i in range(1, 8):
+        c = _cand(i)
+        srv.tracker.candidates[c.id] = c
+    same = {"colour_check": {"verdict": "same colours as the reference"}}
+    inspections = [{"candidate_id": "c1", **same}, {"candidate_id": "c2", **same}, {"candidate_id": "c3"}]
+    note = srv._lookalike_note(inspections)
+    assert note is not None
+    assert note["same_colours_as_reference"] == ["c1", "c2"] and "2 of 3" in note["message"]
+    assert note["not_inspected"] == ["c4", "c5", "c6", "c7"]
+    # one match is no evidence of look-alikes
+    assert srv._lookalike_note(inspections[1:]) is None

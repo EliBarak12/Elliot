@@ -506,6 +506,9 @@ class DroneSearchServer:
                 image_list += ins.pop("images")
                 inspections.append(ins)
                 images += ins_images
+            lookalikes = self._lookalike_note(inspections)
+            if lookalikes:
+                payload["lookalikes"] = lookalikes
             payload["how_to_read"] = (
                 "`images` lists the attached images in order; each image is also labelled with its candidate id. "
                 "Close-ups show the drone view (left) beside your reference (right). Compare each close-up with "
@@ -516,6 +519,29 @@ class DroneSearchServer:
         if images:
             payload["images"] = image_list
         return self.respond(payload, images)
+
+    def _lookalike_note(self, inspections: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """Facts the agent needs before picking one of several similar close-ups: in hard-8011
+        all three close-ups matched the reference's colours, the agent reported one by shape,
+        and the real target (ranked 7th) was never inspected."""
+        matching = [
+            i["candidate_id"]
+            for i in inspections
+            if str(i.get("colour_check", {}).get("verdict", "")).startswith("same colours")
+        ]
+        if len(matching) < 2:
+            return None
+        inspected = {i["candidate_id"] for i in inspections}
+        rest = [c.id for c in self.tracker.ranked() if c.id not in inspected and not c.inspected][:6]
+        note: dict[str, Any] = {
+            "same_colours_as_reference": matching,
+            "message": f"{len(matching)} of {len(inspections)} close-ups have the reference's colours: the area "
+            "holds look-alikes. Report only a candidate whose details (shape, panels, markings) match the "
+            "reference; if none clearly does, inspect the others first.",
+        }
+        if rest:
+            note["not_inspected"] = rest
+        return note
 
     def _inspection_order(self, cands: list[Candidate]) -> list[Candidate]:
         """Greedy nearest-neighbour route from the drone's position (fewer metres flown)."""

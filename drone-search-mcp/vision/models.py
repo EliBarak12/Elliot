@@ -67,7 +67,7 @@ class Clip:
 
     @property
     def logit_scale(self) -> float:
-        return float(self.model.logit_scale.exp())
+        return float(self.model.logit_scale.detach().exp())
 
 
 class Dino:

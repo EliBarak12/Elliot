@@ -354,6 +354,9 @@ class MissionRunner:
                     refined = found
             self.fly_to(lat, lon, inspect_alt, 1.5, tol_m=0.5)
             self._sleep(1.5)
+            zoom = self._zoom_in(analyzer, cand, lat, lon, inspect_alt)
+            if zoom["lat"] is not None:
+                lat, lon = zoom["lat"], zoom["lon"]
             f = self.backend.latest_frame(max_age_s=1.5)
             if f is None:
                 raise VehicleError("no camera frame at the inspection point")
@@ -379,10 +382,50 @@ class MissionRunner:
                 "redetected": bool(refined),
                 "closeup_score": best.score if best else None,
                 "alt_m": f.pose.alt_rel_m,
+                "zoom": zoom["zoom"],
                 "cues": best.cues if best else None,
             }
         finally:
+            if self.backend.max_zoom > 1.0:
+                self.backend.set_zoom(1.0)
             self.recorder.stop()
+
+    def _zoom_in(
+        self, analyzer: FrameAnalyzer, cand: Candidate, lat: float, lon: float, alt: float, target_px: float = 220.0
+    ) -> dict[str, Any]:
+        """Optical zoom until the object spans ~target_px, re-centring halfway (a narrow
+        field of view leaves little room for hover drift)."""
+        out: dict[str, Any] = {"zoom": 1.0, "lat": None, "lon": None}
+        f = self.backend.latest_frame(max_age_s=2.0)
+        if self.backend.max_zoom <= 1.0 or f is None:
+            return out
+        base_fx = f.camera.fx
+        want = float(np.clip(target_px / (cand.size_m * base_fx / alt), 1.0, self.backend.max_zoom))
+        if want < 1.3:
+            return out
+        for z in (want**0.5, want):
+            applied = self.backend.set_zoom(z)
+            self._wait_zoom(base_fx * applied)
+            found = self._reacquire(analyzer, lat, lon, cand.size_m, n_frames=3)
+            if found:
+                w = np.array([d.score for d in found])
+                lat = float(np.dot(w, [d.lat for d in found]) / w.sum())
+                lon = float(np.dot(w, [d.lon for d in found]) / w.sum())
+                out.update(lat=lat, lon=lon)
+                self.fly_to(lat, lon, alt, 1.0, tol_m=0.3)
+                self._sleep(1.0)
+            out["zoom"] = applied
+        return out
+
+    def _wait_zoom(self, fx_target: float, timeout_s: float = 5.0) -> None:
+        t0 = time.time()
+        while time.time() - t0 < timeout_s:
+            self._check_abort()
+            f = self.backend.latest_frame(max_age_s=1.0)
+            if f is not None and abs(f.camera.fx / fx_target - 1.0) < 0.02:
+                return
+            time.sleep(0.1)
+        log.warning("mission.zoom.timeout", fx_target=round(fx_target, 1))
 
     def _reacquire(
         self, analyzer: FrameAnalyzer, lat: float, lon: float, size_m: float, n_frames: int

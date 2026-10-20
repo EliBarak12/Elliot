@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -13,6 +14,7 @@ DEFAULT_CALIBRATION = Path(__file__).resolve().parents[1] / "sim" / "camera_cali
 
 class SimBackend(ArduPilotBackend):
     name = "sitl"
+    max_zoom = 6.0
 
     def __init__(
         self, connection: str | None = None, frame_dir: str | None = None, calibration: str | None = None
@@ -30,3 +32,13 @@ class SimBackend(ArduPilotBackend):
             if offset is not None
             else float((cal or {}).get("frame_clock_offset_s", 0.0)),
         )
+
+    def set_zoom(self, zoom: float) -> float:
+        """Zoom the simulated camera through the frame bridge's control file (a real camera
+        would take MAV_CMD_SET_CAMERA_ZOOM or its own SDK call)."""
+        z = float(min(max(zoom, 1.0), self.max_zoom))
+        frame_dir = Path(os.environ.get("DSM_FRAME_DIR", "/dev/shm/drone_search"))
+        tmp = frame_dir / ".control.json.tmp"
+        tmp.write_text(json.dumps({"zoom": z}))
+        os.replace(tmp, frame_dir / "control.json")
+        return z

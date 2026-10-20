@@ -28,6 +28,16 @@ class RawFrame:
     wall_time: float
 
 
+def zoomed(cam: CameraModel, zoom: float) -> CameraModel:
+    """Intrinsics at an optical zoom factor (focal length multiplied by ``zoom``).
+
+    The simulated lens distortion is a fixed pixel-space warp, so its coefficients scale
+    with the focal length; on a real zoom lens use the calibration for that zoom step.
+    """
+    s = zoom
+    return CameraModel(cam.width, cam.height, cam.fx * s, cam.fy * s, cam.cx, cam.cy, cam.k1 * s * s, cam.k2 * s**4)
+
+
 class FrameSource(abc.ABC):
     @abc.abstractmethod
     def read(self) -> RawFrame | None:
@@ -97,6 +107,9 @@ class ShmFrameSource(FrameSource):
             hfov = self.hfov_rad or 1.2
             f = w / 2 / math.tan(hfov / 2)
             cam = CameraModel(w, h, f, f, w / 2, h / 2)
+        zoom = float(meta.get("zoom", 1.0))
+        if zoom != 1.0 and (c is not None or "fx" not in meta):
+            cam = zoomed(cam, zoom)
         self._cache = RawFrame(
             data.reshape(h, w, 3),
             cam,

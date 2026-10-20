@@ -31,6 +31,7 @@ class FakeObject:
 
 class FakeBackend(DroneBackend):
     name = "fake"
+    max_zoom = 4.0
 
     def __init__(
         self,
@@ -70,6 +71,7 @@ class FakeBackend(DroneBackend):
         rng = np.random.default_rng(0)
         self._grass = (rng.normal(0, 8, (64, 64, 3)) + np.array([70, 120, 50])).clip(0, 255).astype(np.uint8)
         self.commands: list[str] = []
+        self.zoom = 1.0
 
     def connect(self, timeout_s: float = 30.0) -> None:
         if self._thread is None:
@@ -172,17 +174,26 @@ class FakeBackend(DroneBackend):
             self._t.mode = "BRAKE"
             self._target = None
 
+    def set_zoom(self, zoom: float) -> float:
+        self.zoom = float(min(max(zoom, 1.0), self.max_zoom))
+        return self.zoom
+
+    def camera(self) -> CameraModel:
+        c = self.cam
+        return CameraModel(c.width, c.height, c.fx * self.zoom, c.fy * self.zoom, c.cx, c.cy)
+
     def render(self, pose: Telemetry) -> np.ndarray:
         w, h = self.cam.width, self.cam.height
+        cam = self.camera()
         img = np.tile(self._grass, (h // 64 + 1, w // 64 + 1, 1))[:h, :w].copy()
         alt = max(pose.alt_rel_m or 0.0, 0.5)
         c, s = math.cos(pose.yaw_rad), math.sin(pose.yaw_rad)
         for o in self.objects:
             n, e = ne_between(pose.lat, pose.lon, *offset(HOME[0], HOME[1], o.north_m, o.east_m))  # type: ignore[arg-type]
             fwd, right = n * c + e * s, -n * s + e * c
-            u = self.cam.cx + right / alt * self.cam.fx
-            v = self.cam.cy - fwd / alt * self.cam.fy
-            r = max(1, int(o.size_m / 2 / alt * self.cam.fx))
+            u = cam.cx + right / alt * cam.fx
+            v = cam.cy - fwd / alt * cam.fy
+            r = max(1, int(o.size_m / 2 / alt * cam.fx))
             x0, x1 = int(u - r), int(u + r)
             y0, y1 = int(v - r), int(v + r)
             if x1 < 0 or y1 < 0 or x0 >= w or y0 >= h:
@@ -192,7 +203,7 @@ class FakeBackend(DroneBackend):
 
     def latest_frame(self, max_age_s: float = 2.0) -> Frame | None:
         t = self.telemetry()
-        return Frame(self.render(t), self.cam, int(t.time_boot_s * 5), t.time_boot_s, time.time(), t)
+        return Frame(self.render(t), self.camera(), int(t.time_boot_s * 5), t.time_boot_s, time.time(), t)
 
     def debug(self) -> dict[str, Any]:
         return {"target": self._target, "speed": self._speed}

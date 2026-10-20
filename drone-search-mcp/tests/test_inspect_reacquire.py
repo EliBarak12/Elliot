@@ -27,5 +27,42 @@ def test_inspect_reacquires_object_after_gps_drift(tmp_path) -> None:
         assert res["redetected"] and res["object_in_final_frame"]
         assert distance_m(res["lat"], res["lon"], *true) < 1.0
         assert res["refined_shift_m"] > 3.0
+        assert res["zoom"] > 1.5 and b.zoom == 1.0  # zoomed for the close-up, then reset
     finally:
         b.close()
+
+
+@pytest.mark.slow
+def test_execute_search_with_inspections_end_to_end(tmp_path) -> None:
+    import asyncio
+    import json
+
+    from fastmcp import Client
+    from PIL import Image
+
+    from server.app import DroneSearchServer, build_mcp
+    from server.safety import SafetyConfig
+
+    b = FakeBackend([FakeObject(25, 15, 0.6, (200, 20, 20)), FakeObject(-20, -10, 0.6, (20, 40, 200))], speedup=30)
+    ref = np.full((200, 200, 3), 200, np.uint8)
+    ref[60:140, 60:140] = (200, 20, 20)
+    Image.fromarray(ref).save(tmp_path / "ref.png")
+    srv = DroneSearchServer(b, SafetyConfig(allow_actuation=True), tmp_path / "out", record=False)
+
+    async def run() -> None:
+        async with Client(build_mcp(srv)) as c:
+            await c.call_tool("set_search_target", {"image_path": str(tmp_path / "ref.png"), "text": "a red box"})
+            r = await c.call_tool("plan_search", {"center_lat": HOME[0], "center_lon": HOME[1], "radius_m": 40})
+            pid = json.loads(r.content[0].text)["plan"]["plan_id"]
+            r = await c.call_tool("execute_search", {"plan_id": pid, "inspect_top": 1})
+            body = json.loads(r.content[0].text)
+            assert len(body["inspections"]) == 1
+            ins = body["inspections"][0]
+            assert ins["object_in_closeup"] and ins["zoom"] > 1.5
+            assert distance_m(ins["lat"], ins["lon"], *offset(*HOME, 25, 15)) < 1.0
+            images = [x for x in r.content if x.type == "image"]
+            assert len(images) == len(body["candidates"]) + 1  # thumbnails + one composite close-up
+            r = await c.call_tool("report_finding", {"candidate_id": ins["candidate_id"], "confidence": 0.9})
+            assert json.loads(r.content[0].text)["total_findings"] == 1
+
+    asyncio.run(run())

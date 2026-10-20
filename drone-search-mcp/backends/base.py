@@ -144,5 +144,12 @@ class DroneBackend(abc.ABC):
     def latest_frame(self, max_age_s: float = 2.0) -> Frame | None:
         """Most recent camera frame with the pose it was taken at, or None if stale."""
 
+    max_zoom: float = 1.0  # optical zoom available (focal-length ratio); 1.0 = fixed lens
+
+    def set_zoom(self, zoom: float) -> float:
+        """Request an optical zoom; returns the zoom that will be applied. Frames report the
+        zoom they were taken at through their CameraModel (fx scales with zoom)."""
+        return 1.0
+
     def set_gimbal_nadir(self) -> None:  # noqa: B027 - optional capability
         """Point the camera straight down (no-op where the mount is fixed)."""

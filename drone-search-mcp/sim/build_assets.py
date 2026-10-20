@@ -164,7 +164,10 @@ def derive_models(apg: Path) -> None:
     shutil.copytree(src_models / "gimbal_small_3d", gim_dst)
     sdf = (gim_dst / "model.sdf").read_text()
     sdf = sdf.replace('<model name="gimbal_small_3d">', '<model name="nadir_gimbal">')
-    sdf = re.sub(r"<plugin filename=\"CameraZoomPlugin\".*?</plugin>", "", sdf, flags=re.S)
+    # keep the zoom plugin (real search drones carry zoom cameras); faster slew, 6x optical
+    # relative to our 1.2 rad base FOV (the plugin measures zoom against a fixed 2.0 rad)
+    sdf = re.sub(r"<max_zoom>.*?</max_zoom>", "<max_zoom>10.0</max_zoom>", sdf)
+    sdf = re.sub(r"<slew_rate>.*?</slew_rate>", "<slew_rate>3.0</slew_rate>", sdf)
     sdf = re.sub(r"<plugin name=\"GstCameraPlugin\".*?</plugin>", "", sdf, flags=re.S)
     sdf = sdf.replace("<horizontal_fov>2.0</horizontal_fov>", f"<horizontal_fov>{CAMERA['hfov_rad']}</horizontal_fov>")
     sdf = sdf.replace("<width>640</width>", f"<width>{CAMERA['width']}</width>")

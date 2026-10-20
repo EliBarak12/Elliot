@@ -48,6 +48,71 @@ def _on_info(msg: CameraInfo) -> None:
         _info.update(fx=k[0], fy=k[4], cx=k[2], cy=k[5])
 
 
+class ZoomControl:
+    """Camera zoom, driven like a real camera's control API.
+
+    The server writes ``<out>/control.json`` {"zoom": Z}; we forward it to Gazebo's
+    CameraZoomPlugin and report the zoom each frame was taken at (as a real camera reports
+    its zoom state). Zoom is the focal-length ratio to the base lens; the plugin instead takes
+    a FOV ratio against a fixed 2.0 rad, so we convert.
+    """
+
+    PLUGIN_REF_HFOV = 2.0
+
+    def __init__(self, node: Node, out: str, base_hfov: float) -> None:
+        self.node = node
+        self.path = os.path.join(out, "control.json")
+        self.base_hfov = base_hfov
+        self.mtime = 0.0
+        self.cmd = 1.0
+        self.prev = 1.0
+        self.cmd_at = 0.0
+        self.pub = None
+        self.base_fx: float | None = None
+
+    def poll(self) -> None:
+        try:
+            m = os.path.getmtime(self.path)
+        except OSError:
+            return
+        if m == self.mtime:
+            return
+        self.mtime = m
+        try:
+            with open(self.path) as f:
+                z = float(json.load(f).get("zoom", 1.0))
+        except (OSError, ValueError):
+            return
+        z = max(1.0, z)
+        if self.pub is None:
+            from gz.msgs10.double_pb2 import Double
+
+            topic = next((t for t in self.node.topic_list() if t.endswith("/zoom/cmd_zoom")), None)
+            if topic is None:
+                print("[frame_grabber] no zoom topic", file=sys.stderr)
+                return
+            self.pub = self.node.advertise(topic, Double)
+            self._msg = Double
+        msg = self._msg()
+        # zoom = focal-length ratio; the plugin takes 2.0 rad / target FOV
+        target_hfov = 2 * math.atan(math.tan(self.base_hfov / 2) / z)
+        msg.data = self.PLUGIN_REF_HFOV / target_hfov
+        self.pub.publish(msg)
+        self.prev, self.cmd, self.cmd_at = self.current(time.time()), z, time.time()
+
+    def current(self, now: float) -> float:
+        """Zoom in effect: from the published intrinsics when they track the zoom, else the
+        commanded value once the lens has had time to move."""
+        fx = _info.get("fx")
+        if fx and self.base_fx is None and self.cmd == 1.0:
+            self.base_fx = fx
+        if fx and self.base_fx and abs(fx / self.base_fx - 1.0) > 1e-3:
+            return fx / self.base_fx
+        if self.cmd != 1.0 and now - self.cmd_at < 1.5:
+            return self.prev  # still slewing; report the old value
+        return self.cmd
+
+
 def _write(out: str, payload: bytes, ext: str, meta: dict) -> None:
     os.makedirs(out, exist_ok=True)
     tmp_img = os.path.join(out, f".frame.{ext}.tmp")
@@ -100,6 +165,7 @@ def main() -> int:
     p.add_argument("--once", help="write a single PNG to this path and exit")
     p.add_argument("--skip", type=int, default=3, help="--once: frames to skip (let lighting settle)")
     p.add_argument("--timeout", type=float, default=120.0)
+    p.add_argument("--base-hfov", type=float, default=1.2, help="camera FOV at zoom 1 (rad)")
     a = p.parse_args()
 
     node = Node()
@@ -124,6 +190,9 @@ def main() -> int:
     def on_image(msg: Image) -> None:
         nonlocal degrader
         count["n"] += 1
+        if zoom is not None:
+            zoom.poll()
+        zoom_now = zoom.current(time.time()) if zoom is not None else 1.0
         w, h = msg.width, msg.height
         stamp = msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9
         if a.once:
@@ -142,7 +211,8 @@ def main() -> int:
                 "stamp_sim_s": stamp,
                 "wall_time": time.time(),
                 "encoding": "rgb",
-                **_info,
+                "zoom": zoom_now,
+                **({} if zoom_now != 1.0 else _info),
             }
             _write(a.out, msg.data, "rgb", meta)
             return
@@ -157,7 +227,7 @@ def main() -> int:
         jpeg = degrader.apply(rgb, motion.image_velocity(degrader.fx), motion.alt)
         release = stamp + max(0.0, rng.gauss(profile.latency_s, profile.latency_jitter_s))
         with qlock:
-            queue.append((release, count["n"], w, h, jpeg))
+            queue.append((release, count["n"], w, h, jpeg, zoom_now))
 
     def on_clock(msg: Clock) -> None:
         clock["sim"] = msg.sim.sec + msg.sim.nsec * 1e-9
@@ -173,7 +243,7 @@ def main() -> int:
             if item is None:
                 time.sleep(0.005)
                 continue
-            release, seq, w, h, jpeg = item
+            release, seq, w, h, jpeg, zoom_at_capture = item
             meta = {
                 "seq": seq,
                 "width": w,
@@ -181,9 +251,11 @@ def main() -> int:
                 "stamp_sim_s": clock["sim"],
                 "wall_time": time.time(),
                 "encoding": "jpeg",
+                "zoom": zoom_at_capture,
             }
             _write(a.out, jpeg, "jpg", meta)
 
+    zoom = None if a.once else ZoomControl(node, a.out, a.base_hfov)
     # gz-sensors publishes intrinsics next to the image topic: /a/b/camera -> /a/b/camera_info
     node.subscribe(CameraInfo, a.topic.rsplit("/", 1)[0] + "/camera_info", _on_info)
     if profile is not None:

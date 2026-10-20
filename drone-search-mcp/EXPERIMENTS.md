@@ -191,3 +191,22 @@ from all of them); regions spanning the image edge to edge are rejected; referen
 aim at the object's mid-height so tall objects (people) are not cut off.
 
 Open: the occluded target never became a candidate (to diagnose from the saved frames).
+
+### v2 run medium-3007: false report between two red backpacks (fixed for v3)
+
+The target (JanSport, deep red, black back panel) was candidate c2 and was inspected, but
+the close-up showed it from straight above at ~45 px: "a plain red block". The agent
+dismissed it, re-searched, and reported the look-alike red backpack, which it saw only
+partly, at the edge of its close-up (the old crop bug).
+
+v3:
+* **Zoom camera.** Real search drones carry zoom cameras; the simulated gimbal camera now
+  keeps ardupilot_gazebo's CameraZoomPlugin (up to 6× optical relative to the 1.2 rad
+  lens), driven through the frame bridge like a camera control API; each frame reports
+  its zoom and the server scales the intrinsics. Inspection stays at 12 m (above trees and
+  roofs) and zooms until the object spans ~220 px, re-centring halfway.
+* **Close-up beside the reference** in every inspection image, so look-alikes are judged
+  side by side.
+* **One-shot flow:** `execute_search(plan_id, inspect_top=N)` inspects the N best
+  candidates on a nearest-first route and returns all close-ups in one response; the
+  agent only has to compare and report. Tested end-to-end on the fake backend.

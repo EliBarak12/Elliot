@@ -55,10 +55,11 @@ Typical flow:
 2. set_search_target - give the reference image and/or a text description.
 3. plan_search - give the search area; the server picks an altitude from the target size
    and returns path length, time and battery estimates. Re-plan if it does not fit.
-4. execute_search - flies the whole pattern autonomously and returns ranked candidates
-   with thumbnails. Vision runs on every frame in code; you do not need to look at frames.
-5. inspect_candidate - for the best candidates, fly over and descend for a close-up.
-   Look at the close-up yourself and decide whether it is the target.
+4. execute_search(plan_id, inspect_top=3) - flies the whole pattern autonomously, then
+   inspects the best candidates and returns each close-up next to your reference. Vision
+   runs on every frame in code; you do not need to look at raw frames.
+5. Compare the close-ups with the reference yourself. inspect_candidate can fetch more
+   close-ups (e.g. a candidate further down the list) if none of them is the target.
 6. report_finding - report the confirmed candidate (once per target), then return_home.
 
 Every tool response ends with `state`, read from live telemetry after the action.
@@ -227,6 +228,22 @@ class DroneSearchServer:
             "status": c.status,
         }
 
+    def _with_reference(self, closeup: np.ndarray) -> np.ndarray:
+        """Close-up and reference side by side, so look-alikes can be told apart directly
+        (the agent mistook a target close-up for 'a plain red block' without one, medium-3007)."""
+        ref = self.target.ref_crop if self.target is not None else None
+        h = 384
+        a = cv2.resize(closeup, (int(closeup.shape[1] * h / closeup.shape[0]), h), interpolation=cv2.INTER_AREA)
+        if ref is None:
+            return a
+        r = cv2.resize(ref, (int(ref.shape[1] * h / ref.shape[0]), h), interpolation=cv2.INTER_AREA)
+        sep = np.full((h, 6, 3), 255, np.uint8)
+        out = np.hstack([_stretch(a), sep, r])
+        for x, label in ((8, "drone close-up"), (a.shape[1] + 14, "reference")):
+            cv2.putText(out, label, (x, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(out, label, (x, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+        return out
+
     def _dump_candidates(self) -> None:
         """All candidates to disk (the response only carries the top few)."""
         rows = [self._candidate_dict(c) for c in self.tracker.ranked()]
@@ -369,7 +386,7 @@ class DroneSearchServer:
             }
         )
 
-    def execute_search(self, plan_id: str, max_candidates: int) -> Any:
+    def execute_search(self, plan_id: str, max_candidates: int, inspect_top: int = 0) -> Any:
         self.safety.require_actuation()
         plan = self.plans.get(plan_id)
         if plan is None:
@@ -412,7 +429,41 @@ class DroneSearchServer:
             payload["next_step"] = (
                 "No candidates. Consider a lower altitude (larger target in pixels), more overlap, or a different area."
             )
-        return self.respond(payload, [self._thumb(c) for c in top])
+        images = [self._thumb(c) for c in top]
+        if inspect_top and top and not self.safety.state.reserve_triggered:
+            inspections: list[dict[str, Any]] = []
+            payload["inspections"] = inspections
+            for c in self._inspection_order([c for c in top if c.confidence >= 0.3][:inspect_top]):
+                try:
+                    ins, ins_images = self._inspect(c, None)
+                except DroneSearchError as exc:  # e.g. battery reserve mid-way: report what we have
+                    inspections.append({"candidate_id": c.id, "error": exc.to_dict()["error"]})
+                    break
+                ins.pop("question_for_you", None)
+                inspections.append(ins)
+                images += ins_images
+            payload["how_to_read"] = (
+                "Candidate thumbnails come first, in order; then one close-up per inspection (left: drone, right: "
+                "reference), in the order of `inspections`. Compare each close-up with the reference and call "
+                "report_finding for the one that is the target (or none)."
+            )
+        return self.respond(payload, images)
+
+    def _inspection_order(self, cands: list[Candidate]) -> list[Candidate]:
+        """Greedy nearest-neighbour route from the drone's position (fewer metres flown)."""
+        t = self.backend.telemetry()
+        pos = (t.lat, t.lon)
+        order: list[Candidate] = []
+        left = list(cands)
+        while left:
+            if pos[0] is None or pos[1] is None:
+                nxt = left[0]
+            else:
+                nxt = min(left, key=lambda c: distance_m(pos[0], pos[1], c.lat, c.lon))  # type: ignore[arg-type]
+            order.append(nxt)
+            left.remove(nxt)
+            pos = (nxt.lat, nxt.lon)
+        return order
 
     def inspect_candidate(self, candidate_id: str, altitude_m: float | None) -> Any:
         self.safety.require_actuation()
@@ -424,12 +475,21 @@ class DroneSearchServer:
                 f"no candidate {candidate_id!r}",
                 next_step=f"Known candidates: {[x.id for x in self.tracker.ranked()][:10]}",
             )
+        payload, images = self._inspect(c, altitude_m)
+        return self.respond(payload, images)
+
+    def _inspect(self, c: Candidate, altitude_m: float | None) -> tuple[dict[str, Any], list[McpImage]]:
+        assert self.target is not None
         frame = self.backend.latest_frame(max_age_s=30)
         if frame is None:
             raise VehicleError("no camera frame")
         if altitude_m is None:
-            # fill ~120 px with the object, but stay above trees and the altitude floor
-            altitude_m = float(np.clip(c.size_m * frame.camera.fx / 120, self.safety.cfg.min_alt_m, 20))
+            if self.backend.max_zoom > 1.0:
+                # zoom does the magnifying: stay at 12 m, above trees and roofs
+                altitude_m = float(max(self.safety.cfg.min_alt_m, 12.0))
+            else:
+                # fill ~120 px with the object, but stay above trees and the altitude floor
+                altitude_m = float(np.clip(c.size_m * frame.camera.fx / 120, self.safety.cfg.min_alt_m, 20))
         search_alt = max(
             self.plans[self.last_search["plan_id"]].altitude_m if self.last_search else 20.0, self.safety.cfg.min_alt_m
         )
@@ -452,6 +512,10 @@ class DroneSearchServer:
             "lat": round(res["lat"], 7),
             "lon": round(res["lon"], 7),
             "inspection_alt_m": None if res["alt_m"] is None else round(res["alt_m"], 1),
+            "zoom": round(res.get("zoom", 1.0), 1),
+            "image": "left: close-up from the drone; right: your reference"
+            if self.target.ref_crop is not None
+            else "close-up from the drone",
             "redetected_up_close": res["redetected"],
             "object_in_closeup": res["object_in_final_frame"],
             "closeup_score": _r(res["closeup_score"]),
@@ -465,7 +529,7 @@ class DroneSearchServer:
                 f"'{c.id}', confidence, notes). If not, inspect the next candidate."
             ),
         }
-        images = [_jpeg(res["closeup"], 512, 90)]
+        images = [_jpeg(self._with_reference(res["closeup"]), 768, 90, stretch=False)]
         if not res["object_in_final_frame"]:
             # nothing re-detected: show the whole view instead of an empty centre crop, so the
             # agent can judge for itself whether the object is in sight
@@ -474,7 +538,7 @@ class DroneSearchServer:
                 "is the centre of the view, the second the full frame at inspection altitude."
             )
             images.append(_jpeg(res["full_frame"], 768, 85))
-        return self.respond(payload, images)
+        return payload, images
 
     def capture_image(self) -> Any:
         f = self.backend.latest_frame(max_age_s=5)
@@ -652,11 +716,20 @@ def build_mcp(srv: DroneSearchServer) -> FastMCP:
         max_candidates: Annotated[
             int, Field(description="How many ranked candidates (with thumbnails) to return.", ge=1, le=12)
         ] = 6,
+        inspect_top: Annotated[
+            int,
+            Field(
+                description="Also inspect this many top candidates (nearest-first route) and return their close-ups "
+                "next to the reference, so you can decide in one step. 0 = search only.",
+                ge=0,
+                le=5,
+            ),
+        ] = 0,
     ) -> Any:
         """Fly a planned search pattern autonomously (takes off if needed) while the vision
         pipeline checks every camera frame. Blocks until the pattern is done or aborted, then
         returns ranked, deduplicated candidates with GPS, confidence and a thumbnail each."""
-        return srv.call("execute_search", srv.execute_search, plan_id, max_candidates)
+        return srv.call("execute_search", srv.execute_search, plan_id, max_candidates, inspect_top)
 
     @mcp.tool(annotations=FLY)
     def inspect_candidate(

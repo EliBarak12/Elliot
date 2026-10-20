@@ -1,0 +1,40 @@
+# drone-search-mcp vehicle parameters (applied on top of copter.parm + gazebo-iris.parm)
+# --- 3-axis servo gimbal driven by the ardupilot_gazebo plugin (channels 9-11) ---
+MNT1_TYPE 1
+SERVO9_FUNCTION 8
+SERVO10_FUNCTION 7
+SERVO11_FUNCTION 6
+MNT1_ROLL_MIN -30
+MNT1_ROLL_MAX 30
+MNT1_PITCH_MIN -135
+MNT1_PITCH_MAX 45
+MNT1_YAW_MIN -160
+MNT1_YAW_MAX 160
+# boot straight into a stabilised nadir view: MAV_MOUNT_MODE_NEUTRAL (1), neutral pitch -90 deg
+MNT1_DEFLT_MODE 1
+MNT1_NEUTRAL_X 0
+MNT1_NEUTRAL_Y -90
+MNT1_NEUTRAL_Z 0
+RC6_OPTION 0
+# --- autopilot-side safety net (the server enforces tighter limits on top) ---
+FENCE_ENABLE 1
+FENCE_TYPE 3
+FENCE_RADIUS 300
+FENCE_ALT_MAX 80
+FENCE_ACTION 1
+FS_GCS_ENABLE 1
+FS_GCS_TIMEOUT 5
+# SITL+JSON reports no battery current: sim/scripts/sim_battery.lua models it from motor
+# outputs and feeds a scripting battery backend, so the reserve/failsafes really fire
+SCR_ENABLE 1
+BATT_MONITOR 29
+BATT_CAPACITY 3300
+BATT_FS_CRT_ACT 1
+BATT_CRT_MAH 500
+BATT_FS_LOW_ACT 2
+BATT_LOW_MAH 800
+# --- mission behaviour ---
+WPNAV_SPEED 600
+WPNAV_ACCEL 250
+RTL_ALT 3000
+LAND_SPEED 80

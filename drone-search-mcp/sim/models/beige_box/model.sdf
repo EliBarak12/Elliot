@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <model name="beige_box">
+    <static>true</static>
+    <link name="link">
+      <pose>0 0 0.2 0 0 0</pose>
+      <collision name="c"><geometry><box><size>0.6 0.45 0.4</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>0.6 0.45 0.4</size></box></geometry>
+        <material><ambient>0.66 0.61 0.50 1</ambient><diffuse>0.82 0.76 0.62 1</diffuse><specular>0.1 0.1 0.1 1</specular></material>
+      </visual>
+    </link>
+  </model>
+</sdf>

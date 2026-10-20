@@ -1,0 +1,10 @@
+{
+  "id": "calibration",
+  "note": "Projection/frame-convention calibration. Markers are 1 m magenta squares at known world positions (x east, y north).",
+  "objects": [
+    {"name": "cal_east10", "uri": "model://calibration_marker", "x": 10, "y": 0, "yaw": 0},
+    {"name": "cal_north20", "uri": "model://calibration_marker", "x": 0, "y": 20, "yaw": 0},
+    {"name": "cal_sw", "uri": "model://calibration_marker", "x": -15, "y": -15, "yaw": 0},
+    {"name": "cal_box", "uri": "model://white_box", "x": 6, "y": 6, "yaw": 0}
+  ]
+}

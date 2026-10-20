@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <model name="blue_container">
+    <static>true</static>
+    <link name="link">
+      <pose>0 0 0.7 0 0 0</pose>
+      <collision name="c"><geometry><box><size>4.0 1.8 1.4</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>4.0 1.8 1.4</size></box></geometry>
+        <material><ambient>0.08 0.16 0.56 1</ambient><diffuse>0.1 0.2 0.7 1</diffuse><specular>0.1 0.1 0.1 1</specular></material>
+      </visual>
+    </link>
+  </model>
+</sdf>

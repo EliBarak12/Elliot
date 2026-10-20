@@ -1,0 +1,96 @@
+{
+  "seed": 4242,
+  "half_size_m": 200,
+  "origin": {
+    "lat": 47.397742,
+    "lon": 8.545594,
+    "alt_m": 488.0
+  },
+  "roads": [
+    {
+      "a": [
+        -200,
+        -35
+      ],
+      "b": [
+        200,
+        -35
+      ],
+      "width_m": 7,
+      "material": "asphalt"
+    },
+    {
+      "a": [
+        45,
+        -200
+      ],
+      "b": [
+        45,
+        200
+      ],
+      "width_m": 7,
+      "material": "asphalt"
+    },
+    {
+      "a": [
+        -120,
+        60
+      ],
+      "b": [
+        45,
+        20
+      ],
+      "width_m": 3,
+      "material": "dirt"
+    }
+  ],
+  "buildings": [
+    {
+      "model": "model://house_1",
+      "xy": [
+        -70,
+        -60
+      ],
+      "yaw": 0.0
+    },
+    {
+      "model": "model://house_2",
+      "xy": [
+        75,
+        15
+      ],
+      "yaw": 1.57
+    },
+    {
+      "model": "model://house_3",
+      "xy": [
+        -35,
+        85
+      ],
+      "yaw": 0.4
+    },
+    {
+      "model": "model://house_1",
+      "xy": [
+        80,
+        -70
+      ],
+      "yaw": 3.14
+    }
+  ],
+  "trees": {
+    "count": 28,
+    "models": [
+      "model://oak_tree",
+      "model://pine_tree"
+    ],
+    "keepout_m": 12
+  },
+  "launch": {
+    "xy": [
+      0,
+      0
+    ],
+    "keepout_m": 8
+  }
+}

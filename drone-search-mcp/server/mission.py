@@ -1,0 +1,386 @@
+"""Autonomous flight routines: fly a coverage plan while the vision pipeline runs, and
+inspect a candidate from close up. The LLM chooses *what*; this module flies."""
+
+from __future__ import annotations
+
+import math
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import cv2
+import numpy as np
+import structlog
+
+from backends.base import BackendError, DroneBackend, Frame
+from common.geo import distance_m, ne_between
+from server.errors import Aborted, VehicleError
+from server.planner import EnergyModel, SearchPlan
+from server.recorder import FlightRecorder
+from vision.pipeline import Candidate, CandidateTracker, Detection, FrameAnalyzer
+
+log = structlog.get_logger(__name__)
+
+
+@dataclass
+class SearchReport:
+    plan_id: str
+    completed: bool
+    abort_reason: str | None
+    duration_s: float
+    frames_analyzed: int
+    distance_flown_m: float
+    battery_start_pct: float | None
+    battery_end_pct: float | None
+    coverage_pct: float
+    candidates: list[Candidate] = field(default_factory=list)
+
+
+class MissionRunner:
+    """Owns the vehicle while a routine runs. Only one routine at a time."""
+
+    def __init__(self, backend: DroneBackend, recorder: FlightRecorder, energy: EnergyModel) -> None:
+        self.backend = backend
+        self.recorder = recorder
+        self.energy = energy
+        self.abort = threading.Event()
+        self.abort_reason: str | None = None
+        self.active: str | None = None
+        self.progress: dict[str, Any] = {}
+        self._lock = threading.Lock()
+
+    # ---------------------------------------------------------------- basics
+    def request_abort(self, reason: str) -> None:
+        self.abort_reason = reason
+        self.abort.set()
+        log.warning("mission.abort_requested", reason=reason)
+
+    def _check_abort(self) -> None:
+        if self.abort.is_set():
+            raise Aborted(self.abort_reason or "aborted")
+
+    def begin(self, name: str) -> None:
+        with self._lock:
+            if self.active:
+                from server.errors import StateConflict
+
+                raise StateConflict(
+                    f"'{self.active}' is already running",
+                    next_step="Wait for it to finish, or call emergency_stop / return_home.",
+                )
+            self.active = name
+            self.abort.clear()
+            self.abort_reason = None
+
+    def end(self) -> None:
+        with self._lock:
+            self.active = None
+
+    def _sleep(self, s: float) -> None:
+        if self.abort.wait(s):
+            raise Aborted(self.abort_reason or "aborted")
+
+    def _observe_energy(self) -> None:
+        t = self.backend.telemetry()
+        self.energy.observe(time.time(), t.battery_pct, t.armed and (t.alt_rel_m or 0) > 1)
+
+    def ensure_airborne(self, alt_m: float) -> None:
+        t = self.backend.telemetry()
+        if t.armed and (t.alt_rel_m or 0) > 1.5 and t.mode in ("GUIDED", "BRAKE", "LOITER"):
+            return
+        if t.armed and (t.alt_rel_m or 0) > 1.5:
+            self.backend.set_mode("GUIDED")
+            return
+        log.info("mission.takeoff", alt_m=alt_m)
+        try:
+            # earth-frame (stabilised) nadir; the boot-time NEUTRAL pose is body-frame only
+            self.backend.set_gimbal_nadir()
+            self.backend.arm_and_takeoff(alt_m)
+        except BackendError as exc:
+            raise VehicleError(f"takeoff failed: {exc}") from exc
+        t0 = time.time()
+        while (self.backend.telemetry().alt_rel_m or 0) < alt_m * 0.92:
+            self._check_abort()
+            if time.time() - t0 > 90:
+                raise VehicleError("did not reach take-off altitude within 90 s")
+            self._sleep(0.3)
+
+    def fly_to(
+        self,
+        lat: float,
+        lon: float,
+        alt: float,
+        speed: float | None = None,
+        tol_m: float = 1.5,
+        timeout_s: float = 300,
+        on_tick: Callable[[], None] | None = None,
+    ) -> None:
+        try:
+            self.backend.goto(lat, lon, alt, speed)
+        except BackendError as exc:
+            raise VehicleError(f"goto rejected: {exc}") from exc
+        t0 = time.time()
+        while True:
+            self._check_abort()
+            t = self.backend.telemetry()
+            if t.mode != "GUIDED":
+                raise Aborted(f"vehicle left GUIDED mode (now {t.mode})")
+            if t.lat is not None and t.alt_rel_m is not None:
+                d = distance_m(t.lat, t.lon, lat, lon)  # type: ignore[arg-type]
+                if d < tol_m and abs(t.alt_rel_m - alt) < 1.5:
+                    return
+            if time.time() - t0 > timeout_s:
+                raise VehicleError(f"did not reach waypoint within {timeout_s:.0f} s")
+            if on_tick:
+                on_tick()
+            self._observe_energy()
+            time.sleep(0.05)
+
+    # ---------------------------------------------------------------- search
+    def run_search(
+        self,
+        plan: SearchPlan,
+        analyzer: FrameAnalyzer,
+        tracker: CandidateTracker,
+    ) -> SearchReport:
+        t_start = time.time()
+        b0 = self.backend.telemetry().battery_pct
+        frames: dict[str, float] = {"n": 0, "last_seq": -1, "analysis_s": 0.0}
+        flown: dict[str, Any] = {"m": 0.0, "last": None}
+        covered: set[tuple[int, int]] = set()
+        cell = 4.0  # coverage grid, metres
+        home = self.backend.telemetry()
+        ref_lat, ref_lon = home.home_lat or home.lat, home.home_lon or home.lon
+        if ref_lat is None or ref_lon is None:
+            raise VehicleError("no home/GPS position; cannot run a search")
+        ref = (ref_lat, ref_lon)
+
+        def analyze_latest() -> None:
+            f: Frame | None = self.backend.latest_frame(max_age_s=1.5)
+            if f is None or f.seq == frames["last_seq"]:
+                return
+            frames["last_seq"] = f.seq
+            p = f.pose
+            if p.alt_rel_m is None or p.alt_rel_m < plan.altitude_m * 0.8:
+                return
+            t0 = time.time()
+            dets = analyzer.analyze(f)
+            frames["analysis_s"] = (
+                0.8 * frames["analysis_s"] + 0.2 * (time.time() - t0) if frames["n"] else time.time() - t0
+            )
+            tracker.add(dets)
+            tracker.note_coverage(f)
+            frames["n"] += 1
+            self._mark_coverage(f, ref, covered, cell)
+            self.recorder.note_detections(f, dets)
+            self.progress.update(frames_analyzed=frames["n"], candidates=len(tracker.candidates))
+
+        # Analysis runs on its own thread so slow inference never delays flight commands.
+        stop_vision = threading.Event()
+
+        def vision_loop() -> None:
+            while not stop_vision.is_set():
+                try:
+                    analyze_latest()
+                except Exception:
+                    log.error("mission.vision.error", exc_info=True)
+                    time.sleep(0.5)
+                time.sleep(0.02)
+
+        completed, reason = False, None
+        self.recorder.start(f"search_{plan.id}")
+        try:
+            self.ensure_airborne(plan.altitude_m)
+            th = threading.Thread(target=vision_loop, daemon=True, name="vision")
+            th.start()
+            n = len(plan.waypoints)
+            for i, (lat, lon) in enumerate(plan.waypoints):
+                self.progress.update(waypoint=i + 1, of=n)
+                self.fly_to(
+                    lat,
+                    lon,
+                    plan.altitude_m,
+                    self._speed_for(plan, frames["analysis_s"]),
+                    tol_m=2.5,
+                    on_tick=lambda: tick_light(flown, self.backend),
+                )
+            completed = True
+        except Aborted as exc:
+            reason = exc.message
+        finally:
+            stop_vision.set()
+            self.recorder.stop()
+        area_cells = max(1.0, plan.area_m2 / (cell * cell))
+        report = SearchReport(
+            plan.id,
+            completed,
+            reason,
+            time.time() - t_start,
+            int(frames["n"]),
+            flown["m"],
+            b0,
+            self.backend.telemetry().battery_pct,
+            min(100.0, 100 * len(covered) / area_cells),
+            tracker.ranked(),
+        )
+        log.info(
+            "mission.search.complete",
+            plan_id=plan.id,
+            completed=completed,
+            reason=reason,
+            frames=frames["n"],
+            candidates=len(report.candidates),
+        )
+        return report
+
+    def _speed_for(self, plan: SearchPlan, analysis_s: float) -> float:
+        """Slow down if vision can't keep up: each ground spot should be analysed in >= 2 frames."""
+        if analysis_s <= 0:
+            return plan.speed_ms
+        along = plan.footprint_m[1]
+        v = along / 2.0 / max(analysis_s, 0.05)
+        return float(np.clip(min(plan.speed_ms, v), 2.0, plan.speed_ms))
+
+    @staticmethod
+    def _mark_coverage(f: Frame, ref: tuple[float, float], covered: set[tuple[int, int]], cell: float) -> None:
+        p = f.pose
+        if p.lat is None or p.lon is None or p.alt_rel_m is None:
+            return
+        n0, e0 = ne_between(ref[0], ref[1], p.lat, p.lon)
+        hw = f.camera.width / 2 * p.alt_rel_m / f.camera.fx
+        hh = f.camera.height / 2 * p.alt_rel_m / f.camera.fy
+        c, s = math.cos(p.yaw_rad), math.sin(p.yaw_rad)
+        for fwd in np.arange(-hh, hh, cell):
+            for right in np.arange(-hw, hw, cell):
+                n = n0 + fwd * c - right * s
+                e = e0 + fwd * s + right * c
+                covered.add((int(n // cell), int(e // cell)))
+
+    # --------------------------------------------------------------- inspect
+    def run_inspect(
+        self,
+        cand: Candidate,
+        analyzer: FrameAnalyzer,
+        search_alt: float,
+        inspect_alt: float,
+        out_dir: Path,
+    ) -> dict[str, Any]:
+        self.recorder.start(f"inspect_{cand.id}")
+        try:
+            self.ensure_airborne(search_alt)
+            t = self.backend.telemetry()
+            cruise = max(search_alt, t.alt_rel_m or search_alt)
+            self.fly_to(cand.lat, cand.lon, cruise, 5.0, tol_m=1.5)
+            # descend in two steps, re-centring on the object each time (visual servoing)
+            lat, lon = cand.lat, cand.lon
+            refined: list[Detection] = []
+            for alt in (max(inspect_alt, (cruise + inspect_alt) / 2), inspect_alt):
+                self.fly_to(lat, lon, alt, 2.0, tol_m=0.8)
+                self._sleep(1.5)
+                dets = self._detect_near(analyzer, lat, lon, radius_m=max(3.0, cand.size_m * 1.5), n_frames=4)
+                if dets:
+                    w = np.array([d.score for d in dets])
+                    lat = float(np.dot(w, [d.lat for d in dets]) / w.sum())
+                    lon = float(np.dot(w, [d.lon for d in dets]) / w.sum())
+                    refined = dets
+            self.fly_to(lat, lon, inspect_alt, 1.5, tol_m=0.5)
+            self._sleep(1.5)
+            f = self.backend.latest_frame(max_age_s=1.5)
+            if f is None:
+                raise VehicleError("no camera frame at the inspection point")
+            closeup, box = self._closeup(f, refined, lat, lon, cand.size_m)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            path = out_dir / f"closeup_{cand.id}.jpg"
+            cv2.imwrite(str(path), cv2.cvtColor(closeup, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
+            full = out_dir / f"closeup_{cand.id}_frame.jpg"
+            cv2.imwrite(str(full), cv2.cvtColor(f.image, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 90])
+            best = max(refined, key=lambda d: d.score) if refined else None
+            moved = distance_m(cand.lat, cand.lon, lat, lon)
+            return {
+                "closeup": closeup,
+                "closeup_path": str(path),
+                "frame_path": str(full),
+                "lat": lat,
+                "lon": lon,
+                "refined_shift_m": moved,
+                "redetected": bool(refined),
+                "closeup_score": best.score if best else None,
+                "alt_m": f.pose.alt_rel_m,
+                "cues": best.cues if best else None,
+            }
+        finally:
+            self.recorder.stop()
+
+    def _detect_near(
+        self, analyzer: FrameAnalyzer, lat: float, lon: float, radius_m: float, n_frames: int
+    ) -> list[Detection]:
+        out: list[Detection] = []
+        last = -1
+        t0 = time.time()
+        while time.time() - t0 < 12 and n_frames > 0:
+            self._check_abort()
+            f = self.backend.latest_frame(max_age_s=1.0)
+            if f is None or f.seq == last:
+                time.sleep(0.1)
+                continue
+            last = f.seq
+            n_frames -= 1
+            dets = analyzer.analyze(f)
+            self.recorder.note_detections(f, dets)
+            out += [d for d in dets if distance_m(d.lat, d.lon, lat, lon) < radius_m]
+        return out
+
+    @staticmethod
+    def _closeup(
+        f: Frame, dets: list[Detection], lat: float, lon: float, size_m: float
+    ) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+        """Crop of the full-resolution frame around the object (or the image centre)."""
+        h, w = f.image.shape[:2]
+        alt = f.pose.alt_rel_m or 10.0
+        px_per_m = f.camera.fx / alt
+        half = int(np.clip(size_m * px_per_m * 2.0, 96, 360))
+        if dets:
+            d = max(dets, key=lambda d: d.score)
+            x0, y0, x1, y1 = d.bbox
+            cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+        else:
+            cx, cy = w // 2, h // 2
+        x0, y0 = max(0, cx - half), max(0, cy - half)
+        x1, y1 = min(w, cx + half), min(h, cy + half)
+        crop = f.image[y0:y1, x0:x1]
+        if max(crop.shape[:2]) < 384:
+            s = 384 / max(crop.shape[:2])
+            crop = cv2.resize(crop, (int(crop.shape[1] * s), int(crop.shape[0] * s)), interpolation=cv2.INTER_CUBIC)
+        return crop, (x0, y0, x1, y1)
+
+    # --------------------------------------------------------------- simple legs
+    def goto_blocking(self, lat: float, lon: float, alt: float, speed: float | None) -> None:
+        self.recorder.start("goto")
+        try:
+            self.ensure_airborne(alt)
+            self.fly_to(lat, lon, alt, speed, tol_m=1.5, on_tick=lambda: tick_light({}, self.backend))
+        finally:
+            self.recorder.stop()
+
+    def wait_landed(self, timeout_s: float = 600) -> bool:
+        t0 = time.time()
+        while time.time() - t0 < timeout_s:
+            t = self.backend.telemetry()
+            if not t.armed and (t.alt_rel_m or 0) < 1.0:
+                return True
+            self._observe_energy()
+            time.sleep(0.5)
+        return False
+
+
+def tick_light(state: dict[str, Any], backend: DroneBackend) -> None:
+    """Cheap per-loop bookkeeping on the flight thread (distance flown)."""
+    t = backend.telemetry()
+    if t.lat is None or not isinstance(state, dict) or "m" not in state:
+        return
+    if state.get("last") is not None:
+        state["m"] += distance_m(state["last"][0], state["last"][1], t.lat, t.lon)  # type: ignore[arg-type]
+    state["last"] = (t.lat, t.lon)

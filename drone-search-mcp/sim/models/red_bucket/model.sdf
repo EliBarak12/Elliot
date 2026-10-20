@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <model name="red_bucket">
+    <static>true</static>
+    <link name="link">
+      <pose>0 0 0.175 0 0 0</pose>
+      <collision name="c"><geometry><cylinder><radius>0.18</radius><length>0.35</length></cylinder></geometry></collision>
+      <visual name="v"><geometry><cylinder><radius>0.18</radius><length>0.35</length></cylinder></geometry>
+        <material><ambient>0.64 0.08 0.08 1</ambient><diffuse>0.8 0.1 0.1 1</diffuse><specular>0.1 0.1 0.1 1</specular></material>
+      </visual>
+    </link>
+  </model>
+</sdf>

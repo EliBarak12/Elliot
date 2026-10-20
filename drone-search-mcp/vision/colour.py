@@ -23,7 +23,7 @@ from vision.matcher import object_mask
 log = structlog.get_logger(__name__)
 
 # CIELAB hue angle upper bounds (degrees); saturated reds sit at ~30 deg in Lab
-HUES = [(45, "red"), (75, "orange/tan"), (105, "yellow/beige"), (190, "green"), (290, "blue"), (340, "purple")]
+HUES = [(45, "red"), (75, "orange/tan"), (105, "yellow/beige"), (190, "green"), (310, "blue"), (340, "purple")]
 
 
 def _lab(img: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -35,6 +35,9 @@ Palette = list[dict[str, float]]  # [{"L", "a", "b", "share"}], largest share fi
 
 # lightness counts a little (white vs black are both colourless), tint counts fully
 L_WEIGHT = 0.2
+# a reference colour at least this saturated identifies the object (red, blue, ...) and must
+# appear in the close-up
+KEY_CHROMA = 20.0  # jeans measure ~12 (barely visible from above), a blue car ~32, red ~46
 
 
 def _palette(L: np.ndarray, a: np.ndarray, b: np.ndarray, keep: np.ndarray, k: int = 3) -> Palette | None:
@@ -130,9 +133,24 @@ def compare(closeup: Palette | None, reference: Palette | None) -> dict[str, obj
     if not closeup or not reference:
         return None
     d = sum(c["share"] * min(_distance(c, r) for r in reference) for c in closeup)
+    # The reference's own colour must show up in the close-up. Neutral parts (tyres, windows,
+    # straps) are common to many objects: a white car matched a blue car's grey windows and
+    # read as "same colours" (hard-8002).
+    missing = [
+        r
+        for r in reference
+        if r["share"] >= 0.25
+        and math.hypot(r["a"], r["b"]) >= KEY_CHROMA
+        and not any(c["share"] >= 0.15 and _distance(c, r) < 0.45 for c in closeup)
+    ]
     # v5/v6 close-ups: white objects 0.11-0.25 from a white reference, beige boxes 0.75-0.95,
     # red backpacks 0.11-0.39 from a red one, red vs white ~4
-    if d < 0.45:
+    if missing:
+        verdict = (
+            f"clearly different colours from the reference: its {colour_name(missing[0])} is missing from the "
+            "close-up; likely a look-alike"
+        )
+    elif d < 0.45:
         verdict = "same colours as the reference"
     elif d < 0.65:
         verdict = "slightly different colours from the reference (check it is not a look-alike)"

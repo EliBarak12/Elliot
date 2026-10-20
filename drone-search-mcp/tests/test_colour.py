@@ -73,3 +73,23 @@ def test_multicoloured_reference_matches_its_main_colour() -> None:
     assert rc is not None and len(rc) >= 2
     r = compare(red, rc)
     assert r is not None and r["verdict"] == "same colours as the reference"
+
+
+def test_white_car_does_not_match_a_blue_car_reference_through_its_grey_parts() -> None:
+    # hard-8002: the blue car's reference also holds grey windows and dark tyres; a white car
+    # matched those and was called "same colours"
+    ref = _reference((40, 60, 170))
+    ref[90:115, 140:200] = (120, 120, 120)  # windows
+    ref[160:170, 120:220] = (20, 20, 20)  # tyres
+    white = compare(closeup_colour(_aerial((200, 200, 198))), reference_colour(ref))
+    blue = compare(closeup_colour(_aerial((45, 62, 160))), reference_colour(ref))
+    assert white is not None and "blue is missing" in str(white["verdict"])
+    assert blue is not None and blue["verdict"] == "same colours as the reference"
+
+
+def test_faint_jeans_blue_is_not_required_from_above() -> None:
+    # a person's jeans (chroma ~12) are barely visible from overhead; not a key colour
+    ref = _reference((215, 215, 212))  # white t-shirt
+    ref[130:170, 120:220] = (60, 75, 100)  # jeans
+    r = compare(closeup_colour(_aerial((205, 205, 203))), reference_colour(ref))
+    assert r is not None and "missing" not in str(r["verdict"])

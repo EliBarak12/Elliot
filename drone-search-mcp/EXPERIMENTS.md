@@ -308,3 +308,33 @@ the bias is now low-passed over 10 s (still 1–2 m, wandering over minutes, lik
 receiver); `state.waiting_for` tells the agent what the vehicle still needs before it can
 fly; `plan_search` waits for a `set_search_target` issued in parallel instead of failing
 (agents keep doing this).
+
+## v5 (commit 5542f8b) — 21 new random scenarios, 7 per tier
+
+| tier | runs | success | median error | max error | false reports / 20 | median time | median calls |
+|---|---|---|---|---|---|---|---|
+| all | 21 | 76.2% | 2.03 m | 3.26 m | 2.86 | 252 s | 5 |
+| easy | 7 | 100% | 1.77 m | 2.96 m | 0 | 208 s | 5 |
+| medium | 7 | 100% | 2.49 m | 3.26 m | 0 | 290 s | 5 |
+| hard | 7 | 28.6% | 0.69 m | 1.26 m | 8.57 | 377 s | 5 |
+
+Every scored error is under 5 m; with the true injected GPS bias removed the median is
+**0.38 m**, so the remaining error is the drone's own GPS. Easy and medium are solved
+(14/14, no false reports, ~5 tool calls). All five failures are hard-tier objects under
+trees; three of them ended in a false report. Each failure was traced from its trace page
+(`eval/trace_report.py`) and saved frames:
+
+| run | what happened | root cause | fix (commit) |
+|---|---|---|---|
+| hard-7002 | occluded white box never became a candidate; agent reported nothing | detection under canopy | open |
+| hard-7005 | target was candidate c4 and was inspected, but the 4× close-up (~4 m across) showed only tree shade; agent rejected it | narrow telephoto view + drift | fall back to the wide camera when the tele frame shows nothing (e215fea) |
+| hard-7008 | false report: person in a blue shirt for one in a white t-shirt | inspection asked for 1.8× zoom, below the wide/tele 2× switch, so the close-up stayed wide | zoom as far as keeps the object in half the frame; prompt to check colours vs look-alikes (b1dc968) |
+| hard-7011 | false report: beige box for the white box; every close-up said `object_in_closeup: false` | ArduPilot turned to face each short re-centring move (~45°/s); the analyzer skips rotating frames | hold heading on inspection moves, wait for a steady frame (8a0e16a) |
+| hard-7017 | false report: beige box again; real box was candidate 9 of 10, not inspected | beige vs white is not visible by eye in a dim close-up | measured `colour_check` (CIELAB tint vs reference; white 1.4–2.2, beige 8.1–10.0 on all 41 v5 close-ups) (c923cf0) |
+
+Agent-reported confusion also exposed unlabelled images (thumbnails and close-ups arrive as
+an unnumbered list) and a contradictory close-up note; every image now carries its
+candidate id and responses list their images in order (0b49e37). The
+`object_in_closeup: false` complaints in easy/medium runs are the same heading bug.
+
+Every v5 run has a trace page and a flight video (`output/traces/`, `output/videos/`).

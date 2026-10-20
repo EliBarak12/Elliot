@@ -10,13 +10,15 @@ wind with drag, lens distortion, compressed/late/dropped video). Full history wi
 |---|---|---|---|---|---|
 | v2 | 18 | 77.8% (easy 86%, medium 83%, hard 60%) | 1.85 m (max 4.5) | 3.3 | baseline under real-world conditions |
 | v3 | 2 (stopped) | 2/2 | 1.75 m | 0 | one-shot `inspect_top` solved the red-backpack look-alike case; slow (12–16 min) |
-| v4 | 0 | – | – | – | blocked by a degraded VM (see below) |
+| v4 | 2 (stopped) | 2/2 scored | 1.87 m | 0 | one run never flew (GPS drift bug, fixed) |
+| v5 | 21 | 76.2% (easy 100%, medium 100%, hard 29%) | 2.03 m (max 3.26; 0.38 without GPS bias) | 2.86 | all failures: hard-tier objects under trees; 5 fixes since |
 
 Against the targets (≥85% success, <5 m error, <2 false reports per 20): **position error is
-met in every scored run**; success and false reports were not met in v2, and all four v2
-failures were traced to bugs that are now fixed (identical-looking cars from a material
-cache bug, inspections flying to stale positions, too-small close-ups, missing frame waits).
-Whether v3/v4 meet the success and false-report targets is **not yet measured**.
+met in every scored run** (v5 max 3.26 m). Easy and medium tiers meet every target in v5
+(14/14, no false reports). The overall numbers miss because of the hard tier (2/7, three
+false reports), where every failure is an object under trees; v5's traces exposed five
+concrete causes, four of them now fixed (see EXPERIMENTS.md). v6 measures those fixes on new
+scenarios.
 
 ## What works
 
@@ -39,8 +41,10 @@ Whether v3/v4 meet the success and false-report targets is **not yet measured**.
 
 ## What fails or is unproven
 
-* **Hard tier** (occlusion under trees, small targets, strong wind): 60% in v2; an occluded
-  target sometimes never becomes a candidate. Not yet diagnosed from the saved frames.
+* **Hard tier** (occlusion under trees, small targets, strong wind): 29% in v5. One target
+  never became a candidate (detection under canopy, still open); the rest were inspection
+  problems (narrow zoom missing the object, no zoom, spinning re-centring, beige-vs-white
+  look-alikes), fixed after v5 and not yet re-measured.
 * **Look-alikes** need close-ups: solved in the v3 runs we have, but on two runs only.
 * **Throughput**: on this CPU-only VM the detector sees ~1–1.5 frames per sim second; a
   small target is sometimes seen only once. A GPU (or a real companion computer with an
@@ -72,7 +76,7 @@ Whether v3/v4 meet the success and false-report targets is **not yet measured**.
    `--allow-real-vehicle` with a human-confirmed geofence, a pilot with RC override,
    obstacle-aware inspection altitudes (the 12 m floor assumes no tall obstacles),
    lost-link and lost-video behaviour (the GCS-heartbeat failsafe is already enabled).
-5. **Finish the eval loop on a healthy machine**: run `scripts/eval_snapshot.sh v4 --n 21`
+5. **Finish the eval loop**: run `scripts/eval_snapshot.sh v6 --n 21`
    and continue until the targets hold on fresh scenarios; then fly small, open-field,
    large-target missions first.
 
@@ -81,4 +85,4 @@ Whether v3/v4 meet the success and false-report targets is **not yet measured**.
 In the final hours of this session the cloud VM's memory became pathologically slow for
 fresh allocations (≈20 MB/s; a CLIP forward pass went from 0.32 s to 24.5 s, and even the
 stock ardupilot_gazebo world could not keep SITL in lockstep). Guest metrics were normal and
-freeing caches/artifacts did not help, so v4 has to run on a fresh machine.
+freeing caches/artifacts did not help. After a machine restart it was healthy again, and v4/v5 ran normally.

@@ -154,3 +154,19 @@ with redetected_up_close false" — it correctly reported nothing rather than gu
 * Thumbnails and close-ups shown to the LLM are contrast-stretched (vision still sees raw).
 
 On the medium-2001 frame: person proposal recovered (text cue 0.83), size factor 0.31 → 0.88.
+
+### v2 run easy-3003: GPS drift between search and inspection (fixed for v3)
+
+Success, but 4.3 m error and 13 tool calls. All 14 search sightings were consistently
+~4.7 m off (the GPS bias at the time). By the time of the inspection the bias had
+wandered, so the backpack was in the 8 m close-up frame but outside the 3 m radius the
+inspector looked in; the close-up was a centre crop of grass. The agent fell back to
+manual goto + capture_image and noted it could only report the candidate's coordinates.
+A real drone does exactly this.
+
+v3 inspection: re-acquire visually across the whole frame at each descent step,
+weighting detections by score × closeness on a GPS-drift scale (6 m), re-centre, and crop
+the close-up from detections in the *final* frame (it used boxes from an earlier, higher
+frame). If nothing is re-detected the agent gets the full frame too, plus
+`object_in_closeup: false`. Test: `tests/test_inspect_reacquire.py` (candidate 4 m off →
+re-centred within 1 m).

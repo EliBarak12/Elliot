@@ -453,6 +453,7 @@ class DroneSearchServer:
             "lon": round(res["lon"], 7),
             "inspection_alt_m": None if res["alt_m"] is None else round(res["alt_m"], 1),
             "redetected_up_close": res["redetected"],
+            "object_in_closeup": res["object_in_final_frame"],
             "closeup_score": _r(res["closeup_score"]),
             "closeup_cues": None
             if cues is None
@@ -464,7 +465,16 @@ class DroneSearchServer:
                 f"'{c.id}', confidence, notes). If not, inspect the next candidate."
             ),
         }
-        return self.respond(payload, [_jpeg(res["closeup"], 512, 90)])
+        images = [_jpeg(res["closeup"], 512, 90)]
+        if not res["object_in_final_frame"]:
+            # nothing re-detected: show the whole view instead of an empty centre crop, so the
+            # agent can judge for itself whether the object is in sight
+            payload["note"] = (
+                "Vision did not re-detect the object in the final close-up frame; the first image "
+                "is the centre of the view, the second the full frame at inspection altitude."
+            )
+            images.append(_jpeg(res["full_frame"], 768, 85))
+        return self.respond(payload, images)
 
     def capture_image(self) -> Any:
         f = self.backend.latest_frame(max_age_s=5)

@@ -337,24 +337,29 @@ class MissionRunner:
             t = self.backend.telemetry()
             cruise = max(search_alt, t.alt_rel_m or search_alt)
             self.fly_to(cand.lat, cand.lon, cruise, 5.0, tol_m=1.5)
-            # descend in two steps, re-centring on the object each time (visual servoing)
+            # Descend in steps, re-acquiring the object *visually* each time. The candidate's
+            # GPS was measured minutes ago and GPS drifts (~1-2 m over minutes), so search the
+            # whole frame and prefer strong detections close to where we expect it.
             lat, lon = cand.lat, cand.lon
             refined: list[Detection] = []
-            for alt in (max(inspect_alt, (cruise + inspect_alt) / 2), inspect_alt):
+            steps = [a for a in (max(inspect_alt, min(cruise, 14.0)), inspect_alt) if a < cruise + 0.5]
+            for alt in dict.fromkeys(steps or [inspect_alt]):
                 self.fly_to(lat, lon, alt, 2.0, tol_m=0.8)
                 self._sleep(1.5)
-                dets = self._detect_near(analyzer, lat, lon, radius_m=max(3.0, cand.size_m * 1.5), n_frames=4)
-                if dets:
-                    w = np.array([d.score for d in dets])
-                    lat = float(np.dot(w, [d.lat for d in dets]) / w.sum())
-                    lon = float(np.dot(w, [d.lon for d in dets]) / w.sum())
-                    refined = dets
+                found = self._reacquire(analyzer, lat, lon, cand.size_m, n_frames=4)
+                if found:
+                    w = np.array([d.score for d in found])
+                    lat = float(np.dot(w, [d.lat for d in found]) / w.sum())
+                    lon = float(np.dot(w, [d.lon for d in found]) / w.sum())
+                    refined = found
             self.fly_to(lat, lon, inspect_alt, 1.5, tol_m=0.5)
             self._sleep(1.5)
             f = self.backend.latest_frame(max_age_s=1.5)
             if f is None:
                 raise VehicleError("no camera frame at the inspection point")
-            closeup, box = self._closeup(f, refined, lat, lon, cand.size_m)
+            # crop from detections in *this* frame (boxes from earlier frames do not apply)
+            final = self._pick(analyzer.analyze(f), lat, lon, cand.size_m)
+            closeup, box = self._closeup(f, final, lat, lon, cand.size_m)
             out_dir.mkdir(parents=True, exist_ok=True)
             path = out_dir / f"closeup_{cand.id}.jpg"
             cv2.imwrite(str(path), cv2.cvtColor(closeup, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
@@ -364,6 +369,8 @@ class MissionRunner:
             moved = distance_m(cand.lat, cand.lon, lat, lon)
             return {
                 "closeup": closeup,
+                "full_frame": f.image,
+                "object_in_final_frame": bool(final),
                 "closeup_path": str(path),
                 "frame_path": str(full),
                 "lat": lat,
@@ -377,9 +384,10 @@ class MissionRunner:
         finally:
             self.recorder.stop()
 
-    def _detect_near(
-        self, analyzer: FrameAnalyzer, lat: float, lon: float, radius_m: float, n_frames: int
+    def _reacquire(
+        self, analyzer: FrameAnalyzer, lat: float, lon: float, size_m: float, n_frames: int
     ) -> list[Detection]:
+        """Detections of the object over a few frames, searched across the whole frame."""
         out: list[Detection] = []
         last = -1
         t0 = time.time()
@@ -393,8 +401,27 @@ class MissionRunner:
             n_frames -= 1
             dets = analyzer.analyze(f)
             self.recorder.note_detections(f, dets)
-            out += [d for d in dets if distance_m(d.lat, d.lon, lat, lon) < radius_m]
-        return out
+            out += self._pick(dets, lat, lon, size_m)
+        if not out:
+            return []
+        # keep the cluster around the strongest re-acquisition, drop stray blobs
+        best = max(out, key=lambda d: d.score)
+        r = max(2.0, size_m)
+        return [d for d in out if distance_m(d.lat, d.lon, best.lat, best.lon) < r]
+
+    @staticmethod
+    def _pick(dets: list[Detection], lat: float, lon: float, size_m: float, drift_m: float = 6.0) -> list[Detection]:
+        """The detection most likely to be our object: score weighted by distance from the
+        expected position on a GPS-drift scale. Returns [] or [best]."""
+        if not dets:
+            return []
+
+        def weight(d: Detection) -> float:
+            dist = distance_m(d.lat, d.lon, lat, lon)
+            return d.score * float(np.exp(-0.5 * (dist / (drift_m + size_m)) ** 2))
+
+        best = max(dets, key=weight)
+        return [best] if weight(best) > 0.1 else []
 
     @staticmethod
     def _closeup(

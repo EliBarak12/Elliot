@@ -357,9 +357,9 @@ class MissionRunner:
             zoom = self._zoom_in(analyzer, cand, lat, lon, inspect_alt)
             if zoom["lat"] is not None:
                 lat, lon = zoom["lat"], zoom["lon"]
-            f = self.backend.latest_frame(max_age_s=1.5)
+            f = self._fresh_frame(6.0)
             if f is None:
-                raise VehicleError("no camera frame at the inspection point")
+                raise VehicleError("no camera frame at the inspection point for 6 s (video link down?)")
             # crop from detections in *this* frame (boxes from earlier frames do not apply)
             final = self._pick(analyzer.analyze(f), lat, lon, cand.size_m)
             closeup, box = self._closeup(f, final, lat, lon, cand.size_m)
@@ -396,7 +396,7 @@ class MissionRunner:
         """Optical zoom until the object spans ~target_px, re-centring halfway (a narrow
         field of view leaves little room for hover drift)."""
         out: dict[str, Any] = {"zoom": 1.0, "lat": None, "lon": None}
-        f = self.backend.latest_frame(max_age_s=2.0)
+        f = self._fresh_frame(4.0)
         if self.backend.max_zoom <= 1.0 or f is None:
             return out
         base_fx = f.camera.fx
@@ -416,6 +416,18 @@ class MissionRunner:
                 self._sleep(1.0)
             out["zoom"] = applied
         return out
+
+    def _fresh_frame(self, timeout_s: float) -> Frame | None:
+        """Wait for a usable frame: real video links drop and delay frames, and a frame is
+        unusable until the pose stream covers its exposure time."""
+        t0 = time.time()
+        while time.time() - t0 < timeout_s:
+            self._check_abort()
+            f = self.backend.latest_frame(max_age_s=1.5)
+            if f is not None:
+                return f
+            time.sleep(0.1)
+        return None
 
     def _wait_zoom(self, fx_target: float, timeout_s: float = 5.0) -> None:
         t0 = time.time()

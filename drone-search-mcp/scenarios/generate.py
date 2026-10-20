@@ -20,6 +20,7 @@ Tiers:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import os
@@ -322,12 +323,14 @@ def render_reference(info: dict[str, Any]) -> bool:
     ]
     # Software rendering can be slow to deliver the first frames when the CPU is busy
     # (an eval's simulator still shutting down): one retry with a longer timeout.
+    # Success = a fresh image on disk: in v2 three renders wrote the image but exited
+    # non-zero while tearing Gazebo down, and their runs were thrown away.
     for _ in range(2):
-        try:
-            if subprocess.run(cmd, capture_output=True, timeout=300).returncode == 0 and out.exists():
-                return True
-        except subprocess.TimeoutExpired:
-            pass
+        out.unlink(missing_ok=True)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            subprocess.run(cmd, capture_output=True, timeout=300)
+        if out.exists() and out.stat().st_size > 1000:
+            return True
     return False
 
 

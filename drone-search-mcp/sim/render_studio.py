@@ -45,10 +45,12 @@ def render(model: str, out: Path, dist: float, pitch_deg: float, yaw_deg: float,
                     "--once",
                     str(out),
                     "--skip",
-                    "4",
+                    "2",
+                    "--timeout",
+                    "240",
                 ],
                 env=env,
-                timeout=180,
+                timeout=280,
             )
             return r.returncode == 0
         finally:

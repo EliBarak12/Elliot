@@ -320,7 +320,15 @@ def render_reference(info: dict[str, Any]) -> bool:
         "--aim-z",
         str(ref.get("aim_z", 0.0)),
     ]
-    return subprocess.run(cmd, capture_output=True, timeout=240).returncode == 0
+    # Software rendering can be slow to deliver the first frames when the CPU is busy
+    # (an eval's simulator still shutting down): one retry with a longer timeout.
+    for _ in range(2):
+        try:
+            if subprocess.run(cmd, capture_output=True, timeout=300).returncode == 0 and out.exists():
+                return True
+        except subprocess.TimeoutExpired:
+            pass
+    return False
 
 
 def main() -> int:

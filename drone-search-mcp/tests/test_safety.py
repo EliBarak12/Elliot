@@ -58,8 +58,10 @@ def test_battery_budget(backend: FakeBackend) -> None:
 
 def test_unknown_home_fails_closed(backend: FakeBackend) -> None:
     backend._t.home_lat = None
+    g = SafetyGate(SafetyConfig(), backend)
+    g.home_wait_s = 0.5
     with pytest.raises(SafetyViolation, match="home"):
-        SafetyGate(SafetyConfig(), backend).check_point(*HOME, 20)
+        g.check_point(*HOME, 20)
 
 
 def test_reserve_monitor_triggers_rtl(backend: FakeBackend) -> None:

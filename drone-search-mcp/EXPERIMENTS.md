@@ -289,3 +289,14 @@ new memory runs at ~20 MB/s, a CLIP forward pass went from 0.32 s to 24.5 s, and
 ardupilot_gazebo's stock `iris_runway` world can no longer keep SITL in lockstep. Dropping
 caches and deleting artifacts did not help; it is below the guest. v4 could not be run
 here and needs a fresh machine.
+
+## v4 (commit c4e73ee) — running on a fresh machine
+
+Run easy-6000 (person): success, 1.82 m of which **0.12 m** without the GPS bias, found in
+194 s (v3: 753 s — the sim-time speed governor works). Fixes queued for v5 from this run:
+* The first plan/execute failed with "home position unknown": ArduPilot sets home only once
+  EKF3 has a GPS origin. The geofence check now waits up to 30 s for home (still failing
+  closed after that).
+* "object_in_closeup: false" while the close-up clearly showed the person: CLIP gives a
+  zoomed top-down person a weak text cue (0.12; score 0.39). The final close-up check runs
+  with a lower threshold near the re-acquired position, since the drone is hovering on it.

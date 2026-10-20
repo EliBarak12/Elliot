@@ -364,7 +364,10 @@ class MissionRunner:
             if f is None:
                 raise VehicleError("no camera frame at the inspection point for 6 s (video link down?)")
             # crop from detections in *this* frame (boxes from earlier frames do not apply)
-            final = self._pick(analyzer.analyze(f), lat, lon, cand.size_m)
+            # We are hovering over a just re-acquired object, so accept weaker evidence here:
+            # CLIP scores a zoomed top-down person poorly (0.12 text cue, run easy-6000) and a
+            # false "object_in_closeup: false" contradicts the image the agent is looking at.
+            final = self._pick(analyzer.analyze(f, min_score=0.15), lat, lon, cand.size_m, drift_m=3.0)
             closeup, box = self._closeup(f, final, lat, lon, cand.size_m)
             out_dir.mkdir(parents=True, exist_ok=True)
             path = out_dir / f"closeup_{cand.id}.jpg"

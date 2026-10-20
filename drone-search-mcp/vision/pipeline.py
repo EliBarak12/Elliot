@@ -55,7 +55,7 @@ class FrameAnalyzer:
         self.cfg = cfg or AnalyzerConfig()
         self.skipped_unsteady = 0
 
-    def analyze(self, frame: Frame) -> list[Detection]:
+    def analyze(self, frame: Frame, min_score: float | None = None) -> list[Detection]:
         pose = frame.pose
         if pose.alt_rel_m is None or pose.alt_rel_m < 2:
             return []
@@ -93,7 +93,7 @@ class FrameAnalyzer:
         scores = score_crops(self.target, crops, masks, tight, sizes, expected)
         dets = []
         for p, s, box, c, size in zip(props, scores, boxes, crops, sizes, strict=True):
-            if s.score < self.cfg.min_score:
+            if s.score < (self.cfg.min_score if min_score is None else min_score):
                 continue
             u, v = p.center
             g = pixel_to_ground(u, v, frame.camera, pose, pose.gimbal_pitch_deg)

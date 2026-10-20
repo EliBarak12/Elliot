@@ -66,6 +66,7 @@ class SafetyGate:
         self.cfg = cfg
         self.backend = backend
         self.state = SafetyState()
+        self.home_wait_s = 30.0
         self._monitor: threading.Thread | None = None
         self._stop = threading.Event()
         self._on_reserve: list[Callable[[], None]] = []
@@ -93,6 +94,12 @@ class SafetyGate:
                 next_step=f"Choose an altitude between {self.cfg.min_alt_m:g} and {self.cfg.max_alt_m:g} m.",
             )
         t = self.backend.telemetry()
+        # ArduPilot sets home only once EKF3 has a GPS origin, which can lag boot by tens of
+        # seconds (agents saw "home position unknown" on their first plan, run easy-6000).
+        deadline = time.time() + self.home_wait_s
+        while (t.home_lat is None or t.home_lon is None) and time.time() < deadline:
+            time.sleep(0.5)
+            t = self.backend.telemetry()
         if t.home_lat is None or t.home_lon is None:
             raise SafetyViolation(
                 "home position unknown, cannot evaluate the geofence (failing closed)",

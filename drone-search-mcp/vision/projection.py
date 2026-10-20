@@ -31,16 +31,84 @@ class GroundPoint:
     range_m: float
 
 
+def undistort(u: float, v: float, cam: CameraModel) -> tuple[float, float]:
+    """Normalised, undistorted image coordinates of a (distorted) pixel."""
+    xd, yd = (u - cam.cx) / cam.fx, (v - cam.cy) / cam.fy
+    if cam.k1 == 0.0 and cam.k2 == 0.0:
+        return xd, yd
+    xu, yu = xd, yd
+    for _ in range(8):
+        r2 = xu * xu + yu * yu
+        f = 1 + cam.k1 * r2 + cam.k2 * r2 * r2
+        xu, yu = xd / f, yd / f
+    return xu, yu
+
+
 def ray_level(u: float, v: float, cam: CameraModel, gimbal_pitch_deg: float) -> np.ndarray:
     """Unit-free ray (forward, right, down) for a pixel, gimbal pitched by ``gimbal_pitch_deg``
     (-90 = straight down, 0 = horizon)."""
     p = math.radians(gimbal_pitch_deg)
-    xr = (u - cam.cx) / cam.fx
-    yd = (v - cam.cy) / cam.fy
+    xr, yd = undistort(u, v, cam)
     optical = np.array([math.cos(p), 0.0, -math.sin(p)])
     img_down = np.array([math.sin(p), 0.0, math.cos(p)])
     img_right = np.array([0.0, 1.0, 0.0])
     return xr * img_right + yd * img_down + optical
+
+
+def _quat_matrix(q: tuple[float, float, float, float]) -> np.ndarray:
+    w, x, y, z = q
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+            [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+            [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+        ]
+    )
+
+
+def _euler_matrix(roll: float, pitch: float, yaw: float) -> np.ndarray:
+    """Body FRD -> NED (aerospace ZYX)."""
+    cr, sr, cp, sp, cy, sy = (
+        math.cos(roll),
+        math.sin(roll),
+        math.cos(pitch),
+        math.sin(pitch),
+        math.cos(yaw),
+        math.sin(yaw),
+    )
+    return np.array(
+        [
+            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp, cp * sr, cp * cr],
+        ]
+    )
+
+
+def pixel_ray_ned(
+    u: float,
+    v: float,
+    cam: CameraModel,
+    pose: Telemetry,
+    gimbal_pitch_deg: float | None = None,
+    gimbal_yaw_deg: float = 0.0,
+) -> np.ndarray:
+    """Ray direction (north, east, down) through a pixel.
+
+    Preferred: full camera attitude = body attitude (EKF) x gimbal attitude relative to the
+    body (as the gimbal reports it). The camera looks along the gimbal's forward axis with
+    image-right = gimbal right and image-down = gimbal down (calibrated in Gazebo: at nadir
+    the image top is vehicle-forward). Fallback when the gimbal reports nothing: assume an
+    earth-stabilised camera at ``gimbal_pitch_deg`` (default nadir), yawed with the vehicle.
+    """
+    xr, yd = undistort(u, v, cam)
+    if pose.gimbal_q_body is not None:
+        r_cam = _euler_matrix(pose.roll_rad, pose.pitch_rad, pose.yaw_rad) @ _quat_matrix(pose.gimbal_q_body)
+        return r_cam @ np.array([1.0, xr, yd])
+    r = ray_level(u, v, cam, -90.0 if gimbal_pitch_deg is None else gimbal_pitch_deg)
+    yaw = pose.yaw_rad + math.radians(gimbal_yaw_deg)
+    fwd, right, down = r
+    return np.array([fwd * math.cos(yaw) - right * math.sin(yaw), fwd * math.sin(yaw) + right * math.cos(yaw), down])
 
 
 def pixel_to_ground(
@@ -55,18 +123,14 @@ def pixel_to_ground(
     """Intersect the pixel's ray with the ground plane. None if it points above the horizon."""
     if pose.lat is None or pose.lon is None or pose.alt_rel_m is None:
         return None
-    pitch = -90.0 if gimbal_pitch_deg is None else gimbal_pitch_deg
-    r = ray_level(u, v, cam, pitch)
-    if r[2] <= 1e-6:
+    ray = pixel_ray_ned(u, v, cam, pose, gimbal_pitch_deg, gimbal_yaw_deg)
+    if ray[2] <= 1e-6:
         return None
     h = pose.alt_rel_m - ground_alt_rel_m
     if h <= 0.2:
         return None
-    s = h / r[2]
-    fwd, right = r[0] * s, r[1] * s
-    yaw = pose.yaw_rad + math.radians(gimbal_yaw_deg)
-    north = fwd * math.cos(yaw) - right * math.sin(yaw)
-    east = fwd * math.sin(yaw) + right * math.cos(yaw)
+    s = h / ray[2]
+    north, east = float(ray[0] * s), float(ray[1] * s)
     lat, lon = offset(pose.lat, pose.lon, north, east)
     return GroundPoint(lat, lon, north, east, float(math.hypot(north, east)))
 

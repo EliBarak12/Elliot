@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import cv2
 import numpy as np
 import structlog
 
@@ -33,12 +34,34 @@ class FrameSource(abc.ABC):
         """Latest frame, or None if there is none yet."""
 
 
-class ShmFrameSource(FrameSource):
-    """Reads the frames that ``sim/frame_grabber.py`` writes to a shared-memory dir."""
+def load_calibration(path: str | os.PathLike[str] | None) -> dict | None:
+    """Measured camera calibration (intrinsics, distortion, frame timing offset), or None."""
+    if not path or not Path(path).is_file():
+        return None
+    cal = json.loads(Path(path).read_text())
+    log.info(
+        "camera.calibration.loaded",
+        path=str(path),
+        fx=cal.get("fx"),
+        k1=cal.get("k1"),
+        frame_clock_offset_s=cal.get("frame_clock_offset_s"),
+    )
+    return cal
 
-    def __init__(self, directory: str | os.PathLike[str], hfov_rad: float | None = None) -> None:
+
+class ShmFrameSource(FrameSource):
+    """Reads the frames that ``sim/frame_grabber.py`` writes to a shared-memory dir.
+
+    Intrinsics come from the measured calibration when one is given (always, for a real
+    camera); the simulator's ideal intrinsics are only used as a fallback in ideal mode.
+    """
+
+    def __init__(
+        self, directory: str | os.PathLike[str], hfov_rad: float | None = None, calibration: dict | None = None
+    ) -> None:
         self.dir = Path(directory)
         self.hfov_rad = hfov_rad
+        self.calibration = calibration
         self._cache: RawFrame | None = None
 
     def read(self) -> RawFrame | None:
@@ -49,13 +72,26 @@ class ShmFrameSource(FrameSource):
         if self._cache is not None and self._cache.seq == meta["seq"]:
             return self._cache
         w, h = int(meta["width"]), int(meta["height"])
-        try:
-            data = np.fromfile(self.dir / "frame.rgb", dtype=np.uint8)
-        except OSError:
-            return self._cache
-        if data.size != w * h * 3:  # caught mid-replace; keep the previous frame
-            return self._cache
-        if "fx" in meta:
+        if meta.get("encoding") == "jpeg":
+            try:
+                buf = np.fromfile(self.dir / "frame.jpg", dtype=np.uint8)
+                img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+            except (OSError, cv2.error):
+                return self._cache
+            if img is None or img.shape[:2] != (h, w):
+                return self._cache
+            data = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        else:
+            try:
+                data = np.fromfile(self.dir / "frame.rgb", dtype=np.uint8)
+            except OSError:
+                return self._cache
+            if data.size != w * h * 3:  # caught mid-replace; keep the previous frame
+                return self._cache
+        c = self.calibration
+        if c is not None:
+            cam = CameraModel(w, h, c["fx"], c["fy"], c["cx"], c["cy"], c.get("k1", 0.0), c.get("k2", 0.0))
+        elif "fx" in meta:
             cam = CameraModel(w, h, meta["fx"], meta["fy"], meta["cx"], meta["cy"])
         else:
             hfov = self.hfov_rad or 1.2

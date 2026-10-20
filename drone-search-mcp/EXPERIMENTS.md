@@ -80,3 +80,42 @@ Fix applied (v0.1): one observation per candidate per frame (blobs within the me
 in one frame collapse to the strongest), coverage counted with the same footprint as
 proposals; every detection is logged with its pose (`detections.jsonl`) and all candidates
 are dumped (`candidates.json`) for offline diagnosis.
+
+---
+
+## v0.2 — "real-life" simulation (requested: behave like the real drone so the agent succeeds first time)
+
+The ideal simulator was flattering us in ways a real drone never would. Changes, all on by
+default for every eval (`scenarios/generate.py --ideal` turns them off for debugging):
+
+| real-world effect | how it is simulated |
+|---|---|
+| state estimate | **SITL defaulted to `AHRS_EKF_TYPE 10` = simulator ground truth.** Now EKF3 fusing IMU/GPS/baro/compass |
+| GPS error | white noise (`SIM_GPS1_NOISE`) + a slowly wandering 0.8–2 m bias (`sim_gps_drift.lua`, mean-reverting random walk on the glitch offsets) |
+| baro | `SIM_BARO_RND` noise |
+| wind | Gazebo `WindEffects` on the airframe (SITL's `SIM_WIND_*` is ignored by the JSON backend): breeze 0.5–3 m/s on every tier, 4–8 m/s gusty on hard; also adds air drag, so the drone now pitches ~10° at 6 m/s like a real quad |
+| lens | radial distortion (k1 −0.06, k2 0.008); the server undistorts with a *measured* calibration (`sim/camera_calibration.json`, deliberately ≈0.4% off) instead of the simulator's intrinsics |
+| video link | motion blur from speed × exposure, auto-exposure drift, vignetting, sensor noise, JPEG q55–85 |
+| timing | frames arrive 0.17–0.23 s late (+jitter), 2–10% dropped, stamped on *arrival* (as on a companion computer) |
+| light | random sun elevation/azimuth/intensity per scenario |
+
+### What realism broke, and the fixes (calibration flight, steady flight, 25 m, 6 m/s)
+
+| step | median error | note |
+|---|---|---|
+| ideal sim, ground-truth pose | 0.22 m | v0 |
+| + camera realism, offset −0.20 s (nominal latency) | 0.96 m | timing residual 0.17 s: effective pipeline latency is 0.37 s |
+| + measured offset −0.37 s | 0.38 m | residual 0.02 s |
+| + EKF3 + drag/wind | **5.96 m** | errors grow with body pitch |
+| + full camera attitude (body ⊗ gimbal) | 1.26 m (p90 2.3 m) | residual timing 0.001 s; remaining error ≈ GPS/EKF bias |
+
+* The 5.96 m regression: ArduPilot reports a servo gimbal's attitude **relative to the
+  airframe** (it reported −65° while the body pitched −25° and the camera, verified in
+  Gazebo, stayed within 0.5° of nadir). The projection took it as earth-frame. With a
+  ground-truth pose and no drag the airframe cruised level, so the bug was invisible.
+  Fix: camera attitude = EKF body attitude ⊗ body-relative gimbal quaternion.
+* Timing offset separated from GPS bias by flying opposite headings: bias flips sign with
+  heading, latency does not.
+* What is left (~1–2 m) is the GPS/EKF absolute error every non-RTK drone has; it goes
+  straight into reported positions. On hardware: RTK or a ground control point would
+  remove it.

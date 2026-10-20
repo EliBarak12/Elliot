@@ -108,7 +108,12 @@ def up(scenario_path: Path | None, speedup: float) -> int:
 
     t0 = time.time()
     _start("gazebo", ["gz", "sim", "-s", "-r", "--headless-rendering", str(world)])
-    _start("frames", [SYS_PY, str(HERE / "frame_grabber.py"), "--out", str(FRAMES)])
+    grab = [SYS_PY, str(HERE / "frame_grabber.py"), "--out", str(FRAMES)]
+    realism = (scenario or {}).get("realism") or {}
+    if realism.get("camera"):
+        (RUN / "realism.json").write_text(json.dumps(realism["camera"]))
+        grab += ["--realism", str(RUN / "realism.json")]
+    _start("frames", grab)
 
     parm = RUN / "scenario.parm"
     extra = []
@@ -118,6 +123,17 @@ def up(scenario_path: Path | None, speedup: float) -> int:
             f"SIM_WIND_SPD {wind.get('speed_ms', 0)}",
             f"SIM_WIND_DIR {wind.get('dir_deg', 0)}",
             f"SIM_WIND_TURB {wind.get('turbulence', 0)}",
+        ]
+    nav = realism.get("nav") or {}
+    if nav:
+        extra += [
+            f"SIM_GPS1_NOISE {nav.get('gps_noise_m', 0)}",
+            f"SIM_BARO_RND {nav.get('baro_noise_m', 0)}",
+            f"SIM_GPS1_DRFTALT {nav.get('gps_alt_drift_m', 0)}",
+            # sim_gps_drift.lua: horizontal bias random walk
+            f"SCR_USER1 {nav.get('gps_bias_sigma_m', 0)}",
+            f"SCR_USER2 {nav.get('gps_bias_tau_s', 120)}",
+            f"SCR_USER3 {nav.get('seed', 1)}",
         ]
     parm.write_text("\n".join(extra) + "\n")
     o = load_field()["origin"]

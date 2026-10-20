@@ -1,32 +1,42 @@
 #!/usr/bin/env python3
-"""Bridge Gazebo camera frames to a shared-memory directory.
+"""Bridge Gazebo camera frames to a shared-memory directory, optionally degraded to
+real-world quality.
 
 Runs under the *system* Python (``/usr/bin/python3``) because the gz-transport bindings
 are packaged for it, while the MCP server lives in its own venv. The server never imports
 Gazebo; it only reads what this process writes, the same way it would read a real
-camera's video stream. That keeps the backend boundary clean: nothing in the server can
-query the simulator for object poses.
+camera's video stream, so nothing in the server can query the simulator for object poses.
 
 Output (atomically replaced on every frame):
-    <out>/frame.rgb   raw RGB8 bytes, width*height*3
-    <out>/frame.json  {"seq", "width", "height", "stamp_sim_s", "wall_time", "fx", "fy", "cx", "cy"}
+    <out>/frame.rgb | frame.jpg   raw RGB8 (ideal mode) or JPEG (realism mode)
+    <out>/frame.json  {"seq", "width", "height", "stamp_sim_s", "wall_time", "encoding", [fx, fy, cx, cy]}
+
+In realism mode (``--realism profile.json``, see sim/realism.py) frames are distorted,
+blurred, noisy and JPEG-compressed, delivered late with jitter, sometimes dropped, and
+stamped with their *arrival* time. Intrinsics are not published: the server must use its
+measured calibration, as with a real camera.
 
 Modes:
-    frame_grabber.py --topic /search_drone/camera --out /dev/shm/drone_search
+    frame_grabber.py --topic /search_drone/camera --out /dev/shm/drone_search [--realism r.json]
     frame_grabber.py --topic /studio/camera --once ref.png      # save one frame and exit
 """
 
 from __future__ import annotations
 
 import argparse
+import collections
 import json
+import math
 import os
+import random
 import sys
 import threading
 import time
 
 from gz.msgs10.camera_info_pb2 import CameraInfo
+from gz.msgs10.clock_pb2 import Clock
 from gz.msgs10.image_pb2 import Image
+from gz.msgs10.pose_v_pb2 import Pose_V
 from gz.transport13 import Node
 
 _info: dict[str, float] = {}
@@ -38,10 +48,55 @@ def _on_info(msg: CameraInfo) -> None:
         _info.update(fx=k[0], fy=k[4], cx=k[2], cy=k[5])
 
 
+def _write(out: str, payload: bytes, ext: str, meta: dict) -> None:
+    os.makedirs(out, exist_ok=True)
+    tmp_img = os.path.join(out, f".frame.{ext}.tmp")
+    tmp_js = os.path.join(out, ".frame.json.tmp")
+    with open(tmp_img, "wb") as f:
+        f.write(payload)
+    with open(tmp_js, "w") as f:
+        json.dump(meta, f)
+    # image first, then json: a reader that sees a new json always finds a matching image
+    os.replace(tmp_img, os.path.join(out, f"frame.{ext}"))
+    os.replace(tmp_js, os.path.join(out, "frame.json"))
+
+
+class DroneMotion:
+    """Drone velocity from Gazebo poses (simulator side only, for motion blur)."""
+
+    def __init__(self) -> None:
+        self.prev: tuple[float, float, float, float] | None = None
+        self.vel = (0.0, 0.0)
+        self.yaw = 0.0
+        self.alt = 20.0
+
+    def on_poses(self, msg: Pose_V) -> None:
+        t = msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9
+        for p in msg.pose:
+            if p.name != "search_drone":
+                continue
+            q = p.orientation
+            self.yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+            self.alt = max(p.position.z, 0.5)
+            if self.prev is not None and t > self.prev[0]:
+                dt = t - self.prev[0]
+                self.vel = ((p.position.x - self.prev[1]) / dt, (p.position.y - self.prev[2]) / dt)
+            self.prev = (t, p.position.x, p.position.y, p.position.z)
+
+    def image_velocity(self, fx: float) -> tuple[float, float]:
+        ve, vn = self.vel
+        fwd = ve * math.cos(self.yaw) + vn * math.sin(self.yaw)
+        right = ve * math.sin(self.yaw) - vn * math.cos(self.yaw)
+        # ground slides opposite to the motion: forward flight moves it down the image
+        return -right * fx / self.alt, fwd * fx / self.alt
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--topic", default="/search_drone/camera")
     p.add_argument("--out", default="/dev/shm/drone_search")
+    p.add_argument("--world", default="search_field")
+    p.add_argument("--realism", help="JSON realism profile (sim/realism.py); omit for ideal frames")
     p.add_argument("--once", help="write a single PNG to this path and exit")
     p.add_argument("--skip", type=int, default=3, help="--once: frames to skip (let lighting settle)")
     p.add_argument("--timeout", type=float, default=120.0)
@@ -50,10 +105,27 @@ def main() -> int:
     node = Node()
     done = threading.Event()
     count = {"n": 0}
+    profile = None
+    degrader = None
+    motion = DroneMotion()
+    clock = {"sim": 0.0}
+    queue: collections.deque = collections.deque()
+    qlock = threading.Lock()
+    if a.realism:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from realism import Degrader, RealismProfile
+
+        with open(a.realism) as f:
+            profile = RealismProfile.from_dict(json.load(f))
+        if not profile.enabled:
+            profile = None
+        rng = random.Random(1)
 
     def on_image(msg: Image) -> None:
+        nonlocal degrader
         count["n"] += 1
         w, h = msg.width, msg.height
+        stamp = msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9
         if a.once:
             if count["n"] <= a.skip or done.is_set():
                 return
@@ -62,31 +134,68 @@ def main() -> int:
             PILImage.frombytes("RGB", (w, h), msg.data).save(a.once)
             done.set()
             return
-        os.makedirs(a.out, exist_ok=True)
-        tmp_rgb = os.path.join(a.out, ".frame.rgb.tmp")
-        tmp_js = os.path.join(a.out, ".frame.json.tmp")
-        with open(tmp_rgb, "wb") as f:
-            f.write(msg.data)
-        meta = {
-            "seq": count["n"],
-            "width": w,
-            "height": h,
-            "stamp_sim_s": msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9,
-            "wall_time": time.time(),
-            **_info,
-        }
-        with open(tmp_js, "w") as f:
-            json.dump(meta, f)
-        # rgb first, then json: a reader that sees a new json always finds a matching rgb
-        os.replace(tmp_rgb, os.path.join(a.out, "frame.rgb"))
-        os.replace(tmp_js, os.path.join(a.out, "frame.json"))
+        if profile is None:
+            meta = {
+                "seq": count["n"],
+                "width": w,
+                "height": h,
+                "stamp_sim_s": stamp,
+                "wall_time": time.time(),
+                "encoding": "rgb",
+                **_info,
+            }
+            _write(a.out, msg.data, "rgb", meta)
+            return
+        if rng.random() < profile.drop_prob:
+            return
+        import numpy as np
+
+        if degrader is None:
+            fx = _info.get("fx", w / 2 / math.tan(0.6))
+            degrader = Degrader(profile, w, h, fx, seed=7)
+        rgb = np.frombuffer(msg.data, np.uint8).reshape(h, w, 3)
+        jpeg = degrader.apply(rgb, motion.image_velocity(degrader.fx), motion.alt)
+        release = stamp + max(0.0, rng.gauss(profile.latency_s, profile.latency_jitter_s))
+        with qlock:
+            queue.append((release, count["n"], w, h, jpeg))
+
+    def on_clock(msg: Clock) -> None:
+        clock["sim"] = msg.sim.sec + msg.sim.nsec * 1e-9
+
+    def releaser() -> None:
+        # deliver each frame once the simulated pipeline latency has elapsed (in sim time,
+        # so it scales with the lockstep real-time factor), stamped with its arrival time
+        while True:
+            item = None
+            with qlock:
+                if queue and queue[0][0] <= clock["sim"]:
+                    item = queue.popleft()
+            if item is None:
+                time.sleep(0.005)
+                continue
+            release, seq, w, h, jpeg = item
+            meta = {
+                "seq": seq,
+                "width": w,
+                "height": h,
+                "stamp_sim_s": clock["sim"],
+                "wall_time": time.time(),
+                "encoding": "jpeg",
+            }
+            _write(a.out, jpeg, "jpg", meta)
 
     # gz-sensors publishes intrinsics next to the image topic: /a/b/camera -> /a/b/camera_info
     node.subscribe(CameraInfo, a.topic.rsplit("/", 1)[0] + "/camera_info", _on_info)
+    if profile is not None:
+        node.subscribe(Pose_V, f"/world/{a.world}/dynamic_pose/info", motion.on_poses)
+        node.subscribe(Clock, f"/world/{a.world}/clock", on_clock)
+        threading.Thread(target=releaser, daemon=True).start()
     if not node.subscribe(Image, a.topic, on_image):
         print(f"[frame_grabber] cannot subscribe to {a.topic}", file=sys.stderr)
         return 2
-    print(f"[frame_grabber] subscribed to {a.topic}", file=sys.stderr, flush=True)
+    print(
+        f"[frame_grabber] subscribed to {a.topic} (realism={'on' if profile else 'off'})", file=sys.stderr, flush=True
+    )
     if a.once:
         ok = done.wait(a.timeout)
         if not ok:

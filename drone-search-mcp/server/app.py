@@ -299,6 +299,14 @@ class DroneSearchServer:
             poly = circle_polygon(center_lat, center_lon, radius_m)
         else:
             raise InvalidArgument("give area_polygon, or center_lat + center_lon + radius_m")
+        if self.target is None and altitude_m is None:
+            # The altitude is derived from the target size; planning first gives a plan
+            # that would silently have to be redone (seen when an agent ran the two calls
+            # in parallel).
+            raise StateConflict(
+                "no search target set, so the search altitude cannot be chosen",
+                next_step="Call set_search_target first (not in parallel), or pass altitude_m.",
+            )
         if not 0 <= overlap <= 0.8:
             raise InvalidArgument("overlap must be between 0 and 0.8 (fraction of the camera footprint)")
         if not 1 <= speed_ms <= self.safety.cfg.max_speed_ms:

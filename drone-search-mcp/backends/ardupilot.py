@@ -183,6 +183,8 @@ class ArduPilotBackend(DroneBackend):
                 self._sim_seen_at = now
             elif mt == "GIMBAL_DEVICE_ATTITUDE_STATUS":
                 w, x, y, z = msg.q
+                if not msg.flags & M.GIMBAL_DEVICE_FLAGS_YAW_IN_EARTH_FRAME:
+                    t.gimbal_q_body = (w, x, y, z)
                 t.gimbal_pitch_deg = math.degrees(math.asin(max(-1.0, min(1.0, 2 * (w * y - z * x)))))
                 t.gimbal_yaw_deg = math.degrees(math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
             elif mt == "STATUSTEXT":

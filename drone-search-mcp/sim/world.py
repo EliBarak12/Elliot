@@ -124,7 +124,7 @@ def world_sdf(scenario: dict[str, Any] | None = None, name: str = "search_field"
     <light type="directional" name="sun">
       <cast_shadows>true</cast_shadows>
       <pose>0 0 100 0 0 0</pose>
-      <diffuse>0.9 0.9 0.85 1</diffuse>
+      <diffuse>{(scenario or {}).get("sun_intensity", 0.9):.2f} {(scenario or {}).get("sun_intensity", 0.9):.2f} {0.95 * (scenario or {}).get("sun_intensity", 0.9):.2f} 1</diffuse>
       <specular>0.3 0.3 0.3 1</specular>
       <direction>{(scenario or {}).get("sun_dir", "-0.4 0.3 -0.9")}</direction>
     </light>
@@ -155,7 +155,32 @@ def world_sdf(scenario: dict[str, Any] | None = None, name: str = "search_field"
 """
     )
     if wind:
-        parts.append(f"    <!-- wind is simulated by SITL: {json.dumps(wind)} -->\n")
+        # Gazebo applies the wind to the airframe (the JSON backend ignores SITL's SIM_WIND_*).
+        th = math.radians(wind.get("dir_deg", 0.0))
+        spd = wind.get("speed_ms", 0.0)
+        # meteorological direction = where the wind comes FROM; velocity points away from it
+        ve, vn = -spd * math.sin(th), -spd * math.cos(th)
+        gust = wind.get("turbulence", 0.0)
+        parts.insert(
+            1,
+            f"""    <wind><linear_velocity>{ve:.3f} {vn:.3f} 0</linear_velocity></wind>
+    <plugin filename="gz-sim-wind-effects-system" name="gz::sim::systems::WindEffects">
+      <force_approximation_scaling_factor>{wind.get("force_scale", 0.6)}</force_approximation_scaling_factor>
+      <horizontal>
+        <magnitude>
+          <time_for_rise>10</time_for_rise>
+          <sin><amplitude_percent>{0.15 * gust:.3f}</amplitude_percent><period>{wind.get("gust_period_s", 20)}</period></sin>
+          <noise type="gaussian"><mean>0</mean><stddev>{0.05 * gust:.3f}</stddev></noise>
+        </magnitude>
+        <direction>
+          <time_for_rise>30</time_for_rise>
+          <sin><amplitude>{8 * gust:.2f}</amplitude><period>60</period></sin>
+          <noise type="gaussian"><mean>0</mean><stddev>{0.5 * gust:.2f}</stddev></noise>
+        </direction>
+      </horizontal>
+    </plugin>
+""",
+        )
     parts.append("  </world>\n</sdf>\n")
     return "".join(parts)
 

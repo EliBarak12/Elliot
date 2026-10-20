@@ -51,6 +51,10 @@ class Telemetry:
     home_alt_amsl_m: float | None = None
     gimbal_pitch_deg: float | None = None
     gimbal_yaw_deg: float | None = None  # body frame
+    # Gimbal attitude relative to the vehicle body (w, x, y, z), FRD. ArduPilot reports
+    # servo gimbals this way: the angle *commanded relative to the airframe*, so it only
+    # equals the earth-frame angle while the airframe is level.
+    gimbal_q_body: tuple[float, float, float, float] | None = None
     time_boot_s: float = 0.0  # vehicle clock (sim time in SITL lockstep)
     wall_time: float = 0.0  # when this snapshot was last updated
     status_text: list[str] = field(default_factory=list)
@@ -78,6 +82,8 @@ class CameraModel:
     fy: float
     cx: float
     cy: float
+    k1: float = 0.0  # radial distortion (Brown model, normalised coordinates)
+    k2: float = 0.0
 
 
 @dataclass

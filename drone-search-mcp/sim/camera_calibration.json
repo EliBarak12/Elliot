@@ -1,0 +1,10 @@
+{
+  "_comment": "Measured calibration of the simulated camera, as a real one would be calibrated: intrinsics/distortion from a checkerboard-style fit (deliberately not the simulator's exact values), frame_clock_offset_s from eval/projection_check.py (frame arrival -> exposure time).",
+  "fx": 939.2,
+  "fy": 939.2,
+  "cx": 641.5,
+  "cy": 478.6,
+  "k1": -0.057,
+  "k2": 0.007,
+  "frame_clock_offset_s": -0.37
+}

@@ -130,7 +130,9 @@ def _place(
     raise RuntimeError("could not place object; area too crowded")
 
 
-def generate(tier: str, seed: int, target: str | None = None, mode: str = "both") -> dict[str, Any]:
+def generate(
+    tier: str, seed: int, target: str | None = None, mode: str = "both", real_world: bool = True
+) -> dict[str, Any]:
     rng = np.random.default_rng(seed)
     cfg = TIERS[tier]
     field = load_field()
@@ -204,21 +206,64 @@ def generate(tier: str, seed: int, target: str | None = None, mode: str = "both"
         objects[old_i]["name"] = truth[old_i]["name"] = f"obj_{new_i:02d}"
     objects.sort(key=lambda d: d["name"])
 
+    # Real-world conditions (default): every tier gets a breeze, sensor noise and a degraded
+    # camera; hard adds strong gusty wind. --ideal turns all of it off.
     wind = None
+    realism = None
+    sun = {"sun_dir": "-0.4 0.3 -0.9", "sun_intensity": 0.9}
     if cfg["wind"]:
         wind = {
             "speed_ms": float(rng.uniform(4, 8)),
             "dir_deg": float(rng.uniform(0, 360)),
             "turbulence": float(rng.uniform(0.5, 1.5)),
         }
-
+    if real_world:
+        if wind is None:
+            wind = {
+                "speed_ms": float(rng.uniform(0.5, 3.0)),
+                "dir_deg": float(rng.uniform(0, 360)),
+                "turbulence": float(rng.uniform(0.2, 0.6)),
+            }
+        el, az = rng.uniform(25, 70), rng.uniform(0, 360)
+        sun = {
+            "sun_dir": " ".join(
+                f"{v:.3f}"
+                for v in (
+                    -math.cos(math.radians(el)) * math.sin(math.radians(az)),
+                    -math.cos(math.radians(el)) * math.cos(math.radians(az)),
+                    -math.sin(math.radians(el)),
+                )
+            ),
+            "sun_intensity": float(rng.uniform(0.65, 1.0)),
+        }
+        realism = {
+            "camera": {
+                "enabled": True,
+                "jpeg_quality": int(rng.integers(55, 85)),
+                "noise_sigma": float(rng.uniform(1.5, 4.5)),
+                "exposure_s": float(rng.uniform(0.003, 0.010)),
+                "vignette": float(rng.uniform(0.15, 0.35)),
+                "gain_walk": 0.01,
+                "latency_s": float(rng.uniform(0.17, 0.23)),
+                "latency_jitter_s": 0.03,
+                "drop_prob": float(rng.uniform(0.02, 0.10)),
+            },
+            "nav": {
+                "gps_noise_m": float(rng.uniform(0.2, 0.6)),
+                "baro_noise_m": float(rng.uniform(0.1, 0.4)),
+                "gps_alt_drift_m": 0.0,
+                "gps_bias_sigma_m": float(rng.uniform(0.8, 2.0)),
+                "gps_bias_tau_s": float(rng.uniform(60, 240)),
+                "seed": int(rng.integers(1, 10_000)),
+            },
+        }
     corners_xy = [(cx - half, cy - half), (cx + half, cy - half), (cx + half, cy + half), (cx - half, cy + half)]
     polygon = [list(offset(o["lat"], o["lon"], y, x)) for x, y in corners_xy]
 
     run_dir = HERE / "runs" / sid
     run_dir.mkdir(parents=True, exist_ok=True)
     spec = TARGETS[mission_key]
-    scenario = {"id": sid, "objects": objects, "wind": wind}
+    scenario = {"id": sid, "objects": objects, "wind": wind, "realism": realism, **sun}
     mission = {
         "id": sid,
         "tier": tier,
@@ -283,8 +328,9 @@ def main() -> int:
     p.add_argument("--target", choices=sorted(TARGETS))
     p.add_argument("--mode", choices=["image", "text", "both"], default="both")
     p.add_argument("--no-render", action="store_true")
+    p.add_argument("--ideal", action="store_true", help="perfect sensors, no wind (debugging only)")
     a = p.parse_args()
-    info = generate(a.tier, a.seed, a.target, a.mode)
+    info = generate(a.tier, a.seed, a.target, a.mode, real_world=not a.ideal)
     if not a.no_render and a.mode != "text" and not render_reference(info):
         print("[scenario] reference render failed", file=sys.stderr)
         return 1

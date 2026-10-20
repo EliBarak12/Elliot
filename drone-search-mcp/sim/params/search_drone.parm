@@ -1,4 +1,8 @@
 # drone-search-mcp vehicle parameters (applied on top of copter.parm + gazebo-iris.parm)
+# --- state estimation: SITL defaults to AHRS_EKF_TYPE 10 (simulator ground truth, a
+# perfect pose no real drone has). Use the real EKF3 fusing IMU, GPS, baro and compass.
+AHRS_EKF_TYPE 3
+EK3_ENABLE 1
 # --- 3-axis servo gimbal driven by the ardupilot_gazebo plugin (channels 9-11) ---
 MNT1_TYPE 1
 SERVO9_FUNCTION 8

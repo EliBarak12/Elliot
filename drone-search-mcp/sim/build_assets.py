@@ -176,6 +176,18 @@ def derive_models(apg: Path) -> None:
         (gim_dst / "model.config").read_text().replace("Gimbal Small 3D", "nadir_gimbal")
     )
 
+    # airframe copy whose links take part in gz-sim's WindEffects (link-level flag)
+    frame_dst = GEN / "models" / "iris_windy"
+    if frame_dst.exists():
+        shutil.rmtree(frame_dst)
+    shutil.copytree(src_models / "iris_with_standoffs", frame_dst)
+    f = (frame_dst / "model.sdf").read_text()
+    f = re.sub(r"""(<link name=['"]base_link['"]>)""", r"\1\n      <enable_wind>true</enable_wind>", f, count=1)
+    f = f.replace("model://iris_with_standoffs/", "model://iris_windy/")
+    (frame_dst / "model.sdf").write_text(f)
+    cfg_f = frame_dst / "model.config"
+    cfg_f.write_text(re.sub(r"<name>.*?</name>", "<name>iris_windy</name>", cfg_f.read_text(), count=1))
+
     drone_dst = GEN / "models" / "search_drone"
     if drone_dst.exists():
         shutil.rmtree(drone_dst)
@@ -183,6 +195,9 @@ def derive_models(apg: Path) -> None:
     d = (drone_dst / "model.sdf").read_text()
     d = d.replace('<model name="iris_with_gimbal">', '<model name="search_drone">')
     d = d.replace("<uri>model://gimbal_small_3d</uri>", "<uri>model://nadir_gimbal</uri>")
+    d = d.replace("<uri>model://iris_with_standoffs</uri>", "<uri>model://iris_windy</uri>")
+    # let gz-sim's WindEffects push the airframe (model-level flag covers nested links)
+    d = d.replace('<model name="search_drone">', '<model name="search_drone">\n    <enable_wind>true</enable_wind>', 1)
     (drone_dst / "model.sdf").write_text(d)
     cfg = drone_dst / "model.config"
     cfg.write_text(re.sub(r"<name>.*?</name>", "<name>search_drone</name>", cfg.read_text(), count=1))

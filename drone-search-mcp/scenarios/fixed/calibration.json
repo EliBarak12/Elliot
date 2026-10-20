@@ -2,9 +2,59 @@
   "id": "calibration",
   "note": "Projection/frame-convention calibration. Markers are 1 m magenta squares at known world positions (x east, y north).",
   "objects": [
-    {"name": "cal_east10", "uri": "model://calibration_marker", "x": 10, "y": 0, "yaw": 0},
-    {"name": "cal_north20", "uri": "model://calibration_marker", "x": 0, "y": 20, "yaw": 0},
-    {"name": "cal_sw", "uri": "model://calibration_marker", "x": -15, "y": -15, "yaw": 0},
-    {"name": "cal_box", "uri": "model://white_box", "x": 6, "y": 6, "yaw": 0}
-  ]
+    {
+      "name": "cal_east10",
+      "uri": "model://calibration_marker",
+      "x": 10,
+      "y": 0,
+      "yaw": 0
+    },
+    {
+      "name": "cal_north20",
+      "uri": "model://calibration_marker",
+      "x": 0,
+      "y": 20,
+      "yaw": 0
+    },
+    {
+      "name": "cal_sw",
+      "uri": "model://calibration_marker",
+      "x": -15,
+      "y": -15,
+      "yaw": 0
+    },
+    {
+      "name": "cal_box",
+      "uri": "model://white_box",
+      "x": 6,
+      "y": 6,
+      "yaw": 0
+    }
+  ],
+  "realism": {
+    "camera": {
+      "enabled": true,
+      "jpeg_quality": 70,
+      "noise_sigma": 3.0,
+      "exposure_s": 0.006,
+      "vignette": 0.25,
+      "gain_walk": 0.01,
+      "latency_s": 0.2,
+      "latency_jitter_s": 0.03,
+      "drop_prob": 0.05
+    },
+    "nav": {
+      "gps_noise_m": 0.4,
+      "baro_noise_m": 0.2,
+      "gps_alt_drift_m": 0,
+      "gps_bias_sigma_m": 1.5,
+      "gps_bias_tau_s": 120,
+      "seed": 3
+    }
+  },
+  "wind": {
+    "speed_ms": 2.0,
+    "dir_deg": 270,
+    "turbulence": 0.3
+  }
 }

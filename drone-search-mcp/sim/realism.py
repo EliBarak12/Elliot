@@ -26,6 +26,11 @@ from dataclasses import dataclass
 import numpy as np
 from PIL import Image
 
+try:  # OpenCV makes this ~10x faster; it must keep up with the camera rate or frames back up
+    import cv2 as _cv2
+except ImportError:  # pragma: no cover - pure numpy fallback
+    _cv2 = None
+
 # The physical lens of the simulated camera (fixed: a property of the hardware).
 TRUE_K1 = -0.06
 TRUE_K2 = 0.008
@@ -73,8 +78,13 @@ class Degrader:
         self.map_y = np.clip(yu * fx + cy, 0, h - 1.001)
         r = np.sqrt(((xs - cx) / cx) ** 2 + ((ys - cy) / cy) ** 2) / math.sqrt(2)
         self.vignette = (1 - profile.vignette * r**2)[..., None].astype(np.float32)
+        self._noise_bank: np.ndarray | None = None
+        self._noise_buf: np.ndarray | None = None
+        self.vignette3 = np.repeat(self.vignette, 3, axis=2)
 
     def _remap(self, img: np.ndarray) -> np.ndarray:
+        if _cv2 is not None:
+            return _cv2.remap(img, self.map_x, self.map_y, _cv2.INTER_LINEAR).astype(np.float32)
         x0 = self.map_x.astype(np.int32)
         y0 = self.map_y.astype(np.int32)
         fx = (self.map_x - x0)[..., None]
@@ -90,6 +100,10 @@ class Degrader:
         n = int(round(math.hypot(dx, dy)))
         if n < 1:
             return img
+        if _cv2 is not None:
+            k = np.zeros((2 * n + 1, 2 * n + 1), np.float32)
+            _cv2.line(k, (int(n - dx / 2), int(n - dy / 2)), (int(n + dx / 2), int(n + dy / 2)), 1.0, 1)
+            return _cv2.filter2D(img, -1, k / max(k.sum(), 1e-6))
         acc = np.zeros_like(img)
         for i in range(n + 1):
             sx = int(round(dx * (i / n - 0.5)))
@@ -105,9 +119,31 @@ class Degrader:
         vx, vy = image_vel_px_s
         img = self._motion_blur(img, vx * p.exposure_s, vy * p.exposure_s)
         self.log_gain = float(np.clip(self.log_gain + self.rng.normal(0, p.gain_walk), -0.25, 0.25))
-        img = img * math.exp(self.log_gain) * self.vignette
-        img = img + self.rng.normal(0, p.noise_sigma, img.shape).astype(np.float32)
-        out = Image.fromarray(np.clip(img, 0, 255).astype(np.uint8))
+        if _cv2 is not None:
+            img = _cv2.multiply(img, self.vignette3, scale=math.exp(self.log_gain))
+            if self._noise_buf is None:
+                self._noise_buf = np.empty(img.shape, np.float32)
+            _cv2.randn(self._noise_buf, 0.0, p.noise_sigma)
+            u8 = _cv2.add(img, self._noise_buf).clip(0, 255).astype(np.uint8)
+        else:
+            img = img * math.exp(self.log_gain) * self.vignette
+            img = img + self._noise(img.shape, p.noise_sigma)
+            u8 = np.clip(img, 0, 255).astype(np.uint8)
+        if _cv2 is not None:
+            ok, enc = _cv2.imencode(
+                ".jpg", _cv2.cvtColor(u8, _cv2.COLOR_RGB2BGR), [_cv2.IMWRITE_JPEG_QUALITY, int(p.jpeg_quality)]
+            )
+            if ok:
+                return enc.tobytes()
         buf = io.BytesIO()
-        out.save(buf, format="JPEG", quality=int(p.jpeg_quality))
+        Image.fromarray(u8).save(buf, format="JPEG", quality=int(p.jpeg_quality))
         return buf.getvalue()
+
+    def _noise(self, shape: tuple[int, ...], sigma: float) -> np.ndarray:
+        # drawing fresh Gaussian noise for 3.7 M values per frame is the slowest step;
+        # reuse a pre-drawn bank with a random offset (statistically indistinguishable here)
+        if self._noise_bank is None or self._noise_bank.size < 2 * int(np.prod(shape)):
+            self._noise_bank = self.rng.normal(0, 1, 2 * int(np.prod(shape))).astype(np.float32)
+        n = int(np.prod(shape))
+        o = int(self.rng.integers(0, self._noise_bank.size - n))
+        return sigma * self._noise_bank[o : o + n].reshape(shape)

@@ -90,7 +90,12 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "errors": sum(1 for r in rs if r.get("error")),
         }
 
+    # Runs that never flew (harness failures, e.g. a reference render) are not scored.
+    infra = [r for r in rows if "success" not in r]
+    rows = [r for r in rows if "success" in r]
     out = {"all": agg(rows)}
+    if infra:
+        out["all"]["infrastructure_errors_excluded"] = len(infra)
     for tier in ("easy", "medium", "hard"):
         rs = [r for r in rows if r["tier"] == tier]
         if rs:

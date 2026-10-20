@@ -102,7 +102,14 @@ def pixel_ray_ned(
     earth-stabilised camera at ``gimbal_pitch_deg`` (default nadir), yawed with the vehicle.
     """
     xr, yd = undistort(u, v, cam)
-    if pose.gimbal_q_body is not None:
+    if pose.gimbal_earth_locked and pose.gimbal_target_pitch_deg is not None:
+        # Earth-stabilised gimbal (ArduPilot servo mount in MAVLink targeting): roll 0 and
+        # the commanded pitch in the earth frame, yaw with the vehicle. Its reported attitude
+        # quaternion cannot be used here: at -90 deg pitch roll and yaw are degenerate in
+        # the Euler angles it is built from, and the airframe's roll leaks in (1.8 m at 20 m
+        # with 4.8 deg of wind roll, self-play session 2).
+        gimbal_pitch_deg = pose.gimbal_target_pitch_deg
+    elif pose.gimbal_q_body is not None:
         r_cam = _euler_matrix(pose.roll_rad, pose.pitch_rad, pose.yaw_rad) @ _quat_matrix(pose.gimbal_q_body)
         return r_cam @ np.array([1.0, xr, yd])
     r = ray_level(u, v, cam, -90.0 if gimbal_pitch_deg is None else gimbal_pitch_deg)

@@ -185,6 +185,8 @@ class ArduPilotBackend(DroneBackend):
                 w, x, y, z = msg.q
                 if not msg.flags & M.GIMBAL_DEVICE_FLAGS_YAW_IN_EARTH_FRAME:
                     t.gimbal_q_body = (w, x, y, z)
+                locks = M.GIMBAL_DEVICE_FLAGS_ROLL_LOCK | M.GIMBAL_DEVICE_FLAGS_PITCH_LOCK
+                t.gimbal_earth_locked = (msg.flags & locks) == locks
                 t.gimbal_pitch_deg = math.degrees(math.asin(max(-1.0, min(1.0, 2 * (w * y - z * x)))))
                 t.gimbal_yaw_deg = math.degrees(math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
             elif mt == "STATUSTEXT":
@@ -239,12 +241,13 @@ class ArduPilotBackend(DroneBackend):
         log.info("backend.takeoff.start", alt_m=alt_m)
         t0 = time.time()
         while not self.telemetry().ekf_ok:
-            if time.time() - t0 > 90:
-                raise BackendError("EKF/GPS not ready after 90s; cannot arm")
+            # EKF3 takes longer to converge from a cold start under load (and with a GPS bias)
+            if time.time() - t0 > 180:
+                raise BackendError("EKF/GPS not ready after 180s; cannot arm")
             time.sleep(0.5)
         self.set_mode("GUIDED")
         last = None
-        while time.time() - t0 < 120:
+        while time.time() - t0 < 210:
             res = self._command(M.MAV_CMD_COMPONENT_ARM_DISARM, 1)
             if res == M.MAV_RESULT_ACCEPTED:
                 break
@@ -331,6 +334,8 @@ class ArduPilotBackend(DroneBackend):
         log.warning("backend.emergency_stop", kill_motors=kill_motors)
 
     def set_gimbal_nadir(self) -> None:
+        with self._lock:
+            self._t.gimbal_target_pitch_deg = -90.0
         self._command(M.MAV_CMD_DO_MOUNT_CONTROL, -90, 0, 0, 0, 0, 0, M.MAV_MOUNT_MODE_MAVLINK_TARGETING)
 
     # ---------------------------------------------------------------- frames
@@ -372,7 +377,10 @@ class ArduPilotBackend(DroneBackend):
         raw = self.frames.read()
         if raw is None or time.time() - raw.wall_time > max_age_s:
             return None
-        pose = self.pose_at(raw.stamp_s + self.frame_clock_offset_s)
+        t_exposure = raw.stamp_s + self.frame_clock_offset_s
+        if self._t.time_boot_s and t_exposure < self._t.time_boot_s - max_age_s:
+            return None  # stale frame (backed-up video link): its pose would be wrong
+        pose = self.pose_at(t_exposure)
         if pose is None:
             return None
         return Frame(raw.image, raw.camera, raw.seq, raw.stamp_s, raw.wall_time, pose)

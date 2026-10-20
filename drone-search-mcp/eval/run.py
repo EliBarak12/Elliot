@@ -255,7 +255,7 @@ def main() -> int:
     ]
     for r in rows:
         per_run.append(
-            f"| {r['id']} | {r.get('success')} | {r.get('position_error_m')} | {r.get('false_reports')} | "
+            f"| {r['id']} | {r.get('success', 'not flown')} | {r.get('position_error_m')} | {r.get('false_reports')} | "
             f"{r.get('time_to_find_s')} | {r.get('battery_used_pct')} | {r.get('tool_calls')} | "
             f"{str(r.get('confusion') or r.get('error'))[:120]} |"
         )

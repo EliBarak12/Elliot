@@ -69,8 +69,16 @@ class ZoomControl:
         self.cmd_at = 0.0
         self.pub = None
         self.base_fx: float | None = None
+        self.initialised = False
 
     def poll(self) -> None:
+        if not self.initialised:
+            # The plugin slews to its own 2.0 rad default FOV on load (it took the 1.2 rad
+            # lens to a 0.35x focal length and broke every projection); pin zoom 1 first.
+            if self._publish(1.0):
+                self.initialised = True
+                self.cmd_at = time.time()
+            return
         try:
             m = os.path.getmtime(self.path)
         except OSError:
@@ -84,31 +92,32 @@ class ZoomControl:
         except (OSError, ValueError):
             return
         z = max(1.0, z)
+        prev = self.current(time.time())
+        if self._publish(z):
+            self.prev, self.cmd, self.cmd_at = prev, z, time.time()
+
+    def _publish(self, z: float) -> bool:
         if self.pub is None:
             from gz.msgs10.double_pb2 import Double
 
             topic = next((t for t in self.node.topic_list() if t.endswith("/zoom/cmd_zoom")), None)
             if topic is None:
-                print("[frame_grabber] no zoom topic", file=sys.stderr)
-                return
+                return False
             self.pub = self.node.advertise(topic, Double)
             self._msg = Double
+            time.sleep(0.5)  # let the subscription connect before the first message
         msg = self._msg()
         # zoom = focal-length ratio; the plugin takes 2.0 rad / target FOV
         target_hfov = 2 * math.atan(math.tan(self.base_hfov / 2) / z)
         msg.data = self.PLUGIN_REF_HFOV / target_hfov
         self.pub.publish(msg)
-        self.prev, self.cmd, self.cmd_at = self.current(time.time()), z, time.time()
+        return True
 
     def current(self, now: float) -> float:
         """Zoom in effect: from the published intrinsics when they track the zoom, else the
         commanded value once the lens has had time to move."""
-        fx = _info.get("fx")
-        if fx and self.base_fx is None and self.cmd == 1.0:
-            self.base_fx = fx
-        if fx and self.base_fx and abs(fx / self.base_fx - 1.0) > 1e-3:
-            return fx / self.base_fx
-        if self.cmd != 1.0 and now - self.cmd_at < 1.5:
+        # (gz camera_info does not follow the zoom plugin, so the commanded value it is)
+        if now - self.cmd_at < 1.5:
             return self.prev  # still slewing; report the old value
         return self.cmd
 
@@ -175,6 +184,7 @@ def main() -> int:
     degrader = None
     motion = DroneMotion()
     clock = {"sim": 0.0}
+    dropped = {"n": 0}
     queue: collections.deque = collections.deque()
     qlock = threading.Lock()
     if a.realism:
@@ -218,6 +228,12 @@ def main() -> int:
             return
         if rng.random() < profile.drop_prob:
             return
+        if clock["sim"] and stamp < clock["sim"] - 0.3:
+            # behind the camera rate: drop instead of queueing, like a real video link.
+            # (Queued frames made latency grow without bound over a mission: frames
+            # arrived >10 s late and were paired with the wrong pose.)
+            dropped["n"] += 1
+            return
         import numpy as np
 
         if degrader is None:
@@ -248,7 +264,9 @@ def main() -> int:
                 "seq": seq,
                 "width": w,
                 "height": h,
-                "stamp_sim_s": clock["sim"],
+                # arrival = capture + modelled pipeline latency (what a companion computer
+                # stamps); processing time on this host must not leak into it
+                "stamp_sim_s": release,
                 "wall_time": time.time(),
                 "encoding": "jpeg",
                 "zoom": zoom_at_capture,

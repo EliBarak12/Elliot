@@ -15,6 +15,7 @@ This is the simulated equivalent of a camera-time-offset calibration on a real d
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import math
 import sys
@@ -87,14 +88,25 @@ def main() -> int:
                 g = pixel_to_ground(u, v, f.camera, f.pose, f.pose.gimbal_pitch_deg)
                 if g is None:
                     continue
+                # same sighting under the alternative gimbal model, for comparison
+                alt_pose = dataclasses.replace(f.pose, gimbal_earth_locked=not f.pose.gimbal_earth_locked)
+                g_alt = pixel_to_ground(u, v, f.camera, alt_pose, f.pose.gimbal_pitch_deg)
                 best = min(truth, key=lambda tr: math.hypot(*ne_between(g.lat, g.lon, *tr)))
                 en, ee = ne_between(best[0], best[1], g.lat, g.lon)  # error vector (measured - true)
                 yaw = f.pose.yaw_rad
                 along = en * math.cos(yaw) + ee * math.sin(yaw)
                 cross = -en * math.sin(yaw) + ee * math.cos(yaw)
                 spd = f.pose.groundspeed_ms
+                ref_alt = (
+                    min(truth, key=lambda tr: math.hypot(*ne_between(g_alt.lat, g_alt.lon, *tr))) if g_alt else None
+                )
+                err_alt = (
+                    math.hypot(*ne_between(ref_alt[0], ref_alt[1], g_alt.lat, g_alt.lon)) if g_alt and ref_alt else None
+                )
                 rows.append(
                     {
+                        "err_alt_model": err_alt,
+                        "earth_locked": f.pose.gimbal_earth_locked,
                         "pass": k,
                         "dir": "N" if north > 0 else "S",
                         "speed": spd,

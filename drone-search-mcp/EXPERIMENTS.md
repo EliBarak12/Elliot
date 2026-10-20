@@ -210,3 +210,45 @@ v3:
 * **One-shot flow:** `execute_search(plan_id, inspect_top=N)` inspects the N best
   candidates on a nearest-first route and returns all close-ups in one response; the
   agent only has to compare and report. Tested end-to-end on the fake backend.
+
+## v2 final results (18 flown runs, 3 lost to a render-harness bug)
+
+| tier | runs | success | median err | max err | false reports / 20 | median time | median battery | median calls |
+|---|---|---|---|---|---|---|---|---|
+| all | 18 | 77.8% | 1.85 m | 4.5 m | 3.3 | 359 s | 26.5% | 8 |
+| easy | 7 | 85.7% | 1.93 m | 4.3 m | 0 | 298 s | 21% | 8 |
+| medium | 6 | 83.3% | 1.5 m | 2.29 m | 3.3 | 384 s | 26.5% | 8 |
+| hard | 5 | 60% | 3.27 m | 4.5 m | 8.0 | 386 s | 32% | 8 |
+
+Target in the candidate list: 94% of runs. Failures: hard-3005 (identical-looking cars:
+material-cache bug), medium-3007 and hard-3008 (red backpack look-alike, 45 px close-ups,
+inspection crop/position bugs), easy-3018 (no frame at inspection, grass close-ups).
+
+## Self-play session 2 (v3 code, medium-4242, blue car) — three more simulator bugs
+
+Flown by hand with `execute_search(inspect_top=3)`. Candidate positions in the 40 m search
+were 12–24 m off, and the target and a white car each appeared as several candidates.
+Chasing it with a live diagnostic (camera pose from Gazebo vs projection) found:
+
+1. **Camera frames backed up.** The camera-realism step (distortion, blur, noise, JPEG in
+   pure numpy) took >200 ms per 1280×960 frame against a 200 ms camera period. Frames
+   queued in the bridge, latency grew without bound over a mission (frames >10 s late)
+   and were stamped with their processing time, so each was paired with the wrong pose.
+   Short calibration flights hid it (the 0.37 s "measured latency" was partly this
+   backlog). Fixes: OpenCV implementation (220 → 35 ms), stale frames are dropped like
+   on a real link, frames are stamped capture + modelled latency, and the server rejects
+   frames older than the telemetry. Re-measured offset: −0.255 s.
+2. **The zoom plugin reset the lens.** ardupilot_gazebo's CameraZoomPlugin slews to its own
+   hard-coded 2.0 rad FOV on load: the 1.2 rad camera silently became 0.35× focal length
+   (a 10 m offset showed as 131 px instead of 374). The bridge now pins zoom 1 at
+   start-up; gz's camera_info does not follow the plugin, so the bridge reports the
+   commanded zoom.
+3. **Gimbal attitude model.** Composing the EKF attitude with ArduPilot's reported gimbal
+   quaternion leaked airframe roll into the projection (up to 15 m during banked turns,
+   3.6 m from 4.9° of wind roll at 40 m): at −90° pitch the quaternion is built from
+   degenerate Euler angles and cannot carry roll. The message flags say roll and pitch are
+   earth-locked, so the camera attitude is the commanded earth-frame target (roll 0,
+   pitch −90) plus vehicle yaw. Same flights, steady frames: earth-locked 2.14 m median
+   (p90 3.3) vs composition 2.40 m (p90 3.8); this run's GPS bias alone was ~2 m.
+
+Also: EKF3 can take >90 s to converge from a cold start under load; arming waits 180 s.

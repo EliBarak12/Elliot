@@ -55,6 +55,10 @@ class Telemetry:
     # servo gimbals this way: the angle *commanded relative to the airframe*, so it only
     # equals the earth-frame angle while the airframe is level.
     gimbal_q_body: tuple[float, float, float, float] | None = None
+    # Roll and pitch held in the earth frame (GIMBAL_DEVICE_FLAGS_ROLL_LOCK|PITCH_LOCK): the
+    # camera's earth attitude is then the commanded target, whatever the airframe does.
+    gimbal_earth_locked: bool = False
+    gimbal_target_pitch_deg: float | None = None  # commanded earth-frame pitch
     time_boot_s: float = 0.0  # vehicle clock (sim time in SITL lockstep)
     wall_time: float = 0.0  # when this snapshot was last updated
     status_text: list[str] = field(default_factory=list)

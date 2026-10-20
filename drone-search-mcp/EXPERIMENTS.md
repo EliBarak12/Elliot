@@ -265,3 +265,27 @@ Also: EKF3 can take >90 s to converge from a cold start under load; arming waits
   the frame at zoom ×4 and swallowed the object ("object_in_closeup: false" while the
   image showed it). Kernel capped at half the frame; the object is now proposed.
 * Agent note: it did not use `inspect_top`; the eval system prompt predates it.
+
+## v3 / v4 status and an environment problem
+
+v3 (commit 4946d17) ran 2 runs before being stopped for the v4 speed fix: both successes
+(easy-5000 1.74 m, 7 calls; medium-5001 1.77 m, 6 calls — the red-backpack look-alike case
+solved in one shot with `inspect_top`), but 753 s and 964 s to find.
+
+Simulator fixes found while starting v4:
+* **CameraZoomPlugin removed.** It slews toward a hard-coded 2.0 rad FOV from load and its
+  focal-length bookkeeping never converges, so it re-configures the camera on every
+  physics step (real-time factor fell to ~0.3 in v3, later ~0.04). Replaced by a
+  dual-sensor gimbal: a second, fixed 4× telephoto camera on the same gimbal (as on real
+  search payloads); gz-sensors only renders subscribed cameras, so the bridge switches
+  subscriptions on a zoom request and the idle sensor costs nothing. Frames report
+  zoom 4.0 when taken with it; verified switching wide → tele → wide.
+* **Teardown escalates to SIGKILL** and waits until no Gazebo/bridge/SITL is left (a Gazebo
+  that ignored SIGTERM kept the JSON port, and every later SITL waited for physics forever).
+
+**Environment:** in the last hours of this session the cloud VM's memory became pathologically
+slow for fresh allocations (guest metrics normal, 14 GB available, no pressure): touching
+new memory runs at ~20 MB/s, a CLIP forward pass went from 0.32 s to 24.5 s, and even
+ardupilot_gazebo's stock `iris_runway` world can no longer keep SITL in lockstep. Dropping
+caches and deleting artifacts did not help; it is below the guest. v4 could not be run
+here and needs a fresh machine.

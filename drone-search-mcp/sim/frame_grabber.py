@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import contextlib
 import json
 import math
 import os
@@ -48,37 +49,29 @@ def _on_info(msg: CameraInfo) -> None:
         _info.update(fx=k[0], fy=k[4], cx=k[2], cy=k[5])
 
 
-class ZoomControl:
-    """Camera zoom, driven like a real camera's control API.
+class CameraSwitch:
+    """Wide / telephoto selection, driven like a real dual-sensor gimbal's control API.
 
-    The server writes ``<out>/control.json`` {"zoom": Z}; we forward it to Gazebo's
-    CameraZoomPlugin and report the zoom each frame was taken at (as a real camera reports
-    its zoom state). Zoom is the focal-length ratio to the base lens; the plugin instead takes
-    a FOV ratio against a fixed 2.0 rad, so we convert.
+    The server writes ``<out>/control.json`` {"zoom": Z}; Z >= 2 selects the telephoto sensor
+    (fixed TELE_ZOOM x focal length), anything else the wide one. Only the selected sensor
+    is subscribed, and gz-sensors renders only subscribed cameras, so the idle one is free.
+    Each frame reports the zoom it was taken with, as a real camera reports its zoom state.
     """
 
-    PLUGIN_REF_HFOV = 2.0
-
-    def __init__(self, node: Node, out: str, base_hfov: float) -> None:
+    def __init__(self, node: Node, out: str, wide_topic: str, tele_zoom: float, make_cb) -> None:
         self.node = node
         self.path = os.path.join(out, "control.json")
-        self.base_hfov = base_hfov
+        self.wide_topic = wide_topic
+        self.tele_topic = wide_topic + "_tele"
+        self.tele_zoom = tele_zoom
+        self.make_cb = make_cb
         self.mtime = 0.0
-        self.cmd = 1.0
-        self.prev = 1.0
-        self.cmd_at = 0.0
-        self.pub = None
-        self.base_fx: float | None = None
-        self.initialised = False
+        self.active = 1.0
+        # start on the wide camera, whatever a previous session left in the control file
+        with contextlib.suppress(OSError):
+            self.mtime = os.path.getmtime(self.path)
 
     def poll(self) -> None:
-        if not self.initialised:
-            # The plugin slews to its own 2.0 rad default FOV on load (it took the 1.2 rad
-            # lens to a 0.35x focal length and broke every projection); pin zoom 1 first.
-            if self._publish(1.0):
-                self.initialised = True
-                self.cmd_at = time.time()
-            return
         try:
             m = os.path.getmtime(self.path)
         except OSError:
@@ -91,35 +84,13 @@ class ZoomControl:
                 z = float(json.load(f).get("zoom", 1.0))
         except (OSError, ValueError):
             return
-        z = max(1.0, z)
-        prev = self.current(time.time())
-        if self._publish(z):
-            self.prev, self.cmd, self.cmd_at = prev, z, time.time()
-
-    def _publish(self, z: float) -> bool:
-        if self.pub is None:
-            from gz.msgs10.double_pb2 import Double
-
-            topic = next((t for t in self.node.topic_list() if t.endswith("/zoom/cmd_zoom")), None)
-            if topic is None:
-                return False
-            self.pub = self.node.advertise(topic, Double)
-            self._msg = Double
-            time.sleep(0.5)  # let the subscription connect before the first message
-        msg = self._msg()
-        # zoom = focal-length ratio; the plugin takes 2.0 rad / target FOV
-        target_hfov = 2 * math.atan(math.tan(self.base_hfov / 2) / z)
-        msg.data = self.PLUGIN_REF_HFOV / target_hfov
-        self.pub.publish(msg)
-        return True
-
-    def current(self, now: float) -> float:
-        """Zoom in effect: from the published intrinsics when they track the zoom, else the
-        commanded value once the lens has had time to move."""
-        # (gz camera_info does not follow the zoom plugin, so the commanded value it is)
-        if now - self.cmd_at < 1.5:
-            return self.prev  # still slewing; report the old value
-        return self.cmd
+        want = self.tele_zoom if z >= 2.0 else 1.0
+        if want == self.active:
+            return
+        old, new = (self.wide_topic, self.tele_topic) if want > 1 else (self.tele_topic, self.wide_topic)
+        self.node.subscribe(Image, new, self.make_cb(want))
+        self.node.unsubscribe(old)
+        self.active = want
 
 
 def _write(out: str, payload: bytes, ext: str, meta: dict) -> None:
@@ -174,7 +145,7 @@ def main() -> int:
     p.add_argument("--once", help="write a single PNG to this path and exit")
     p.add_argument("--skip", type=int, default=3, help="--once: frames to skip (let lighting settle)")
     p.add_argument("--timeout", type=float, default=120.0)
-    p.add_argument("--base-hfov", type=float, default=1.2, help="camera FOV at zoom 1 (rad)")
+    p.add_argument("--tele-zoom", type=float, default=4.0, help="telephoto sensor focal-length ratio")
     a = p.parse_args()
 
     node = Node()
@@ -197,12 +168,11 @@ def main() -> int:
             profile = None
         rng = random.Random(1)
 
-    def on_image(msg: Image) -> None:
+    def on_image(msg: Image, zoom_now: float = 1.0) -> None:
         nonlocal degrader
         count["n"] += 1
-        if zoom is not None:
-            zoom.poll()
-        zoom_now = zoom.current(time.time()) if zoom is not None else 1.0
+        if switch is not None:
+            switch.poll()
         w, h = msg.width, msg.height
         stamp = msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9
         if a.once:
@@ -273,7 +243,10 @@ def main() -> int:
             }
             _write(a.out, jpeg, "jpg", meta)
 
-    zoom = None if a.once else ZoomControl(node, a.out, a.base_hfov)
+    def make_cb(z: float):
+        return lambda msg: on_image(msg, z)
+
+    switch = None if a.once else CameraSwitch(node, a.out, a.topic, a.tele_zoom, make_cb)
     # gz-sensors publishes intrinsics next to the image topic: /a/b/camera -> /a/b/camera_info
     node.subscribe(CameraInfo, a.topic.rsplit("/", 1)[0] + "/camera_info", _on_info)
     if profile is not None:

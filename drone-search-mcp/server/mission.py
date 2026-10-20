@@ -396,8 +396,8 @@ class MissionRunner:
     def _zoom_in(
         self, analyzer: FrameAnalyzer, cand: Candidate, lat: float, lon: float, alt: float, target_px: float = 220.0
     ) -> dict[str, Any]:
-        """Optical zoom until the object spans ~target_px, re-centring halfway (a narrow
-        field of view leaves little room for hover drift)."""
+        """Switch to the zoom (telephoto) sensor when the object would be small, then
+        re-acquire and re-centre (a narrow field of view leaves little room for drift)."""
         out: dict[str, Any] = {"zoom": 1.0, "lat": None, "lon": None}
         f = self._fresh_frame(4.0)
         if self.backend.max_zoom <= 1.0 or f is None:
@@ -406,8 +406,10 @@ class MissionRunner:
         want = float(np.clip(target_px / (cand.size_m * base_fx / alt), 1.0, self.backend.max_zoom))
         if want < 1.3:
             return out
-        for z in (want**0.5, want):
+        for z in (want,):
             applied = self.backend.set_zoom(z)
+            if applied <= 1.0:
+                break
             self._wait_zoom(base_fx * applied)
             found = self._reacquire(analyzer, lat, lon, cand.size_m, n_frames=3)
             if found:

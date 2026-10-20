@@ -53,9 +53,23 @@ def down() -> None:
         with contextlib.suppress(ProcessLookupError, ValueError, PermissionError):
             os.killpg(int(pidf.read_text()), signal.SIGTERM)
         pidf.unlink(missing_ok=True)
-    # gz forks a separate server process; make sure nothing of ours survives
-    subprocess.run(["pkill", "-f", "gz sim -s"], check=False)
+    # gz forks a separate server process and handles SIGTERM "gracefully" (it can hang for
+    # minutes): a survivor keeps the plugin's JSON port and the next SITL never gets physics.
+    # Escalate to SIGKILL and wait until nothing of ours is left.
+    patterns = ["gz sim -s", "frame_grabber.py --out"]
+    for pat in patterns:
+        subprocess.run(["pkill", "-f", pat], check=False)
     subprocess.run(["pkill", "-x", "arducopter"], check=False)
+    for _ in range(20):
+        alive = [pat for pat in patterns if subprocess.run(["pgrep", "-f", pat], capture_output=True).returncode == 0]
+        if not alive and subprocess.run(["pgrep", "-x", "arducopter"], capture_output=True).returncode != 0:
+            break
+        time.sleep(0.5)
+    else:
+        for pat in patterns:
+            subprocess.run(["pkill", "-9", "-f", pat], check=False)
+        subprocess.run(["pkill", "-9", "-x", "arducopter"], check=False)
+        time.sleep(1.0)
     # a lingering SITL keeps 5760 bound and the next one exits with "bind failed"
     for _ in range(40):
         if not any("LISTEN" in _port_states(p) for p in (5760, 5762)):

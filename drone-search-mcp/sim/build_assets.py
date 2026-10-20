@@ -14,6 +14,7 @@ Run:  python sim/build_assets.py [--ardupilot-gazebo /opt/sim/ardupilot_gazebo]
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import re
 import shutil
@@ -26,7 +27,7 @@ HERE = Path(__file__).resolve().parent
 GEN = HERE / "generated"
 
 # Camera spec shared with the vision projection code through sim/camera.json.
-CAMERA = {"width": 1280, "height": 960, "hfov_rad": 1.2, "rate_hz": 5.0}
+CAMERA = {"width": 1280, "height": 960, "hfov_rad": 1.2, "rate_hz": 5.0, "tele_zoom": 4.0}
 
 
 def _noise(rng: np.random.Generator, size: int, octaves: int = 5) -> np.ndarray:
@@ -164,16 +165,33 @@ def derive_models(apg: Path) -> None:
     shutil.copytree(src_models / "gimbal_small_3d", gim_dst)
     sdf = (gim_dst / "model.sdf").read_text()
     sdf = sdf.replace('<model name="gimbal_small_3d">', '<model name="nadir_gimbal">')
-    # keep the zoom plugin (real search drones carry zoom cameras); faster slew, 6x optical
-    # relative to our 1.2 rad base FOV (the plugin measures zoom against a fixed 2.0 rad)
-    sdf = re.sub(r"<max_zoom>.*?</max_zoom>", "<max_zoom>10.0</max_zoom>", sdf)
-    sdf = re.sub(r"<slew_rate>.*?</slew_rate>", "<slew_rate>3.0</slew_rate>", sdf)
+    # No CameraZoomPlugin: it slews toward a hard-coded 2.0 rad FOV from load and never
+    # converges, re-configuring the camera on every physics step (RTF fell to 0.04). Real
+    # search payloads are dual-sensor anyway (wide + zoom); see the tele sensor below.
+    sdf = re.sub(r"<plugin filename=\"CameraZoomPlugin\".*?</plugin>", "", sdf, flags=re.S)
     sdf = re.sub(r"<plugin name=\"GstCameraPlugin\".*?</plugin>", "", sdf, flags=re.S)
     sdf = sdf.replace("<horizontal_fov>2.0</horizontal_fov>", f"<horizontal_fov>{CAMERA['hfov_rad']}</horizontal_fov>")
     sdf = sdf.replace("<width>640</width>", f"<width>{CAMERA['width']}</width>")
     sdf = sdf.replace("<height>480</height>", f"<height>{CAMERA['height']}</height>")
     sdf = sdf.replace("<update_rate>10</update_rate>", f"<update_rate>{CAMERA['rate_hz']}</update_rate>")
     sdf = sdf.replace("<visualize>1</visualize>", "<visualize>0</visualize><topic>/search_drone/camera</topic>")
+    # Telephoto sensor on the same gimbal: same resolution, FOV for TELE_ZOOM x focal length.
+    # gz-sensors only renders a camera that has subscribers, so it costs nothing until the
+    # frame bridge switches to it for a close-up.
+    tele_hfov = 2 * math.atan(math.tan(CAMERA["hfov_rad"] / 2) / CAMERA["tele_zoom"])
+    wide = re.search(r'<sensor name="camera" type="camera">.*?</sensor>', sdf, flags=re.S)
+    if wide is None:
+        raise RuntimeError("camera sensor not found in gimbal model")
+    tele = (
+        wide.group(0)
+        .replace('<sensor name="camera"', '<sensor name="camera_tele"')
+        .replace(
+            f"<horizontal_fov>{CAMERA['hfov_rad']}</horizontal_fov>",
+            f"<horizontal_fov>{tele_hfov:.6f}</horizontal_fov>",
+        )
+        .replace("<topic>/search_drone/camera</topic>", "<topic>/search_drone/camera_tele</topic>")
+    )
+    sdf = sdf.replace(wide.group(0), wide.group(0) + "\n      " + tele)
     (gim_dst / "model.sdf").write_text(sdf)
     (gim_dst / "model.config").write_text(
         (gim_dst / "model.config").read_text().replace("Gimbal Small 3D", "nadir_gimbal")

@@ -2,6 +2,7 @@ import asyncio
 import json
 
 import numpy as np
+import pytest
 from fastmcp import Client
 
 from backends.fake import HOME, FakeBackend
@@ -82,7 +83,8 @@ def _scene(obj: tuple[int, int, int] | None, ground: tuple[int, int, int]) -> np
     return np.clip(img + np.random.default_rng(1).normal(0, 3, img.shape), 0, 255).astype(np.uint8)
 
 
-def test_inspection_attaches_search_view_when_canopy_hides_the_object(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("closeup_kind", ["trunk", "all_canopy"])
+def test_inspection_attaches_search_view_when_canopy_hides_the_object(tmp_path, monkeypatch, closeup_kind) -> None:
     # hard-8014: the target was inspected, but straight down it was under leaves; the agent
     # called it foliage. The search had seen it from an angle with the right colours.
     from vision.colour import reference_colour
@@ -98,7 +100,8 @@ def test_inspection_attaches_search_view_when_canopy_hides_the_object(tmp_path, 
     srv.ref_colour = reference_colour(ref)
     c = _cand(1)
     c.best_crop = _scene((175, 35, 30), (60, 100, 40))  # search pass: red object on grass
-    canopy = _scene((70, 70, 68), (35, 50, 25))  # close-up: all leaves, a grey trunk in the middle
+    # leaves with a grey trunk (colours clearly differ), or nothing but leaves (no colour measurable, hard-9014)
+    canopy = _scene((70, 70, 68) if closeup_kind == "trunk" else None, (35, 50, 25))
 
     def fake_inspect(cand, analyzer, search_alt, alt, out_dir):  # type: ignore[no-untyped-def]
         return {
@@ -112,6 +115,9 @@ def test_inspection_attaches_search_view_when_canopy_hides_the_object(tmp_path, 
         payload, images = srv._inspect(c, None)
     finally:
         b.close()
-    assert payload["colour_check"]["verdict"].startswith("clearly different")
+    if closeup_kind == "trunk":
+        assert payload["colour_check"]["verdict"].startswith("clearly different")
+    else:
+        assert "colour_check" not in payload
     assert payload["search_view"]["colour_check"]["verdict"] == "same colours as the reference"
     assert len(images) == len(payload["images"]) == 2 and "search view" in payload["images"][1]

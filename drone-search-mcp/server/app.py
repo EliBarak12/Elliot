@@ -643,19 +643,21 @@ class DroneSearchServer:
             ),
         }
         search_view = None
-        if res["object_in_final_frame"]:
-            check = compare_colour(closeup_colour(res["closeup"]), self.ref_colour)
-            if check is not None:
-                payload["colour_check"] = check
-                if str(check["verdict"]).startswith("clearly different"):
-                    search_view = compare_colour(closeup_colour(c.best_crop), self.ref_colour)
+        check = (
+            compare_colour(closeup_colour(res["closeup"]), self.ref_colour) if res["object_in_final_frame"] else None
+        )
+        if check is not None:
+            payload["colour_check"] = check
+        if self.ref_colour and (check is None or str(check["verdict"]).startswith("clearly different")):
+            # no object measurable in the close-up (all canopy: hard-9014) or a clear mismatch
+            search_view = compare_colour(closeup_colour(c.best_crop), self.ref_colour)
         images = [_jpeg(self._with_reference(res["closeup"], f"{c.id} close-up"), 768, 90, stretch=False)]
         if search_view is not None and str(search_view["verdict"]).startswith("same colours"):
             # Straight down, a tree canopy can hide what the search saw from an angle: the target
             # in hard-8014 was inspected and showed only leaves, so the agent called it foliage.
             payload["search_view"] = {
                 "colour_check": search_view,
-                "note": "The close-up's colours do not match, but the search saw this spot from an angle and its "
+                "note": "The close-up shows no matching object, but the search saw this spot from an angle and its "
                 "colours matched the reference: the object may be under cover (trees) that hides it from directly "
                 "above. Judge from the search view, attached after the close-up.",
             }

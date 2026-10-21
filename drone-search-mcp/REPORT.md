@@ -12,16 +12,16 @@ wind with drag, lens distortion, compressed/late/dropped video). Full history wi
 | v3 | 2 (stopped) | 2/2 | 1.75 m | 0 | one-shot `inspect_top` solved the red-backpack look-alike case; slow (12–16 min) |
 | v4 | 2 (stopped) | 2/2 scored | 1.87 m | 0 | one run never flew (GPS drift bug, fixed) |
 | v5 | 21 | 76.2% (easy 100%, medium 100%, hard 29%) | 2.03 m (max 3.26; 0.38 without GPS bias) | 2.86 | all failures: hard-tier objects under trees |
-| v6 | 21 | 81.0% (easy 100%, medium 100%, hard 43%) | 1.75 m (max 3.54; 0.56 without GPS bias) | 2.86 | all three false reports: a decoy red backpack while the target sat under trees; fixes pushed for v7 |
+| v6 | 21 | 81.0% (easy 100%, medium 100%, hard 43%) | 1.75 m (max 3.54; 0.56 without GPS bias) | 2.86 | all three false reports: a decoy red backpack while the target sat under trees |
+| **v7** | 21 | **85.7%** (easy 100%, medium 100%, hard 57%) | 1.71 m (max 4.15; 0.40 without GPS bias) | **0.95** | **all three targets met**; misses: objects under trees |
 
-Against the targets (≥85% success, <5 m error, <2 false reports per 20): **position error is
-met in every scored run** (v6 max 3.54 m). Easy and medium meet every target in both v5 and
-v6 (28/28, no false reports). Overall v6 reached 81% with 2.86 false reports per 20; every
-miss is a hard-tier object under trees, and every v6 false report is the same case — a
-second red backpack reported while the real one was a weak candidate under a canopy. The
-fixes for each traced cause are pushed (look-alike warning with uninspected candidates,
-search view when cover hides the object from above, stricter colour comparison); v7
-measures them on new scenarios.
+Against the targets (≥85% success, <5 m error, <2 false reports per 20): **v7 meets all
+three on 21 fresh random scenarios** — 85.7% success, max error 4.15 m (median 1.71 m,
+0.40 m once the simulated GPS bias is removed), 0.95 false reports per 20. Easy and medium
+are 100% with no false reports for three rounds running (42/42). The remaining misses are
+hard-tier objects under trees: one target never becomes a candidate (detection under
+canopy), and in two the close-up from directly above shows only canopy (fixed after v7 by
+attaching the search-pass view, not yet re-measured).
 
 ## What works
 
@@ -44,11 +44,12 @@ measures them on new scenarios.
 
 ## What fails or is unproven
 
-* **Hard tier** (occlusion under trees, small targets, strong wind): 29% in v5, 43% in v6.
-  Detection under canopy still misses some targets (one per round); the rest were
-  inspection and decision problems (zoom, steadiness, look-alikes, canopy hiding the
-  object from directly above), each addressed after the round that exposed it.
-* **Look-alikes** need close-ups: solved in the v3 runs we have, but on two runs only.
+* **Hard tier** (occlusion under trees, small targets, strong wind): 29% in v5, 43% in v6,
+  57% in v7. Detection under canopy still misses about one target per round; the rest were
+  inspection and decision problems, each fixed after the round that exposed it.
+* **Look-alikes** (a second red backpack, beige vs white boxes, people in other clothes) need
+  close-ups, a measured colour check and a look-alike warning; with all three, v7 had one
+  false report in 21 runs, when the real target was never detected.
 * **Throughput**: on this CPU-only VM the detector sees ~1–1.5 frames per sim second; a
   small target is sometimes seen only once. A GPU (or a real companion computer with an
   NPU) would allow every frame and a learned detector.
@@ -79,7 +80,7 @@ measures them on new scenarios.
    `--allow-real-vehicle` with a human-confirmed geofence, a pilot with RC override,
    obstacle-aware inspection altitudes (the 12 m floor assumes no tall obstacles),
    lost-link and lost-video behaviour (the GCS-heartbeat failsafe is already enabled).
-5. **Finish the eval loop**: run `scripts/eval_snapshot.sh v7 --n 21`
+5. **Finish the eval loop**: run `scripts/eval_snapshot.sh v8 --n 21`
    and continue until the targets hold on fresh scenarios; then fly small, open-field,
    large-target missions first.
 

@@ -370,3 +370,34 @@ Agent-reported confusion also led to `not_seen_in_closeup` (faint reference colo
 jeans from above, that the close-up does not show; 6e5d22d).
 
 Every v6 run has a trace page and a flight video (`output/traces/`, `output/videos/`).
+
+## v7 (commit 5ac9c27) — targets met
+
+| tier | runs | success | median error | max error | false reports / 20 | median time | median calls |
+|---|---|---|---|---|---|---|---|
+| all | 21 | **85.7%** | 1.71 m | **4.15 m** | **0.95** | 288 s | 5 |
+| easy | 7 | 100% | 1.74 m | 4.15 m | 0 | 190 s | 5 |
+| medium | 7 | 100% | 2.06 m | 4.02 m | 0 | 305 s | 5 |
+| hard | 7 | 57.1% | 1.12 m | 1.44 m | 2.86 | 359 s | 6 |
+
+All three targets hold on fresh scenarios: success ≥ 85%, every error < 5 m, fewer than 2
+false reports per 20. Median error without the true GPS bias: 0.40 m; the two errors above
+4 m were 2.8 m and 4.0 m of simulated GPS bias. (The run was restarted once after three
+runs to replace a colour check that called a red close-up "red missing" against a red
+reference.) The look-alike warning, `list_candidates` and the colour fixes were used as
+intended in flight; the red-backpack decoy that caused every v6 false report was resolved
+correctly in hard-9011.
+
+Failures (hard tier, all objects under trees):
+
+| run | what happened | fix (commit) |
+|---|---|---|
+| hard-9002 | false report: the decoy red backpack. The look-alike warning fired and the agent inspected more, but the real backpack never became a candidate | close-ups cropped so the object fills half the image, for finer detail (9bc5fcc); detection under canopy remains open |
+| hard-9014 | no report: the person under a tree was inspected, but the close-up was nothing but canopy, so no colour could be measured and the search-view fallback did not fire | the search view is also attached when the close-up has no measurable object (85e2bbc) |
+| hard-9017 | no report: same case as hard-9014 | same fix |
+
+Agent-reported confusion in easy-9018 led to the verdict naming faint unseen colours
+itself ("same colours as the reference, apart from the blue not visible in the close-up",
+c70e10a).
+
+Every v7 run has a trace page and a flight video (`output/traces/`, `output/videos/`).

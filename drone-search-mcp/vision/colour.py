@@ -198,4 +198,8 @@ def compare(closeup: Palette | None, reference: Palette | None) -> dict[str, obj
     }
     if unseen:
         out["not_seen_in_closeup"] = f"{', '.join(unseen)} (faint or small in the reference; may be hidden from above)"
+        if verdict.startswith("same colours"):
+            # say it in the verdict itself: a bare "same colours" next to a reference listing blue
+            # read as a contradiction even with the note beside it (easy-9018)
+            out["verdict"] = f"{verdict}, apart from the {' and '.join(unseen)} not visible in the close-up"
     return out

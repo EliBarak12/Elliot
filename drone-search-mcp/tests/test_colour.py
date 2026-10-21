@@ -95,6 +95,7 @@ def test_faint_jeans_blue_is_not_required_from_above() -> None:
     assert r is not None and "missing" not in str(r["verdict"])
     # ...but it is named, so "same colours" does not read as a contradiction (medium-8019)
     assert "blue" in str(r["not_seen_in_closeup"])
+    assert r["verdict"] == "same colours as the reference, apart from the blue not visible in the close-up"
 
 
 def test_shaded_and_lit_reds_in_the_reference_both_count_as_present() -> None:

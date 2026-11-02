@@ -139,11 +139,13 @@ class ToolUIConfig(BaseModel):
 
     enabled: bool = True
     # Which built-in template renders the result. "auto" resolves at serve
-    # time by result shape (rows → table, single record → detail). "custom"
+    # time by result shape (rows with images → cards, other rows → table,
+    # single record → detail). "cards" lays rows out as branded item cards
+    # (image, title, subtitle, price, badge) — catalogs, listings. "custom"
     # serves the author's own HTML from ``custom_html``.
-    preset: Literal["auto", "table", "detail", "metric", "chart", "form", "markdown", "custom"] = (
-        "auto"
-    )
+    preset: Literal[
+        "auto", "table", "cards", "detail", "metric", "chart", "form", "markdown", "custom"
+    ] = "auto"
     # Title shown in the view header; defaults to the tool name.
     title: str | None = None
     # Preset-specific field wiring, e.g. {"columns": "id,name,status"} for
@@ -158,6 +160,10 @@ class ToolUIConfig(BaseModel):
     # Origins the view's fetch/XHR may reach; anything not listed is blocked
     # by the host's Content-Security-Policy (ext-spec ``csp.connectDomains``).
     csp_connect_domains: list[str] = []
+    # Origins the view may load images, fonts and stylesheets from (ext-spec
+    # ``csp.resourceDomains``) — e.g. a product-image CDN for the cards preset.
+    # The branding logo and font origins are added automatically.
+    csp_resource_domains: list[str] = []
     # Ask the host to draw a visual boundary around the view.
     prefer_border: bool = True
     # Who may call this tool: the model, the app view, or both (default).

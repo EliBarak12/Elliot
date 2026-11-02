@@ -410,11 +410,31 @@ def test_set_branding_merges_fields_and_clear_resets(mcp: FastMCP, session: Elli
     assert result["branding"]["logo"] == "https://cdn.example/logo.png"
     # clear=True with a new field starts from scratch.
     result = _tool(mcp, "elliot_set_branding")(clear=True, accent="#445566")
-    assert result["branding"] == {"accent": "#445566", "accent_dark": None, "logo": None}
+    assert {k: v for k, v in result["branding"].items() if v is not None} == {"accent": "#445566"}
     # clear alone removes branding entirely.
     result = _tool(mcp, "elliot_set_branding")(clear=True)
     assert result["branding"] is None
     assert session.branding is None
+
+
+def test_set_branding_takes_the_whole_design_system(mcp: FastMCP, session: ElliotSession):
+    result = _tool(mcp, "elliot_set_branding")(
+        name="Helix",
+        accent="#0a7c4a",
+        font_family="DM Sans",
+        font_url="https://fonts.googleapis.com/css2?family=DM+Sans",
+        radius="lg",
+        density="spacious",
+    )
+    assert result["status"] == "ok"
+    assert session.branding is not None
+    assert session.branding.name == "Helix"
+    assert session.branding.radius == "lg"
+    assert session.branding.density == "spacious"
+    # A later call that only changes the font keeps everything else.
+    _tool(mcp, "elliot_set_branding")(font_family="Inter")
+    assert session.branding.font_family == "Inter"
+    assert session.branding.accent == "#0a7c4a"
 
 
 def test_set_branding_rejects_bad_values(mcp: FastMCP, session: ElliotSession):

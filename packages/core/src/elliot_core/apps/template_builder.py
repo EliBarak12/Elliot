@@ -104,12 +104,10 @@ def build_tool_app_html(
         "mapping": ui.mapping,
         "category": tool.category,
     }
-    if branding is not None and (branding.accent or branding.logo):
-        config["branding"] = {
-            "accent": branding.accent,
-            "accent_dark": branding.accent_dark,
-            "logo": branding.logo,
-        }
+    if branding is not None and not branding.is_empty():
+        # Every set token travels to the view, which applies the whole design
+        # system (color, type, shape, density, identity) at load.
+        config["branding"] = branding.model_dump(exclude_none=True)
     _ = connector_slug  # part of the stable signature; the config is per-tool
     return _inject_config(_load_preset_shell(), config)
 
@@ -148,6 +146,42 @@ def inline_custom_html(cfg: ConnectorConfig, base_dir: Path) -> ConnectorConfig:
     return cfg.model_copy(update={"tools": tools})
 
 
+def _origin(url: str) -> str | None:
+    if not url.startswith("https://"):
+        return None
+    host = url.removeprefix("https://").split("/", 1)[0]
+    return f"https://{host}" if host else None
+
+
+def view_resource_domains(ui: ToolUIConfig, branding: ConnectorBranding | None) -> list[str]:
+    """Origins a view loads images, fonts and stylesheets from.
+
+    The host's Content-Security-Policy blocks anything undeclared, so a brand
+    font or an https logo that is not listed here silently fails to load
+    inside Claude. Declared: the author's ``csp_resource_domains`` (e.g. a
+    product-image CDN), the logo's origin, and the brand font stylesheet's
+    origin — plus ``fonts.gstatic.com`` for a Google Fonts stylesheet, whose
+    CSS pulls the font files from there. ``data:`` URIs need nothing.
+    """
+    domains: list[str] = []
+
+    def add(origin: str | None) -> None:
+        if origin and origin not in domains:
+            domains.append(origin)
+
+    for d in ui.csp_resource_domains:
+        add(d.rstrip("/"))
+    if branding is not None:
+        if branding.logo:
+            add(_origin(branding.logo))
+        if branding.font_url:
+            origin = _origin(branding.font_url)
+            add(origin)
+            if origin == "https://fonts.googleapis.com":
+                add("https://fonts.gstatic.com")
+    return domains
+
+
 def build_apps_extension(cfg: ConnectorConfig, *, connector_dir: Path | None = None) -> Apps | None:
     """Assemble the MCP Apps extension for a connector, or ``None`` when no
     enabled tool declares a UI.
@@ -171,12 +205,7 @@ def build_apps_extension(cfg: ConnectorConfig, *, connector_dir: Path | None = N
             connector_dir=connector_dir,
             branding=cfg.branding,
         )
-        # An https logo needs its origin declared for the host CSP's img-src;
-        # data: URIs are always allowed and need nothing.
-        resource_domains: list[str] = []
-        logo = cfg.branding.logo if cfg.branding else None
-        if logo and logo.startswith("https://"):
-            resource_domains.append("https://" + logo.removeprefix("https://").split("/", 1)[0])
+        resource_domains = view_resource_domains(ui, cfg.branding)
         apps.add_html_resource(
             uri,
             html,

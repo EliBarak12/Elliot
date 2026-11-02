@@ -15,6 +15,7 @@ from elliot_core.apps.template_builder import (
     build_tool_app_html,
     tool_ui_meta,
     ui_resource_uri,
+    view_resource_domains,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "build_tool_app_html",
     "tool_ui_meta",
     "ui_resource_uri",
+    "view_resource_domains",
 ]

@@ -12,6 +12,7 @@ from elliot_core.apps.template_builder import (
     inline_custom_html,
     tool_ui_meta,
     ui_resource_uri,
+    view_resource_domains,
 )
 from elliot_core.types import ConnectorBranding, ConnectorConfig, ToolDefinition, ToolUIConfig
 from elliot_core.types.source import SourceConfig
@@ -205,6 +206,78 @@ class TestBranding:
         resource = next(iter(ext.resources())).resource
         # No connect domains and a data: logo → no CSP block at all.
         assert resource.meta is None or "csp" not in resource.meta.get("ui", {})
+
+    def test_full_design_system_is_injected(self) -> None:
+        tool = _tool(preset="table")
+        branding = ConnectorBranding(
+            name="Helix",
+            accent="#0a7c4a",
+            accent_foreground="#ffffff",
+            font_family="DM Sans",
+            font_url="https://fonts.googleapis.com/css2?family=DM+Sans",
+            radius="lg",
+            density="compact",
+        )
+        html = build_tool_app_html(tool, tool.ui, branding=branding)  # type: ignore[arg-type]
+        match = re.search(
+            r'<script type="application/json" id="elliot-ui-config">(.*?)</script>',
+            html,
+            re.DOTALL,
+        )
+        assert match
+        assert json.loads(match.group(1))["branding"] == branding.model_dump(exclude_none=True)
+
+    def test_font_and_image_origins_are_declared_in_resource_csp(self) -> None:
+        tool = _tool(preset="cards").model_copy(
+            update={
+                "ui": ToolUIConfig(
+                    preset="cards", csp_resource_domains=["https://cdn.shop.example/"]
+                )
+            }
+        )
+        cfg = _connector(tool).model_copy(
+            update={
+                "branding": ConnectorBranding(
+                    font_family="DM Sans",
+                    font_url="https://fonts.googleapis.com/css2?family=DM+Sans",
+                    logo="https://cdn.shop.example/logo.png",
+                )
+            }
+        )
+        ext = build_apps_extension(cfg)
+        assert ext is not None
+        resource = next(iter(ext.resources())).resource
+        assert resource.meta is not None
+        # The image CDN once (the logo shares it), then the Google Fonts
+        # stylesheet origin and the origin its CSS loads font files from.
+        assert resource.meta["ui"]["csp"]["resourceDomains"] == [
+            "https://cdn.shop.example",
+            "https://fonts.googleapis.com",
+            "https://fonts.gstatic.com",
+        ]
+
+    def test_view_resource_domains_without_branding(self) -> None:
+        ui = ToolUIConfig(csp_resource_domains=["https://img.example"])
+        assert view_resource_domains(ui, None) == ["https://img.example"]
+        assert view_resource_domains(ToolUIConfig(), None) == []
+
+    def test_font_family_cannot_inject_css(self) -> None:
+        import pytest
+
+        with pytest.raises(ValueError, match="font_family"):
+            ConnectorBranding(font_family="x;}body{display:none")
+        with pytest.raises(ValueError, match="https"):
+            ConnectorBranding(font_url="http://fonts.example/a.css")
+        with pytest.raises(ValueError):
+            ConnectorBranding(radius="huge")  # type: ignore[arg-type]
+
+    def test_empty_branding_reports_empty(self) -> None:
+        assert ConnectorBranding().is_empty()
+        assert ConnectorBranding(name="   ").is_empty()
+        assert not ConnectorBranding(density="compact").is_empty()
+
+    def test_cards_preset_is_accepted(self) -> None:
+        assert ToolUIConfig(preset="cards", mapping={"image": "thumbnail"}).preset == "cards"
 
     def test_accent_validation_rejects_non_hex(self) -> None:
         import pytest

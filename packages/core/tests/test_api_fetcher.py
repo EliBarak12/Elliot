@@ -495,3 +495,32 @@ async def test_odata_next_link_without_strategy_warns() -> None:
     src = _source(pagination=PaginationConfig(strategy="none"), data_path="value")
     result = await fetch_endpoint(src, {})
     assert any("@odata.nextLink" in w for w in result.warnings)
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("body", "headers", "expected"),
+    [
+        ({"products": [{"id": 1}, {"id": 2}], "total": 194, "skip": 0, "limit": 2}, {}, "2 of 194"),
+        ({"results": [{"id": 1}], "next": "https://api.example.com/items?page=2"}, {}, "next page"),
+        (
+            [{"id": 1}],
+            {"link": '<https://api.example.com/items?page=2>; rel="next"'},
+            "Link header",
+        ),
+        ({"products": [{"id": 1}, {"id": 2}], "total": 2}, {}, None),
+    ],
+)
+async def test_first_page_only_snapshots_are_flagged(body, headers, expected):
+    """A snapshot of page 1 of a paged API must say so — tools over it would
+    otherwise answer confidently from a fraction of the data."""
+    respx.get("https://api.example.com/items").mock(
+        return_value=Response(200, json=body, headers=headers)
+    )
+    cfg = SourceConfig(id="items", name="items", type="rest", url="https://api.example.com/items")
+    result = await fetch_endpoint(cfg, {})
+    partial = [w for w in result.warnings if w.startswith("PARTIAL_DATASET")]
+    if expected is None:
+        assert partial == []
+    else:
+        assert len(partial) == 1 and expected in partial[0], result.warnings

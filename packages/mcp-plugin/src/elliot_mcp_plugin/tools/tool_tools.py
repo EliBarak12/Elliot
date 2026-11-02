@@ -203,7 +203,10 @@ async def _preview_passthrough(
     api_params = {k: validated[k] for k in tool.rest_query_params if k in validated}
     secrets = session.workspace.load_secrets()
     result = await fetch_endpoint(source, secrets, extra_params=api_params)
-    rows = list(result.rows)[:_PASSTHROUGH_PREVIEW_ROWS]
+    rows = _shape_passthrough_rows(
+        tool, list(result.rows), source.table_name or source.id, validated
+    )
+    rows = rows[:_PASSTHROUGH_PREVIEW_ROWS]
     log.info("tool.preview.passthrough", tool_id=tool.id, source_id=source.id, rows=len(rows))
     out: dict[str, Any] = {
         "rows": rows,
@@ -220,6 +223,43 @@ async def _preview_passthrough(
     if warnings:
         out["warnings"] = list(warnings)
     return out
+
+
+def _shape_passthrough_rows(
+    tool: ToolDefinition,
+    rows: list[dict[str, Any]],
+    table_name: str,
+    arguments: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Apply a passthrough tool's post-fetch shaping, exactly as the runtime does.
+
+    A live tool may project and filter the fetched response with ``sql`` or
+    ``return_fields`` / ``filter_groups`` (the runtime's ``_execute_passthrough``
+    runs them over the flattened rows). The preview used to return the raw
+    response, so an author who trimmed a 16k-token result to five fields still
+    saw — and measured — all of it.
+    """
+    if not (tool.sql or tool.filter_groups or tool.return_fields):
+        return rows
+    from elliot_core.sqlite.engine import SQLiteEngine
+    from elliot_core.sqlite.flattener import flatten
+    from elliot_core.tools.query_builder import build_select_sql, quote_ident
+
+    engine = SQLiteEngine()
+    try:
+        engine.load_result(flatten(rows, table_name=table_name))
+        if tool.sql:
+            valid, reason = validate_tool_sql(tool.sql)
+            if not valid:
+                raise ElliotError("INVALID_SQL", f"Tool '{tool.id}' has invalid SQL: {reason}")
+            params = {p.name: arguments.get(p.name) for p in tool.parameters}
+            return engine.query(tool.sql, params)
+        sql, built = build_select_sql(
+            tool, arguments, from_clause=quote_ident(table_name, "sqlite")
+        )
+        return engine.query(sql, built)
+    finally:
+        engine.close()
 
 
 def _normalize_tool_input(tool: dict[str, Any]) -> dict[str, Any]:

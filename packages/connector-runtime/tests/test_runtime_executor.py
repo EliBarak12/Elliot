@@ -252,6 +252,53 @@ async def test_executor_rest_passthrough_forwards_query_params() -> None:
 
 
 @respx.mock
+async def test_executor_passthrough_projects_return_fields_from_its_table() -> None:
+    """A live tool with return_fields returns only those fields.
+
+    Regression: the post-fetch SELECT named the source *id* as its table while
+    the rows were loaded under the source's table_name, so every discovered
+    source (id = UUID, table = "people") failed with "no such table".
+    """
+    connector = ConnectorConfig(
+        name="People",
+        slug="people",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="6f1c0f5e-0000-4000-8000-000000000001",
+                name="people",
+                type="rest",
+                url="https://api.example.com/people",
+                table_name="people",
+            )
+        ],
+        tools=[
+            ToolDefinition(
+                id="find_people",
+                name="find_people",
+                description="Find people live by name.",
+                category="READ",
+                source_ids=["6f1c0f5e-0000-4000-8000-000000000001"],
+                rest_query_params=["q"],
+                return_fields=[{"field": "id"}, {"field": "name", "alias": "full_name"}],
+                parameters=[
+                    ParameterDefinition(name="q", type="string", required=True, description="name")
+                ],
+            )
+        ],
+        skills=[],
+    )
+    respx.get("https://api.example.com/people").mock(
+        return_value=httpx.Response(
+            200, json=[{"id": 1, "name": "Ada", "email": "ada@example.com", "bio": "long"}]
+        )
+    )
+    executor = ToolExecutor(connector, secrets={})
+    result = await executor.execute(connector.tools[0], {"q": "ada"})
+    assert result.rows == [{"id": 1, "full_name": "Ada"}]
+
+
+@respx.mock
 async def test_executor_passthrough_post_sends_body(monkeypatch: pytest.MonkeyPatch) -> None:
     """A passthrough source with method=POST and forward_params_in='body' issues
     a real POST with the params in the JSON body. Previously the runtime sent

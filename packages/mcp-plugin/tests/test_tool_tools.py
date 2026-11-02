@@ -569,6 +569,52 @@ def test_preview_passthrough_tool_fetches_live(
     assert captured["extra_params"] == {"q": "widget"}
 
 
+def test_preview_passthrough_applies_return_fields_like_the_runtime(
+    mcp: FastMCP, session: ElliotSession, monkeypatch: pytest.MonkeyPatch
+):
+    """A live tool that projects its response previews the projection.
+
+    The runtime shapes passthrough results with ``return_fields``; the preview
+    used to return the raw response, so trimming a heavy result had no visible
+    (or measurable) effect until after publish.
+    """
+    from elliot_core.types.source import FetchResult, SourceConfig
+
+    session.sources["api1"] = SourceConfig.model_validate(
+        {
+            "id": "api1",
+            "type": "rest",
+            "name": "people",
+            "url": "https://api.example.com/search",
+            "table_name": "people",
+        }
+    )
+    created = _tool(mcp, "elliot_create_rest_tool")(
+        name="Search people",
+        description="Search people live via the API by name.",
+        source_id="api1",
+        query_params=[{"name": "q", "type": "string", "required": True, "description": "name"}],
+    )
+    tool_id = created["tool_id"]
+    session.registry.update(
+        tool_id, {"return_fields": [{"field": "id"}, {"field": "name", "alias": "full_name"}]}
+    )
+
+    async def _fake_fetch(config, secrets, *, auth_token_override=None, extra_params=None):
+        return FetchResult(
+            rows=[
+                {"id": 1, "name": "Ada", "email": "ada@example.com", "bio": "x" * 500},
+                {"id": 2, "name": "Grace", "email": "grace@example.com", "bio": "y" * 500},
+            ],
+            fetched_at="now",
+        )
+
+    monkeypatch.setattr("elliot_core.sources.api_fetcher.fetch_endpoint", _fake_fetch)
+    result = _tool(mcp, "elliot_preview_tool")(tool_id=tool_id, params={"q": "a"})
+    assert result["rows"] == [{"id": 1, "full_name": "Ada"}, {"id": 2, "full_name": "Grace"}]
+    assert result["estimated_tokens"] < 60
+
+
 def test_preview_passthrough_tool_enforces_required(mcp: FastMCP, session: ElliotSession):
     from elliot_core.types.source import SourceConfig
 

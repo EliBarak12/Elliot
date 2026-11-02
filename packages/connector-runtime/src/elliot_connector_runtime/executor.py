@@ -739,10 +739,12 @@ class ToolExecutor:
 
         if tool.sql or tool.filter_groups or tool.return_fields:
             from elliot_core.sqlite.query_runner import validate_tool_sql
+            from elliot_core.tools.query_builder import quote_ident
 
+            table = source.table_name or source.id
             engine = SQLiteEngine()
             try:
-                engine.load_result(flatten(rows, table_name=source.table_name or source.id))
+                engine.load_result(flatten(rows, table_name=table))
                 if tool.sql:
                     ok, reason = validate_tool_sql(tool.sql)
                     if not ok:
@@ -752,7 +754,13 @@ class ToolExecutor:
                         p.name: arguments.get(p.name) for p in tool.parameters
                     }
                 else:
-                    sql, params = build_select_sql(tool, arguments)
+                    # FROM the table the rows were just loaded into. Without
+                    # from_clause the builder names the first source id (a
+                    # UUID for any discovered source), so a live tool with
+                    # return_fields failed every call with "no such table".
+                    sql, params = build_select_sql(
+                        tool, arguments, from_clause=quote_ident(table, "sqlite")
+                    )
                 rows = engine.query(sql, params)
             finally:
                 engine.close()

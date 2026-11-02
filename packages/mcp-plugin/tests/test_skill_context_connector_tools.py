@@ -468,9 +468,25 @@ def test_preview_tool_ui_applies_session_and_draft_branding(
     # accent, so it appears in every built document regardless of branding.
     tool_id = _load_and_create_tool(mcp, session, tmp_path)
     _tool(mcp, "elliot_set_branding")(accent="#123abc")
-    res = _tool(mcp, "elliot_preview_tool_ui")(tool_id=tool_id)
+    res = _tool(mcp, "elliot_preview_tool_ui")(tool_id=tool_id, include_html=True)
     assert "#123abc" in res["html"]
     # A draft branding argument overrides the saved session branding.
-    res = _tool(mcp, "elliot_preview_tool_ui")(tool_id=tool_id, branding={"accent": "#00ff00"})
+    res = _tool(mcp, "elliot_preview_tool_ui")(
+        tool_id=tool_id, branding={"accent": "#00ff00"}, include_html=True
+    )
     assert "#00ff00" in res["html"]
     assert "#123abc" not in res["html"]
+
+
+def test_preview_tool_ui_is_small_unless_html_is_asked_for(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    """The built view is ~0.5 MB. An agent checking its view must not get it
+    in its context by default — only Studio's renderer asks for the HTML."""
+    tool_id = _load_and_create_tool(mcp, session, tmp_path)
+    res = _tool(mcp, "elliot_preview_tool_ui")(tool_id=tool_id)
+    assert "html" not in res
+    assert res["bytes"] > 10_000
+    assert res["uri"].startswith("ui://")
+    assert "include_html=true" in res["note"]
+    assert len(json.dumps(res)) < 1_000

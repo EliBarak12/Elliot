@@ -1012,13 +1012,15 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
         tool_id: str,
         ui: dict | None = None,  # type: ignore[type-arg]
         branding: dict | None = None,  # type: ignore[type-arg]
+        include_html: bool = False,
     ) -> dict:  # type: ignore[type-arg]
-        """Build the MCP Apps HTML view for a tool — exactly what agents get at
-        ``ui://<slug>/<tool_id>`` — so Studio can render it in its sandboxed
-        preview. Pass ``ui`` (a ToolUIConfig-shaped dict) to preview a DRAFT
-        view config without saving it to the tool first, and ``branding``
-        (a ConnectorBranding-shaped dict) to preview draft accent/logo
-        branding; otherwise the session's saved branding applies.
+        """Check the MCP Apps view a tool will serve at ``ui://<slug>/<tool_id>``:
+        returns its URI, preset, size and the image/font origins it declares.
+        Pass ``ui`` (a ToolUIConfig-shaped dict) to check a DRAFT view config
+        before saving it, and ``branding`` (a ConnectorBranding-shaped dict)
+        for draft branding; otherwise the saved ones apply. The HTML itself
+        is ~120k tokens — pass ``include_html=true`` only to render it (as
+        Studio's preview does), never to read it.
         """
         try:
             from pathlib import Path
@@ -1045,12 +1047,24 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 connector_dir=connector_dir,
                 branding=branding_cfg,
             )
-            return {
+            from elliot_core.apps import view_resource_domains
+
+            out: dict[str, Any] = {
                 "tool_id": tool_id,
                 "uri": ui_resource_uri(slug, tool_id),
-                "html": html,
                 "preset": ui_cfg.preset,
+                "enabled": ui_cfg.enabled,
+                "bytes": len(html.encode("utf-8")),
+                "resource_domains": view_resource_domains(ui_cfg, branding_cfg),
             }
+            if include_html:
+                out["html"] = html
+            else:
+                approx = f"{len(html) // 4:,}"
+                out["note"] = (
+                    f"HTML omitted (~{approx} tokens). Pass include_html=true to render it."
+                )
+            return out
         except ElliotError as exc:
             return to_mcp_error_content(exc)
         except Exception as exc:

@@ -135,9 +135,14 @@ def preview_tool(
     tokens = estimate_tokens(rows)
     out: dict[str, Any] = {"rows": rows, "row_count": len(rows), "estimated_tokens": tokens}
     if tokens > _HEAVY_PREVIEW_TOKENS:
-        out["note"] = (
-            f"This result is ~{tokens} tokens — an agent pays that on every call. Project only "
-            "the columns the agent needs and add a LIMIT so it fits a context window (principle 2)."
+        # Advise only what the query lacks: telling an author whose SQL is
+        # already capped to "add a LIMIT" teaches them to ignore the note.
+        capped = re.search(r"\bLIMIT\b", sql, re.IGNORECASE) is not None
+        out["note"] = f"This result is ~{tokens} tokens — an agent pays that on every call. " + (
+            "Return only the fields the agent needs, or lower the row cap (principle 2)."
+            if capped
+            else "Return only the fields the agent needs and add a LIMIT so it fits a "
+            "context window (principle 2)."
         )
     return out
 

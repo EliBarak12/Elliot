@@ -350,6 +350,31 @@ def test_preview_tool_reports_token_estimate(mcp: FastMCP, session: ElliotSessio
     assert result["estimated_tokens"] >= 1
 
 
+@pytest.mark.parametrize(
+    ("sql", "says_add_limit"),
+    [
+        ("SELECT id, amount, '{pad}' AS note FROM \"orders\"", True),
+        ("SELECT id, amount, '{pad}' AS note FROM \"orders\" LIMIT 3", False),
+    ],
+)
+def test_heavy_preview_advice_fits_the_query(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path, sql: str, says_add_limit: bool
+):
+    """A query that already caps its rows must not be told to add a LIMIT."""
+    _load_table(session, tmp_path)
+    _tool(mcp, "elliot_create_tool")(
+        name="heavy_orders",
+        description="Retrieve all orders with a long note",
+        category="READ",
+        sql=sql.format(pad="word " * 400),
+        parameters=[],
+    )
+    result = _tool(mcp, "elliot_preview_tool")(tool_id="heavy_orders", params={})
+    assert result["estimated_tokens"] > 500
+    assert ("add a LIMIT" in result["note"]) is says_add_limit
+    assert "fields the agent needs" in result["note"]
+
+
 def test_preview_tool_aggregate(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
     _load_table(session, tmp_path)
     _tool(mcp, "elliot_create_tool")(

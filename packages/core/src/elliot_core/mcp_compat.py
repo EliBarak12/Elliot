@@ -37,7 +37,22 @@ log = structlog.get_logger(__name__)
 # FastMCP → MCPServer rename. New code should annotate with ``MCPServer``.
 FastMCP = MCPServer
 
+
+class AgentToolError(ToolError, ValueError):
+    """A tool failure the agent must read: ``[CODE] message — what to do``.
+
+    The MCP SDK hands a ``ToolError``'s text to the client and treats any
+    other exception as a crash whose text stays on the server (since 2.3 the
+    agent only sees "Error executing tool <name>"). Elliot's errors are
+    written for the agent — an invalid enum value names the allowed values, a
+    missing confirmation says to pass ``confirm=true`` — so handlers raise
+    this. It also subclasses ``ValueError`` so callers that already catch
+    that keep working.
+    """
+
+
 __all__ = [
+    "AgentToolError",
     "CacheHint",
     "CacheableMethod",
     "ClientIdentity",

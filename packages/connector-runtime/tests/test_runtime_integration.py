@@ -2010,3 +2010,43 @@ async def test_tools_without_ui_have_no_ui_meta() -> None:
         assert not (tool.meta or {}).get("ui")
         resources = await client.list_resources()
         assert not [r for r in resources.resources if str(r.uri).startswith("ui://")]
+
+
+@pytest.mark.parametrize("mode", ["legacy", "auto"])
+async def test_agent_sees_the_error_code_and_fix(mode: str, tmp_path: Path) -> None:
+    """Principle 3 on the wire: an agent that calls a tool wrongly must read
+    the code and what to do next, not just "Error executing tool X". The SDK
+    keeps the text only for a ``ToolError`` — anything else counts as a crash
+    and is reduced to the bare prefix — so handlers raise ``AgentToolError``."""
+    from mcp.client import Client
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.observation_store import ObservationStore as _Store
+    from elliot_connector_runtime.server import create_runtime_server
+
+    cfg_path = tmp_path / "pets.connector.json"
+    cfg_path.write_text(json.dumps(MINIMAL_CONNECTOR))
+    config = ConnectorCache().get(cfg_path)
+    mcp = create_runtime_server(
+        config,
+        ToolExecutor(config, secrets={}),
+        store=_Store(f"sqlite:///{tmp_path / 'obs.db'}"),
+    )
+
+    async with Client(mcp, mode=mode) as client:  # type: ignore[arg-type]
+        res = await client.call_tool(
+            "pets_submit_feedback", {"tool_id": "list_animals", "outcome": "great"}
+        )
+    assert res.is_error
+    text = " ".join(getattr(c, "text", "") for c in res.content)
+    assert "VALIDATION_INVALID_OUTCOME" in text, text
+    assert "outcome must be one of" in text, text
+
+    # Version-independent: the handler raises a ToolError, which every SDK
+    # release passes through to the client.
+    tool = mcp._tool_manager.get_tool("pets_submit_feedback")
+    assert tool is not None
+    with pytest.raises(ToolError, match="VALIDATION_INVALID_OUTCOME"):
+        await tool.fn(tool_id="list_animals", outcome="great")

@@ -44,6 +44,7 @@ from elliot_core.http_middleware import (
     UserIdentityMiddleware,
 )
 from elliot_core.mcp_compat import (
+    AgentToolError,
     CacheableMethod,
     CacheHint,
     Context,
@@ -1191,7 +1192,7 @@ def _register_tool(
                 )
                 await _observe(td.id, kwargs, [], 0.0, str(exc), session_id, error_code=exc.code)
                 error_content = to_mcp_error_content(exc)
-                raise ValueError(error_content["text"])
+                raise AgentToolError(error_content["text"])
         else:
             kwargs.pop("confirm", None)
 
@@ -1208,7 +1209,7 @@ def _register_tool(
             except ElliotError as exc:
                 await _observe(td.id, kwargs, [], 0.0, str(exc), session_id, error_code=exc.code)
                 error_content = to_mcp_error_content(exc)
-                raise ValueError(error_content["text"]) from exc
+                raise AgentToolError(error_content["text"]) from exc
 
         if run_async:
 
@@ -1274,7 +1275,7 @@ def _register_tool(
                 "warning",
                 {"event": "tool.call.error", "tool": td.id, "code": elliot_exc.code},
             )
-            raise ValueError(error_content["text"]) from exc
+            raise AgentToolError(error_content["text"]) from exc
 
     _handler.__name__ = td.id
     _handler.__doc__ = td.description
@@ -1370,7 +1371,7 @@ def _register_task_tool(
         """Retrieve background task status and result by task_id."""
         record = task_store.get(task_id)
         if record is None:
-            raise ValueError(
+            raise AgentToolError(
                 f"TASK_NOT_FOUND: No task with id '{task_id}'. "
                 "Tasks expire after 1 hour. Check the task_id and retry."
             )
@@ -1438,7 +1439,7 @@ def _register_feedback_tool(
                 (f"outcome must be one of {list(_FEEDBACK_OUTCOMES)}; got {outcome!r}."),
                 {"field": "outcome", "allowed": list(_FEEDBACK_OUTCOMES)},
             )
-            raise ValueError(to_mcp_error_content(exc)["text"])
+            raise AgentToolError(to_mcp_error_content(exc)["text"])
 
         session_id, identity = _current_session_and_identity(ctx)
 
@@ -1459,7 +1460,7 @@ def _register_feedback_tool(
             await run_in_threadpool(_persist)
         except Exception as exc:
             elliot_exc = ElliotError("FEEDBACK_WRITE_FAILED", str(exc))
-            raise ValueError(to_mcp_error_content(elliot_exc)["text"]) from exc
+            raise AgentToolError(to_mcp_error_content(elliot_exc)["text"]) from exc
 
         log.info("agent.feedback.recorded", tool_id=tool_id, outcome=normalized)
         return {
@@ -1856,7 +1857,7 @@ def _register_one_skill_tool(
                     ),
                     {"skill_id": skill_id},
                 )
-                raise ValueError(to_mcp_error_content(exc)["text"])
+                raise AgentToolError(to_mcp_error_content(exc)["text"])
         else:
             kwargs.pop("confirm", None)
 
@@ -1867,7 +1868,7 @@ def _register_one_skill_tool(
                     get_current_user_id(), skill_source_ids or None
                 )
             except ElliotError as exc:
-                raise ValueError(to_mcp_error_content(exc)["text"]) from exc
+                raise AgentToolError(to_mcp_error_content(exc)["text"]) from exc
 
         async def _run_step(tool_id: str, params: dict[str, Any]) -> Any:
             std = tools_by_id.get(tool_id)
@@ -1902,7 +1903,7 @@ def _register_one_skill_tool(
                 session_id,
                 error_code=elliot_exc.code,
             )
-            raise ValueError(to_mcp_error_content(elliot_exc)["text"]) from exc
+            raise AgentToolError(to_mcp_error_content(elliot_exc)["text"]) from exc
 
     _skill_handler.__name__ = skill_id
     _skill_handler.__doc__ = skill_desc

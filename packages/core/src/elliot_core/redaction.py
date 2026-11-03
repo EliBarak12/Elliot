@@ -205,7 +205,14 @@ def mask_call_arguments(arguments: Any, keep: frozenset[str] | set[str] = frozen
     out: dict[str, Any] = {}
     for key, value in redact_value(arguments).items():
         # Booleans and numbers (bounds, counts, ids) are kept; bool is an int.
-        if value == _REDACTED or key in keep or value is None or isinstance(value, int | float):
+        # A value already masked passes through, so masking is idempotent.
+        if (
+            value == _REDACTED
+            or key in keep
+            or value is None
+            or isinstance(value, int | float)
+            or (isinstance(value, str) and value.startswith("‹") and value.endswith("›"))
+        ):
             out[key] = value
         else:
             out[key] = describe_value(value)

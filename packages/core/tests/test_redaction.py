@@ -237,3 +237,10 @@ def test_scrub_personal_text_removes_contact_details_and_long_numbers():
     assert "‹email›" in scrubbed and scrubbed.count("‹number›") == 2
     assert "12 rows" in scrubbed
     assert scrub_personal_text("") == ""
+
+
+def test_mask_call_arguments_is_idempotent():
+    from elliot_core.redaction import mask_call_arguments
+
+    once = mask_call_arguments({"q": "Rex Carter", "n": 3})
+    assert mask_call_arguments(once) == once == {"q": "‹text · 10 chars›", "n": 3}

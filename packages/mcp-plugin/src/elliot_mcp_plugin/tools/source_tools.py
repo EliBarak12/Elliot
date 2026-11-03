@@ -304,16 +304,41 @@ def _describe_flattened_schema(flat: FlattenResult) -> tuple[list[dict[str, Any]
     tables: list[dict[str, Any]] = []
     for t in all_tables:
         is_primary = t.name == primary_name
-        tables.append(
-            {
-                "name": t.name,
-                "role": "primary" if is_primary else "child",
-                "parent": None if is_primary else parent_of(t.name),
-                "row_count": len(t.rows),
-                "columns": [c.name for c in t.columns],
-            }
-        )
+        entry: dict[str, Any] = {
+            "name": t.name,
+            "role": "primary" if is_primary else "child",
+            "parent": None if is_primary else parent_of(t.name),
+            "row_count": len(t.rows),
+        }
+        # The primary table's columns are the discovery result's top-level
+        # ``columns``; listing them again here doubled the result for a wide
+        # table.
+        if not is_primary:
+            entry["columns"] = [c.name for c in t.columns]
+        tables.append(entry)
     return tables, (_JOIN_HINT if flat.related_tables else None)
+
+
+def _short(value: Any, limit: int = 40) -> Any:
+    text = value if isinstance(value, str) else None
+    if text is not None and len(text) > limit:
+        return text[: limit - 1] + "…"
+    return value
+
+
+def _compact_profile(col_type: str, prof: dict[str, Any]) -> dict[str, Any]:
+    """The statistics a tool designer acts on, in a fraction of the tokens."""
+    out: dict[str, Any] = {
+        "type": col_type or None,
+        "nulls": prof.get("null_count"),
+        "distinct": prof.get("distinct_count"),
+    }
+    if prof.get("enum_candidate"):
+        out["enum"] = [_short(v) for v in prof.get("enum_values") or []]
+    else:
+        out["min"] = _short(prof.get("min_val"))
+        out["max"] = _short(prof.get("max_val"))
+    return {k: v for k, v in out.items() if v is not None}
 
 
 def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
@@ -953,14 +978,15 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return {"error": f"Table '{table_name}' not found or query failed: {exc}"}
 
     @mcp.tool()
-    def elliot_profile_source(table_name: str) -> dict:  # type: ignore[type-arg]
+    def elliot_profile_source(table_name: str, verbose: bool = False) -> dict:  # type: ignore[type-arg]
         """Return column statistics for a table to inform tool design.
 
-        Per column: min, max, null_count, distinct_count, total_count, and the
-        top values. A column flagged ``enum_candidate: true`` is a small,
-        repeated set of text values (its ``enum_values`` list) — declare a
-        matching tool parameter as a typed ``enum`` of those values, not an open
-        string, so an agent can't pass a value the tool would silently reject.
+        Compact by default (about a quarter of the full size): per column its
+        type, nulls, distinct count, min and max, and — for a small repeated
+        set of text values — ``enum`` with the allowed values to declare as a
+        typed ``enum`` parameter. Long values are shortened and Elliot's
+        internal ``_`` columns are left out. ``verbose=true`` returns every
+        statistic and the top values of every column.
         """
         try:
             schema = session.engine.get_table_schema(table_name)
@@ -968,11 +994,19 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             profiles = {
                 col["name"]: session.engine.profile_column(table_name, col["name"])
                 for col in schema
+                if verbose or not str(col["name"]).startswith("_")
             }
+            if not verbose:
+                types = {str(c["name"]): str(c.get("type") or "") for c in schema}
+                profiles = {
+                    name: _compact_profile(types.get(name, ""), prof)
+                    for name, prof in profiles.items()
+                }
             return {
                 "table": table_name,
                 "row_count": stats["row_count"],
                 "columns": profiles,
+                **({} if verbose else {"note": "Compact profile; verbose=true for all stats."}),
             }
         except Exception as exc:
             log.error("source.profile.failed", table=table_name, error=str(exc))
@@ -982,9 +1016,10 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
     async def elliot_refresh_source(source_id: str) -> dict:  # type: ignore[type-arg]
         """Re-fetch a source from its origin and reload the table in SQLite."""
         try:
-            src = session.sources.get(source_id)
+            resolved_id, src = session.resolve_source(source_id)
             if src is None:
-                return {"error": f"Source not found: {source_id}"}
+                return {"error": session.source_not_found(source_id)}
+            source_id = resolved_id or source_id
             # File sources carry their data inline (or at a local path) — there
             # is no live upstream to re-poll, and config_snapshot intentionally
             # omits the content blob. Re-materialize straight from the stored
@@ -1021,8 +1056,10 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
         re-point or re-create those tools against the source you kept.
         """
         try:
-            if session.sources.get(source_id) is None:
-                return {"error": f"Source not found: {source_id}"}
+            resolved_id, _src = session.resolve_source(source_id)
+            if resolved_id is None:
+                return {"error": session.source_not_found(source_id)}
+            source_id = resolved_id
             result = session.remove_source(source_id)
             # The cascade may have deleted tools that are in the built
             # connector — refresh so the build never goes silently stale (F5).

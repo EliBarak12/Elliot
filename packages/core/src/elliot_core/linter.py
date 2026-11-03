@@ -17,6 +17,11 @@ Severity = Literal["ERROR", "WARN", "INFO"]
 # tools for AI agents").
 _MAX_TOOLS = 25
 
+# One minimum for a tool description, shared by validation, the linter and
+# the quality scan. Each used to carry its own (10, 15, 20), so a description
+# could pass one check and fail the next.
+MIN_DESCRIPTION_CHARS = 15
+
 # Parameter names that are technically valid but tell an agent nothing about
 # what value to pass. The existing PARAMETER_NAME_TOO_SHORT rule catches the
 # <=2 char cases; this catches the longer-but-still-generic ones.
@@ -877,14 +882,17 @@ def lint_connector(
     for tool in config.tools:
         desc = tool.description or ""
 
-        if len(desc.strip()) < 15:
+        if len(desc.strip()) < MIN_DESCRIPTION_CHARS:
             issues.append(
                 LintIssue(
                     severity="ERROR",
                     code="DESCRIPTION_TOO_SHORT",
                     tool_id=tool.id,
                     message=f"Tool '{tool.id}' description is too short ({len(desc)} chars).",
-                    suggestion='Write at least 15 characters starting with a verb: "Return all...", "Get a single..."',
+                    suggestion=(
+                        f"Write at least {MIN_DESCRIPTION_CHARS} characters starting with a "
+                        'verb: "Return all...", "Get a single..."'
+                    ),
                 )
             )
         elif not _starts_with_verb(desc):

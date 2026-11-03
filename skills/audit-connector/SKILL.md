@@ -57,7 +57,8 @@ For every **error**-severity finding (and ideally the warnings too):
 - Edit the offending tool — tighten the description, fix a parameter name or
   type, add an enum, add a LIMIT, or make an error message actionable.
 - Rebuild with `elliot_build_connector` and re-lint.
-- Call `elliot_clear_audit_transcripts`, then re-run from step 1.
+- Re-run from step 1 with fresh seeds. Clearing earlier transcripts is the
+  user's call (from Studio); if old runs would skew the verdict, ask them to.
 
 Repeat until `elliot_judge_audit` returns `passed: true`. Cap at 4 iterations —
 if it still fails, report the remaining findings to the user and ask how to

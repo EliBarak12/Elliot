@@ -72,10 +72,10 @@ def test_validate_sql_delete_invalid(mcp: FastMCP):
 def test_get_schema_returns_products(mcp: FastMCP):
     result = _tool(mcp, "elliot_get_schema")()
     assert "products" in result
-    col_names = [c["name"] for c in result["products"]]
-    assert "id" in col_names
-    assert "name" in col_names
-    assert "price" in col_names
+    # Compact by default: {column: type}.
+    assert {"id", "name", "price"} <= set(result["products"])
+    full = _tool(mcp, "elliot_get_schema")(verbose=True)
+    assert {"id", "name", "price"} <= {c["name"] for c in full["products"]}
 
 
 def test_sample_data_returns_rows(mcp: FastMCP):

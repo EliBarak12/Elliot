@@ -476,6 +476,27 @@ def test_profile_source_returns_column_stats(mcp: FastMCP, tmp_path: Path):
     assert "columns" in result
 
 
+def test_profile_source_is_compact_unless_verbose(mcp: FastMCP, tmp_path: Path):
+    path = tmp_path / "people.csv"
+    rows = ["id,tier,bio"] + [
+        f"{i},{'gold' if i % 2 else 'silver'},{'x' * 120}" for i in range(1, 9)
+    ]
+    path.write_text("\n".join(rows) + "\n")
+    _tool(mcp, "elliot_discover_source")(
+        source_type="file", config={"path": str(path)}, name="people"
+    )
+    compact = _tool(mcp, "elliot_profile_source")(table_name="people")
+    cols = compact["columns"]
+    assert cols["tier"]["enum"] == ["gold", "silver"]
+    assert len(cols["bio"]["max"]) == 40 and cols["bio"]["max"].endswith("…")
+    assert not any(name.startswith("_") for name in cols)
+    assert "top_values" not in cols["id"] and "verbose=true" in compact["note"]
+
+    full = _tool(mcp, "elliot_profile_source")(table_name="people", verbose=True)
+    assert "top_values" in full["columns"]["id"]
+    assert len(str(full)) > 2 * len(str(compact))
+
+
 def test_profile_source_missing_table_returns_error(mcp: FastMCP):
     result = _tool(mcp, "elliot_profile_source")(table_name="ghost")
     assert "text" in result or "error" in result

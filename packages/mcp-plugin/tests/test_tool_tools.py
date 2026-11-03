@@ -439,7 +439,7 @@ def test_preview_tool_missing_required_returns_structured_error(
         name="orders_by_status",
         description="Return orders for the given status",
         category="READ",
-        sql='SELECT * FROM "orders" WHERE status = :status',
+        sql='SELECT * FROM "orders" WHERE id = :status',
         parameters=[
             {"name": "status", "type": "string", "required": True, "description": "status"}
         ],
@@ -952,3 +952,58 @@ def test_create_action_tool_rejects_complex_param_with_form_body(
     )
     text = str(out)
     assert "UNSUPPORTED_PARAM_ROUTING" in text
+
+
+def test_create_tool_refuses_sql_naming_columns_that_do_not_exist(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    """A misspelled column used to be "created" and fail only on the first
+    preview or call. It is refused at once, with the real columns."""
+    _load_table(session, tmp_path)
+    bad = _tool(mcp, "elliot_create_tool")(
+        name="orders_by_customer",
+        description="Return orders for one customer",
+        category="READ",
+        sql='SELECT id, fullname FROM "orders" WHERE id = :order_id',
+        parameters=[{"name": "order_id", "type": "integer", "required": True, "description": "Id"}],
+    )
+    assert "INVALID_SQL" in bad["text"] and "no such column: fullname" in bad["text"]
+    assert "orders has: id, amount" in bad["text"]
+    assert session.registry.get("orders_by_customer") is None
+
+    # A dialect difference is not a mistake in the tool: SQLite cannot parse
+    # ILIKE, Postgres can, and the SQL may run pushed down there.
+    ok = _tool(mcp, "elliot_create_tool")(
+        name="orders_like",
+        description="Return orders whose id matches a pattern",
+        category="READ",
+        sql='SELECT id FROM "orders" WHERE CAST(id AS TEXT) ILIKE :pattern',
+        parameters=[{"name": "pattern", "type": "string", "required": True, "description": "P"}],
+    )
+    assert ok.get("status") == "created", ok
+
+    fixed = _tool(mcp, "elliot_update_tool")(
+        tool_id="orders_like", patch={"sql": 'SELECT nope FROM "orders"'}
+    )
+    assert "INVALID_SQL" in fixed["text"]
+
+
+def test_lint_reports_a_tool_whose_sql_cannot_run(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
+
+    _load_table(session, tmp_path)
+    _tool(mcp, "elliot_create_tool")(
+        name="list_orders",
+        description="Return every order with its amount",
+        category="READ",
+        sql='SELECT id, amount FROM "orders"',
+        parameters=[],
+    )
+    session.tool_sql["list_orders"] = 'SELECT id, total FROM "orders"'  # edited by hand
+    lint_server = FastMCP("lint")
+    register_connector_tools(lint_server, session)
+    report = _tool(lint_server, "elliot_lint_connector")()
+    codes = {(i["code"], i["tool_id"]) for i in report["issues"]}
+    assert ("INVALID_SQL", "list_orders") in codes

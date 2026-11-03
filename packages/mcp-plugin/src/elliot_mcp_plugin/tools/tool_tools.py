@@ -297,6 +297,52 @@ def _tool_sql_warnings(sql: str) -> list[str]:
     return warnings
 
 
+_SEMANTIC_SQL_ERROR = re.compile(r"no such (column|table)", re.IGNORECASE)
+
+
+def sql_compile_error(sql: str, session: ElliotSession) -> str | None:
+    """Why ``sql`` cannot run against the session's tables, or None.
+
+    ``EXPLAIN QUERY PLAN`` compiles the statement without running it, with
+    every ``:param`` bound to NULL. Only unknown columns and tables count:
+    those are mistakes in the tool, while a syntax difference may just be the
+    source database's dialect (the SQL also runs pushed down to Postgres or
+    MySQL). The message names the columns that do exist.
+    """
+    params = {name: None for name in re.findall(r"(?<!:):([A-Za-z_]\w*)", sql)}
+    try:
+        session.engine.query(f"EXPLAIN QUERY PLAN {sql}", params)
+    except Exception as exc:  # noqa: BLE001 - classified below
+        message = str(exc)
+        if not _SEMANTIC_SQL_ERROR.search(message):
+            return None
+        hints: list[str] = []
+        for table in sorted(_sql_tables(sql)):
+            try:
+                cols = [str(c["name"]) for c in session.engine.get_table_schema(table)]
+            except Exception:  # noqa: BLE001 - an unknown table has no columns
+                cols = []
+            if cols:
+                shown = ", ".join(c for c in cols if not c.startswith("_"))[:600]
+                hints.append(f"{table} has: {shown}")
+        tables = [
+            str(getattr(s, "table_name", "") or "")
+            for s in session.sources.values()
+            if getattr(s, "table_name", None)
+        ]
+        if not hints and tables:
+            hints.append(f"Tables: {', '.join(sorted(tables))}")
+        return message + (". " + "; ".join(hints) if hints else "")
+    return None
+
+
+def _sql_tables(sql: str) -> set[str]:
+    return {
+        m.group(1).strip('"`[]')
+        for m in re.finditer(r"\b(?:FROM|JOIN)\s+([\"`\[]?[A-Za-z_][\w]*[\"`\]]?)", sql, re.I)
+    }
+
+
 def _reject_undeclared_params(sql: str, parameters: list[dict[str, Any]]) -> None:
     """Raise if the SQL binds a ``:param`` that isn't declared (audit B2).
 
@@ -418,6 +464,11 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             # B2: an undeclared ``:param`` would register fine and fail only at
             # call time with a cryptic SQLite error — reject it at create time.
             _reject_undeclared_params(sql, parameters)
+            # Compile against the loaded tables now: a misspelled column used
+            # to be "created" and fail only on the first preview or call.
+            compile_error = sql_compile_error(sql, session)
+            if compile_error:
+                raise ElliotError("INVALID_SQL", compile_error)
             source_ids = _infer_source_ids_from_sql(sql, session)
             tool = ToolDefinition.model_validate(
                 {
@@ -480,14 +531,14 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 post-filter).
         """
         try:
-            source = session.sources.get(source_id)
+            resolved_id, source = session.resolve_source(source_id)
             if source is None:
                 return {
-                    "error": (
-                        f"Source not found: {source_id}. Discover a REST source first with "
-                        "elliot_discover_source."
+                    "error": session.source_not_found(
+                        source_id, "Discover a REST source first with elliot_discover_source."
                     )
                 }
+            source_id = resolved_id or source_id
             if source.type != "rest":
                 return {
                     "error": (
@@ -598,14 +649,16 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
         creation fails with UNSUPPORTED_PARAM_ROUTING.
         """
         try:
-            source = session.sources.get(source_id)
+            resolved_id, source = session.resolve_source(source_id)
             if source is None:
                 return {
-                    "error": (
-                        f"Source not found: {source_id}. Discover a REST source first with "
-                        "elliot_discover_source (skip_probe=true for mutation-only endpoints)."
+                    "error": session.source_not_found(
+                        source_id,
+                        "Discover a REST source first with elliot_discover_source "
+                        "(skip_probe=true for mutation-only endpoints).",
                     )
                 }
+            source_id = resolved_id or source_id
             if source.type != "rest":
                 return {
                     "error": (
@@ -764,14 +817,14 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
         try:
             from elliot_core.types.tool import DataWriteMapping
 
-            source = session.sources.get(source_id)
+            resolved_id, source = session.resolve_source(source_id)
             if source is None:
                 return {
-                    "error": (
-                        f"Source not found: {source_id}. Create a managed source first "
-                        "with elliot_create_data_source."
+                    "error": session.source_not_found(
+                        source_id, "Create a managed source first with elliot_create_data_source."
                     )
                 }
+            source_id = resolved_id or source_id
             if source.type != "elliot":
                 return {
                     "error": (
@@ -909,6 +962,9 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 if effective_params is None:
                     effective_params = [p.model_dump() for p in tool.parameters]
                 _reject_undeclared_params(sql_patch, effective_params)
+                compile_error = sql_compile_error(sql_patch, session)
+                if compile_error:
+                    raise ElliotError("INVALID_SQL", compile_error)
                 session.tool_sql[tool_id] = sql_patch
                 # SQL changed → the tables it references (and therefore the
                 # sources the runtime must materialize) may have changed too.

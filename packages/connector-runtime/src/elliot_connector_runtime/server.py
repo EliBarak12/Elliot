@@ -1502,6 +1502,38 @@ def _register_tool(
     registered = mcp._tool_manager.get_tool(td.id)
     if registered is not None and isinstance(getattr(registered, "parameters", None), dict):
         registered.parameters["additionalProperties"] = False
+    # Say what comes back: the generic {"type": "object"} told an agent
+    # nothing. Rows carry the tool's declared fields; the envelope is the same
+    # for every READ/WRITE tool (a background tool answers with a task id, so
+    # it keeps the generic schema). Only the advertised schema changes — the
+    # SDK still validates against the generic model.
+    if registered is not None and not run_async:
+        with contextlib.suppress(Exception):
+            registered.fn_metadata.output_schema = _result_output_schema(td)
+
+
+def _result_output_schema(td: Any) -> dict[str, Any]:
+    """The JSON schema of a tool result as ``_payload_for`` builds it."""
+    row: dict[str, Any] = {"type": "object", "additionalProperties": True}
+    names = _returned_field_names(td)
+    if names:
+        row["properties"] = {name: {} for name in names}
+    return {
+        "type": "object",
+        "properties": {
+            "rows": {"type": "array", "items": row},
+            "count": {"type": "integer", "description": "Rows returned."},
+            "estimated_tokens": {
+                "type": "integer",
+                "description": "What this result costs in context.",
+            },
+            "truncated": {"type": "boolean"},
+            "truncation_note": {"type": "string"},
+            "empty": {"type": "boolean"},
+            "empty_note": {"type": "string", "description": "What to try when nothing matched."},
+        },
+        "required": ["rows", "count", "estimated_tokens"],
+    }
 
 
 def _human_title(td: Any) -> str:

@@ -2151,6 +2151,10 @@ async def test_inputs_are_bounded_and_unknown_arguments_are_named(tmp_path: Path
         assert tool.annotations.open_world_hint is False
         # No background tool, so no polling tool to pay for.
         assert "people_get_task" not in listed
+        # The result's shape is advertised, not a bare object.
+        out = tool.output_schema
+        assert out["required"] == ["rows", "count", "estimated_tokens"]
+        assert out["properties"]["rows"]["items"]["type"] == "object"
 
         unknown = await client.call_tool("find_customers", {"query": "rex"})
         text = unknown.content[0].text

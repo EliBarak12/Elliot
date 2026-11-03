@@ -60,7 +60,13 @@ class SessionEvent:
     # the call failed — lets the trace classify a failure at a glance and powers
     # the contract-miss signal, without parsing the human-facing message.
     error_code: str | None = None
-    # A short, bounded preview of what the tool returned (the call's output).
+    # What came back, as metadata only — row count, field names, types and
+    # how many rows filled each field. Never the values: a tool's result is
+    # its end users' private data, and the owner must not read it.
+    result_shape: dict[str, Any] | None = None
+    # A text preview of the output. Only a harness hook (an agent's own
+    # transcript, ingested by its owner) supplies one; tool calls observed on
+    # the MCP wire never do.
     result_preview: str | None = None
     # The agent's reasoning around this call — only populated by a harness
     # hook adapter (Claude Code etc.); never available from MCP traffic.
@@ -219,6 +225,7 @@ class AgentSession:
                     "duration_ms": round(e.duration_ms, 2),
                     "error": e.error,
                     "error_code": e.error_code,
+                    "result_shape": e.result_shape,
                     "result_preview": e.result_preview,
                     "reasoning": e.reasoning,
                 }
@@ -240,30 +247,20 @@ class AgentSession:
 _estimate_tokens = estimate_tokens
 
 
-_PREVIEW_MAX_CHARS = 800
+def _result_shape(data: Any) -> dict[str, Any] | None:
+    """The metadata of a tool's output for the console — never its values.
 
-
-def _result_preview(data: Any) -> str | None:
-    """A short, bounded, REDACTED preview of a tool's output for the console.
-
-    Only the first few rows are kept and the whole thing is capped — enough
-    for a user to see *what* came back without dumping a full result set. The
-    sample is run through the same redactor as the recorded arguments before it
-    is serialized, so a secret an upstream API returns in its response body (an
-    ``access_token`` field, a bearer string) never lands unredacted in the
-    session log or the Agent Console — matching the "never log secrets/PII"
-    policy the arguments already follow.
+    A tool's rows are its end users' data (their orders, their messages, a
+    customer's address), so the session log keeps only the shape: row count
+    and, per field, its type and how many rows had it. The CLAUDE.md rule
+    "never log raw query results" applies to the owner's console too.
     """
-    from elliot_core.redaction import redact_value
+    from elliot_core.redaction import result_shape
 
     try:
-        sample = data[:3] if isinstance(data, list) else data
-        text = json.dumps(redact_value(sample), default=str)
+        return result_shape(data)
     except Exception:
         return None
-    if len(text) > _PREVIEW_MAX_CHARS:
-        return text[:_PREVIEW_MAX_CHARS] + "…"
-    return text
 
 
 class SessionTracker:
@@ -400,7 +397,7 @@ class SessionTracker:
                     duration_ms=duration_ms,
                     error=error,
                     error_code=error_code,
-                    result_preview=_result_preview(result_data),
+                    result_shape=_result_shape(result_data) if error is None else None,
                 )
             )
             session.last_activity = time.time()
@@ -600,6 +597,9 @@ def stitch_stateless_fragments(
                 duration_ms=float(e.get("duration_ms") or 0.0),
                 error=e.get("error"),
                 error_code=e.get("error_code"),
+                result_shape=e.get("result_shape")
+                if isinstance(e.get("result_shape"), dict)
+                else None,
                 result_preview=e.get("result_preview"),
                 reasoning=e.get("reasoning"),
             )

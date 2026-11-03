@@ -145,3 +145,95 @@ def test_redact_url_redacts_expanded_query_params():
     assert "keep=ok" in out
     assert "abc" not in out
     assert "def" not in out
+
+
+# ── what an owner may see of a call: metadata, not people's data ─────────────
+
+
+def test_describe_value_says_what_not_what_it_says():
+    from elliot_core.redaction import describe_value
+
+    assert describe_value("Rex Carter") == "‹text · 10 chars›"
+    assert describe_value(True) == "‹true›" and describe_value(False) == "‹false›"
+    assert describe_value(3.5) == "‹number›"
+    assert describe_value({"a": 1, "b": 2}) == "‹object · 2 keys›"
+    assert describe_value([1, 2, 3]) == "‹list · 3 items›"
+    assert describe_value(None) == "‹empty›"
+    assert describe_value(b"x") == "‹bytes›"
+
+
+def test_mask_call_arguments_keeps_only_values_that_identify_no_one():
+    from elliot_core.redaction import mask_call_arguments
+
+    masked = mask_call_arguments(
+        {
+            "search_text": "rex@example.com",
+            "tier": "gold",
+            "limit": 20,
+            "confirm": True,
+            "since": "1990-04-01",
+            "filters": {"city": "Haifa"},
+            "api_key": "sk_live_abcdef",
+            "note": None,
+        },
+        keep={"tier"},
+    )
+    assert masked == {
+        "search_text": "‹text · 15 chars›",
+        "tier": "gold",
+        "limit": 20,
+        "confirm": True,
+        "since": "‹text · 10 chars›",
+        "filters": "‹object · 1 keys›",
+        "api_key": "***",
+        "note": None,
+    }
+    assert mask_call_arguments(["not", "a", "dict"]) == ["not", "a", "dict"]
+
+
+def test_result_shape_counts_fields_and_types_never_values():
+    from elliot_core.redaction import result_shape
+
+    shape = result_shape(
+        [
+            {"name": "Rex", "age": 31, "tags": ["a"], "meta": {"k": 1}, "vip": True, "x": None},
+            {"name": "", "age": "unknown", "tags": [], "meta": {}, "vip": False, "x": None},
+            "not a row",
+        ]
+    )
+    assert shape == {
+        "rows": 3,
+        "fields": [
+            {"name": "name", "type": "text", "filled": 1},
+            {"name": "age", "type": "mixed", "filled": 2},
+            {"name": "tags", "type": "list", "filled": 1},
+            {"name": "meta", "type": "object", "filled": 1},
+            {"name": "vip", "type": "boolean", "filled": 2},
+            {"name": "x", "type": "empty", "filled": 0},
+        ],
+    }
+    assert result_shape({"id": 1})["rows"] == 1
+    assert result_shape("text") is None
+    wide = result_shape([{f"c{i}": i for i in range(50)}], max_fields=5)
+    assert [f["name"] for f in wide["fields"]] == ["c0", "c1", "c2", "c3", "c4"]
+
+
+def test_json_kind_names_other_types():
+    from datetime import date
+
+    from elliot_core.redaction import _json_kind
+
+    assert _json_kind(date(2026, 1, 1)) == "date"
+
+
+def test_scrub_personal_text_removes_contact_details_and_long_numbers():
+    from elliot_core.redaction import scrub_personal_text
+
+    text = "Mail ada@example.co.uk or call +972 54-123-4567; card 4111 1111 1111 1111; got 12 rows"
+    scrubbed = scrub_personal_text(text)
+    assert (
+        "ada@example.co.uk" not in scrubbed and "4111" not in scrubbed and "54-123" not in scrubbed
+    )
+    assert "‹email›" in scrubbed and scrubbed.count("‹number›") == 2
+    assert "12 rows" in scrubbed
+    assert scrub_personal_text("") == ""

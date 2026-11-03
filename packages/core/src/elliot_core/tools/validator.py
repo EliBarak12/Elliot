@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from elliot_core.errors import ElliotError
+from elliot_core.linter import MIN_DESCRIPTION_CHARS
 from elliot_core.sql import extract_sql_params
 from elliot_core.types.tool import SkillDefinition, ToolDefinition
 
@@ -36,10 +37,10 @@ def _check_id(tool: ToolDefinition) -> None:
 
 
 def _check_description(tool: ToolDefinition) -> None:
-    if len(tool.description.strip()) < 10:
+    if len(tool.description.strip()) < MIN_DESCRIPTION_CHARS:
         raise ElliotError(
             "INVALID_TOOL",
-            f"Tool '{tool.id}' description too short (min 10 chars)",
+            f"Tool '{tool.id}' description too short (min {MIN_DESCRIPTION_CHARS} chars)",
         )
 
 

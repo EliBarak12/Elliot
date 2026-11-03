@@ -22,7 +22,7 @@ dependencies = [
     # contact — server construction, transports, client identity across the
     # 2025 handshake and 2026 stateless paths — is concentrated in
     # elliot_core.mcp_compat so an SDK bump is a one-module change.
-    "mcp>=2.0.0,<3",
+    "mcp>=2.2.0,<3",
     # Real tokenizer for the canonical token estimate (elliot_core.tokens) — the
     # signature metric must be counted the same way in evals, traces, and the
     # dashboard. Lazy-imported with a chars/4 fallback, so it degrades gracefully.

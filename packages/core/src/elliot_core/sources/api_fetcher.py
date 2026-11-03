@@ -233,6 +233,99 @@ def _parse_link_next(link_header: str) -> str | None:
     return m.group(1) if m else None
 
 
+_TOTAL_KEYS = ("total", "total_count", "totalCount", "totalResults", "total_results")
+
+
+def _more_pages_warning(data: Any, link_header: str, loaded: int) -> str | None:
+    """Say so when a snapshot is only the first page of a paged API.
+
+    A source with no pagination configured fetches one page. Many APIs answer
+    that page with the full count (``{"products": [...30], "total": 194}``) or
+    a link to the next page; a snapshot built from it silently holds a
+    fraction of the data, and tools over it give confidently wrong answers
+    ("product 150 does not exist"). The count is the clearest signal.
+    """
+    if isinstance(data, dict):
+        for key in _TOTAL_KEYS:
+            total = data.get(key)
+            if isinstance(total, int) and not isinstance(total, bool) and total > loaded:
+                return (
+                    f"PARTIAL_DATASET: loaded {loaded} of {total} records — the API pages its "
+                    "results and only the first page was fetched. Set the source pagination "
+                    "(e.g. strategy 'offset' with the API's limit/skip parameter names) or "
+                    "ask for a larger page in the URL to load them all."
+                )
+        nxt = data.get("next")
+        links = data.get("links")
+        if not (isinstance(nxt, str) and nxt.startswith("http")) and isinstance(links, dict):
+            nxt = links.get("next")
+        if isinstance(nxt, str) and nxt.startswith("http"):
+            return (
+                f"PARTIAL_DATASET: loaded {loaded} records, but the response links to a next "
+                "page that was not fetched. Set the source pagination strategy to follow it."
+            )
+    if 'rel="next"' in link_header or "rel=next" in link_header:
+        return (
+            f"PARTIAL_DATASET: loaded {loaded} records, but the Link header points to a next "
+            "page that was not fetched. Set the source pagination strategy to 'link_header'."
+        )
+    return None
+
+
+_MAX_AUTO_PAGES = 100
+
+
+def infer_pagination(data: Any, link_header: str, loaded: int) -> dict[str, Any] | None:
+    """How to page an API, read off its first page — or None.
+
+    Recognises the common shapes: ``{"total", "skip", "limit"}`` (DummyJSON),
+    ``{"total", "offset", "limit"}``, ``{"page", "total_pages"}``, a ``next``
+    URL in the body, and a ``Link: rel="next"`` header. The page count is
+    capped (``_MAX_AUTO_PAGES``); the fetcher's row cap still applies.
+    """
+    import math
+
+    if isinstance(data, dict):
+        total = next(
+            (
+                data[k]
+                for k in _TOTAL_KEYS
+                if isinstance(data.get(k), int) and not isinstance(data.get(k), bool)
+            ),
+            None,
+        )
+        size = data.get("limit") if isinstance(data.get("limit"), int) else None
+        size = size or data.get("per_page") or data.get("page_size") or loaded
+        size = size if isinstance(size, int) and size > 0 else None
+        pages = min(_MAX_AUTO_PAGES, math.ceil(total / size)) if total and size else _MAX_AUTO_PAGES
+        if total and size and "skip" in data:
+            return {
+                "strategy": "offset",
+                "offset_param": "skip",
+                "limit_param": "limit",
+                "page_size": size,
+                "max_pages": pages,
+            }
+        if total and size and "offset" in data:
+            return {"strategy": "offset", "page_size": size, "max_pages": pages}
+        if "total_pages" in data or ("page" in data and total and size):
+            size_param = next((k for k in ("per_page", "page_size") if k in data), None)
+            total_pages = data.get("total_pages")
+            if isinstance(total_pages, int) and total_pages > 0:
+                pages = min(_MAX_AUTO_PAGES, total_pages)
+            out: dict[str, Any] = {"strategy": "page", "page_size": size or 100}
+            out["max_pages"] = pages
+            if size_param:
+                out["page_size_param"] = size_param
+            return out
+        nxt = data.get("next")
+        if isinstance(nxt, str) and nxt.startswith("http"):
+            return {"strategy": "odata", "next_url_field": "next", "max_pages": _MAX_AUTO_PAGES}
+    if 'rel="next"' in link_header or "rel=next" in link_header:
+        return {"strategy": "link_header", "max_pages": _MAX_AUTO_PAGES}
+    return None
+
+
 async def fetch_endpoint(
     config: SourceConfig,
     secrets: dict[str, str],
@@ -251,6 +344,7 @@ async def fetch_endpoint(
     pagination = config.pagination
     all_rows: list[dict[str, Any]] = []
     warnings: list[str] = []
+    suggested: dict[str, Any] | None = None
     page_count = 0
     offset = 0
     page = 1
@@ -289,10 +383,12 @@ async def fetch_endpoint(
             request_params: dict[str, Any] = dict(base_params)
 
             if pagination.strategy == "offset":
-                request_params["offset"] = offset
-                request_params["limit"] = pagination.page_size
+                request_params[pagination.offset_param] = offset
+                request_params[pagination.limit_param] = pagination.page_size
             elif pagination.strategy == "page":
-                request_params["page"] = page
+                request_params[pagination.page_param] = page
+                if pagination.page_size_param:
+                    request_params[pagination.page_size_param] = pagination.page_size
             elif pagination.strategy == "cursor" and cursor:
                 request_params["cursor"] = cursor
 
@@ -372,6 +468,11 @@ async def fetch_endpoint(
                     "source pagination strategy to 'odata' to follow it and avoid a truncated "
                     "snapshot."
                 )
+            if page_count == 0 and pagination.strategy == "none":
+                more = _more_pages_warning(data, resp.headers.get("link", ""), len(rows))
+                if more:
+                    warnings.append(more)
+                    suggested = infer_pagination(data, resp.headers.get("link", ""), len(rows))
             all_rows.extend(rows)
             page_count += 1
 
@@ -430,4 +531,5 @@ async def fetch_endpoint(
         fetched_at=datetime.now(UTC).isoformat(),
         page_count=page_count,
         warnings=warnings,
+        suggested_pagination=suggested,
     )

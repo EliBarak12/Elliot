@@ -192,7 +192,7 @@ export function AppResultView({
     let cancelled = false;
     setHtml(null);
     setError(null);
-    const fetchArgs: Record<string, unknown> = { tool_id: toolId };
+    const fetchArgs: Record<string, unknown> = { tool_id: toolId, include_html: true };
     if (draftUi) fetchArgs.ui = draftUi;
     if (draftBranding) fetchArgs.branding = draftBranding;
     callToolResult("elliot_preview_tool_ui", fetchArgs)

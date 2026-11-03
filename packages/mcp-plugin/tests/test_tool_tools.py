@@ -350,6 +350,31 @@ def test_preview_tool_reports_token_estimate(mcp: FastMCP, session: ElliotSessio
     assert result["estimated_tokens"] >= 1
 
 
+@pytest.mark.parametrize(
+    ("sql", "says_add_limit"),
+    [
+        ("SELECT id, amount, '{pad}' AS note FROM \"orders\"", True),
+        ("SELECT id, amount, '{pad}' AS note FROM \"orders\" LIMIT 3", False),
+    ],
+)
+def test_heavy_preview_advice_fits_the_query(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path, sql: str, says_add_limit: bool
+):
+    """A query that already caps its rows must not be told to add a LIMIT."""
+    _load_table(session, tmp_path)
+    _tool(mcp, "elliot_create_tool")(
+        name="heavy_orders",
+        description="Retrieve all orders with a long note",
+        category="READ",
+        sql=sql.format(pad="word " * 400),
+        parameters=[],
+    )
+    result = _tool(mcp, "elliot_preview_tool")(tool_id="heavy_orders", params={})
+    assert result["estimated_tokens"] > 500
+    assert ("add a LIMIT" in result["note"]) is says_add_limit
+    assert "fields the agent needs" in result["note"]
+
+
 def test_preview_tool_aggregate(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
     _load_table(session, tmp_path)
     _tool(mcp, "elliot_create_tool")(
@@ -414,7 +439,7 @@ def test_preview_tool_missing_required_returns_structured_error(
         name="orders_by_status",
         description="Return orders for the given status",
         category="READ",
-        sql='SELECT * FROM "orders" WHERE status = :status',
+        sql='SELECT * FROM "orders" WHERE id = :status',
         parameters=[
             {"name": "status", "type": "string", "required": True, "description": "status"}
         ],
@@ -567,6 +592,52 @@ def test_preview_passthrough_tool_fetches_live(
     assert result.get("live") is True
     assert result["rows"] == [{"id": 1, "name": "widget"}]
     assert captured["extra_params"] == {"q": "widget"}
+
+
+def test_preview_passthrough_applies_return_fields_like_the_runtime(
+    mcp: FastMCP, session: ElliotSession, monkeypatch: pytest.MonkeyPatch
+):
+    """A live tool that projects its response previews the projection.
+
+    The runtime shapes passthrough results with ``return_fields``; the preview
+    used to return the raw response, so trimming a heavy result had no visible
+    (or measurable) effect until after publish.
+    """
+    from elliot_core.types.source import FetchResult, SourceConfig
+
+    session.sources["api1"] = SourceConfig.model_validate(
+        {
+            "id": "api1",
+            "type": "rest",
+            "name": "people",
+            "url": "https://api.example.com/search",
+            "table_name": "people",
+        }
+    )
+    created = _tool(mcp, "elliot_create_rest_tool")(
+        name="Search people",
+        description="Search people live via the API by name.",
+        source_id="api1",
+        query_params=[{"name": "q", "type": "string", "required": True, "description": "name"}],
+    )
+    tool_id = created["tool_id"]
+    session.registry.update(
+        tool_id, {"return_fields": [{"field": "id"}, {"field": "name", "alias": "full_name"}]}
+    )
+
+    async def _fake_fetch(config, secrets, *, auth_token_override=None, extra_params=None):
+        return FetchResult(
+            rows=[
+                {"id": 1, "name": "Ada", "email": "ada@example.com", "bio": "x" * 500},
+                {"id": 2, "name": "Grace", "email": "grace@example.com", "bio": "y" * 500},
+            ],
+            fetched_at="now",
+        )
+
+    monkeypatch.setattr("elliot_core.sources.api_fetcher.fetch_endpoint", _fake_fetch)
+    result = _tool(mcp, "elliot_preview_tool")(tool_id=tool_id, params={"q": "a"})
+    assert result["rows"] == [{"id": 1, "full_name": "Ada"}, {"id": 2, "full_name": "Grace"}]
+    assert result["estimated_tokens"] < 60
 
 
 def test_preview_passthrough_tool_enforces_required(mcp: FastMCP, session: ElliotSession):
@@ -881,3 +952,58 @@ def test_create_action_tool_rejects_complex_param_with_form_body(
     )
     text = str(out)
     assert "UNSUPPORTED_PARAM_ROUTING" in text
+
+
+def test_create_tool_refuses_sql_naming_columns_that_do_not_exist(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    """A misspelled column used to be "created" and fail only on the first
+    preview or call. It is refused at once, with the real columns."""
+    _load_table(session, tmp_path)
+    bad = _tool(mcp, "elliot_create_tool")(
+        name="orders_by_customer",
+        description="Return orders for one customer",
+        category="READ",
+        sql='SELECT id, fullname FROM "orders" WHERE id = :order_id',
+        parameters=[{"name": "order_id", "type": "integer", "required": True, "description": "Id"}],
+    )
+    assert "INVALID_SQL" in bad["text"] and "no such column: fullname" in bad["text"]
+    assert "orders has: id, amount" in bad["text"]
+    assert session.registry.get("orders_by_customer") is None
+
+    # A dialect difference is not a mistake in the tool: SQLite cannot parse
+    # ILIKE, Postgres can, and the SQL may run pushed down there.
+    ok = _tool(mcp, "elliot_create_tool")(
+        name="orders_like",
+        description="Return orders whose id matches a pattern",
+        category="READ",
+        sql='SELECT id FROM "orders" WHERE CAST(id AS TEXT) ILIKE :pattern',
+        parameters=[{"name": "pattern", "type": "string", "required": True, "description": "P"}],
+    )
+    assert ok.get("status") == "created", ok
+
+    fixed = _tool(mcp, "elliot_update_tool")(
+        tool_id="orders_like", patch={"sql": 'SELECT nope FROM "orders"'}
+    )
+    assert "INVALID_SQL" in fixed["text"]
+
+
+def test_lint_reports_a_tool_whose_sql_cannot_run(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    from elliot_mcp_plugin.tools.connector_tools import register_connector_tools
+
+    _load_table(session, tmp_path)
+    _tool(mcp, "elliot_create_tool")(
+        name="list_orders",
+        description="Return every order with its amount",
+        category="READ",
+        sql='SELECT id, amount FROM "orders"',
+        parameters=[],
+    )
+    session.tool_sql["list_orders"] = 'SELECT id, total FROM "orders"'  # edited by hand
+    lint_server = FastMCP("lint")
+    register_connector_tools(lint_server, session)
+    report = _tool(lint_server, "elliot_lint_connector")()
+    codes = {(i["code"], i["tool_id"]) for i in report["issues"]}
+    assert ("INVALID_SQL", "list_orders") in codes

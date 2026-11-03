@@ -410,11 +410,31 @@ def test_set_branding_merges_fields_and_clear_resets(mcp: FastMCP, session: Elli
     assert result["branding"]["logo"] == "https://cdn.example/logo.png"
     # clear=True with a new field starts from scratch.
     result = _tool(mcp, "elliot_set_branding")(clear=True, accent="#445566")
-    assert result["branding"] == {"accent": "#445566", "accent_dark": None, "logo": None}
+    assert {k: v for k, v in result["branding"].items() if v is not None} == {"accent": "#445566"}
     # clear alone removes branding entirely.
     result = _tool(mcp, "elliot_set_branding")(clear=True)
     assert result["branding"] is None
     assert session.branding is None
+
+
+def test_set_branding_takes_the_whole_design_system(mcp: FastMCP, session: ElliotSession):
+    result = _tool(mcp, "elliot_set_branding")(
+        name="Helix",
+        accent="#0a7c4a",
+        font_family="DM Sans",
+        font_url="https://fonts.googleapis.com/css2?family=DM+Sans",
+        radius="lg",
+        density="spacious",
+    )
+    assert result["status"] == "ok"
+    assert session.branding is not None
+    assert session.branding.name == "Helix"
+    assert session.branding.radius == "lg"
+    assert session.branding.density == "spacious"
+    # A later call that only changes the font keeps everything else.
+    _tool(mcp, "elliot_set_branding")(font_family="Inter")
+    assert session.branding.font_family == "Inter"
+    assert session.branding.accent == "#0a7c4a"
 
 
 def test_set_branding_rejects_bad_values(mcp: FastMCP, session: ElliotSession):
@@ -448,9 +468,25 @@ def test_preview_tool_ui_applies_session_and_draft_branding(
     # accent, so it appears in every built document regardless of branding.
     tool_id = _load_and_create_tool(mcp, session, tmp_path)
     _tool(mcp, "elliot_set_branding")(accent="#123abc")
-    res = _tool(mcp, "elliot_preview_tool_ui")(tool_id=tool_id)
+    res = _tool(mcp, "elliot_preview_tool_ui")(tool_id=tool_id, include_html=True)
     assert "#123abc" in res["html"]
     # A draft branding argument overrides the saved session branding.
-    res = _tool(mcp, "elliot_preview_tool_ui")(tool_id=tool_id, branding={"accent": "#00ff00"})
+    res = _tool(mcp, "elliot_preview_tool_ui")(
+        tool_id=tool_id, branding={"accent": "#00ff00"}, include_html=True
+    )
     assert "#00ff00" in res["html"]
     assert "#123abc" not in res["html"]
+
+
+def test_preview_tool_ui_is_small_unless_html_is_asked_for(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    """The built view is ~0.5 MB. An agent checking its view must not get it
+    in its context by default — only Studio's renderer asks for the HTML."""
+    tool_id = _load_and_create_tool(mcp, session, tmp_path)
+    res = _tool(mcp, "elliot_preview_tool_ui")(tool_id=tool_id)
+    assert "html" not in res
+    assert res["bytes"] > 10_000
+    assert res["uri"].startswith("ui://")
+    assert "include_html=true" in res["note"]
+    assert len(json.dumps(res)) < 1_000

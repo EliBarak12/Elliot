@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from typing import Any
 
@@ -203,6 +204,10 @@ def create_elliot_server(
     hide_tools: Iterable[str] = (),
     register_skill_prompts: bool = False,
     resource_overrides: dict[str, str] | None = None,
+    hosted_prompts: bool = False,
+    prompt_overrides: dict[str, str] | None = None,
+    exclude_prompts: tuple[str, ...] = (),
+    prompt_tool_substitutions: dict[str, str] | None = None,
 ) -> FastMCP:
     """Create a FastMCP server with all Elliot tool groups and resources registered.
 
@@ -213,6 +218,10 @@ def create_elliot_server(
     hooks) from the registry entirely; ``register_skill_prompts`` serves the
     plugin skills as MCP prompts (locally the agent's plugin loader delivers
     them as SKILL.md files instead, which is why the default is off);
+    ``hosted_prompts`` / ``prompt_overrides`` / ``exclude_prompts`` /
+    ``prompt_tool_substitutions`` render those prompts for a deployment whose
+    tool set differs (see ``prompts.register_prompts``), so no prompt points
+    an agent at a tool the server does not serve;
     ``resource_overrides`` swaps a registered resource's text by URI (e.g.
     the install doc, which points at localhost in the local build).
     """
@@ -247,7 +256,14 @@ def create_elliot_server(
     if register_skill_prompts:
         from elliot_mcp_plugin.prompts import register_prompts
 
-        register_prompts(mcp, session)
+        register_prompts(
+            mcp,
+            session,
+            hosted=hosted_prompts,
+            overrides=prompt_overrides,
+            exclude=exclude_prompts,
+            substitutions=prompt_tool_substitutions,
+        )
     for tool_name in hide_tools:
         # Public v2 API — a hidden tool leaves the registry entirely, so it is
         # absent from tools/list AND uncallable (unlike the destructive filter
@@ -354,7 +370,9 @@ def _hide_destructive_tools_from_other_agents(mcp: FastMCP) -> None:
             from pydantic import ValidationError as PydanticValidationError
 
             try:
-                return await original_call(name, arguments, context, convert_result)
+                return _as_error_when_refused(
+                    await original_call(name, arguments, context, convert_result)
+                )
             except ToolError as exc:
                 # The SDK's Tool.run wraps every in-handler exception — including
                 # the pydantic argument-validation error that fires BEFORE a
@@ -373,6 +391,68 @@ def _hide_destructive_tools_from_other_agents(mcp: FastMCP) -> None:
 
     wrap_tool_listing(mcp, filtered_list)
     wrap_tool_calls(mcp, make_filtered_call)
+
+
+_ERROR_TEXT = re.compile(r"^\[([A-Z][A-Z0-9_]+)\]\s*(.*)$", re.DOTALL)
+
+
+def _as_error_when_refused(result: Any) -> Any:
+    """One error shape for every builder tool: ``isError`` plus ``[CODE] message``.
+
+    Tools report a refusal three ways — an ``ElliotError`` content block
+    returned as a value (``{"type": "text", "text": "[NOT_FOUND] …"}``), a
+    ``{"error": "…"}`` dict, or a gate's ``{"status": "blocked", …}`` — and
+    the SDK delivered all three as successes, so an agent had to parse text
+    to learn a call had failed. The first two become a ``ToolError`` (the
+    agent gets ``isError: true`` and ``[CODE] message``; an embedder calling
+    ``call_tool`` gets an exception). A blocked gate keeps its structured
+    detail (the issues to fix) but is marked ``isError``.
+    """
+    if getattr(result, "is_error", False):
+        return result
+    structured = getattr(result, "structured_content", None)
+    if structured is None:
+        # Tools typed ``-> dict`` get no structuredContent; their value is
+        # the JSON text of the single content block.
+        content = getattr(result, "content", None) or []
+        text = getattr(content[0], "text", None) if len(content) == 1 else None
+        if isinstance(text, str) and text.lstrip().startswith("{"):
+            import json as _json
+
+            try:
+                structured = _json.loads(text)
+            except ValueError:
+                structured = None
+    if not isinstance(structured, dict):
+        return result
+    if structured.get("type") == "text" and set(structured) <= {"type", "text"}:
+        match = _ERROR_TEXT.match(str(structured.get("text") or ""))
+        if match:
+            raise ToolError(f"[{match.group(1)}] {match.group(2)}")
+    error = structured.get("error")
+    if isinstance(error, dict) and isinstance(error.get("message"), str):
+        code = error.get("code") if isinstance(error.get("code"), str) else "REFUSED"
+        raise ToolError(f"[{code}] {error['message']}")
+    if isinstance(error, str) and error:
+        code = structured.get("code") if isinstance(structured.get("code"), str) else None
+        match = _ERROR_TEXT.match(error)
+        if match:
+            raise ToolError(f"[{match.group(1)}] {match.group(2)}")
+        raise ToolError(f"[{code or 'REFUSED'}] {error}")
+    if structured.get("status") == "blocked":
+        import json as _json
+
+        return types.CallToolResult(
+            content=[
+                types.TextContent(
+                    type="text",
+                    text=_json.dumps(structured, separators=(",", ":"), default=str),
+                )
+            ],
+            structured_content=structured,
+            is_error=True,
+        )
+    return result
 
 
 async def run_stdio(

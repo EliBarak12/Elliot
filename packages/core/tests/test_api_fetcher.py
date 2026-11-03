@@ -495,3 +495,99 @@ async def test_odata_next_link_without_strategy_warns() -> None:
     src = _source(pagination=PaginationConfig(strategy="none"), data_path="value")
     result = await fetch_endpoint(src, {})
     assert any("@odata.nextLink" in w for w in result.warnings)
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("body", "headers", "expected"),
+    [
+        ({"products": [{"id": 1}, {"id": 2}], "total": 194, "skip": 0, "limit": 2}, {}, "2 of 194"),
+        ({"results": [{"id": 1}], "next": "https://api.example.com/items?page=2"}, {}, "next page"),
+        (
+            [{"id": 1}],
+            {"link": '<https://api.example.com/items?page=2>; rel="next"'},
+            "Link header",
+        ),
+        ({"products": [{"id": 1}, {"id": 2}], "total": 2}, {}, None),
+    ],
+)
+async def test_first_page_only_snapshots_are_flagged(body, headers, expected):
+    """A snapshot of page 1 of a paged API must say so — tools over it would
+    otherwise answer confidently from a fraction of the data."""
+    respx.get("https://api.example.com/items").mock(
+        return_value=Response(200, json=body, headers=headers)
+    )
+    cfg = SourceConfig(id="items", name="items", type="rest", url="https://api.example.com/items")
+    result = await fetch_endpoint(cfg, {})
+    partial = [w for w in result.warnings if w.startswith("PARTIAL_DATASET")]
+    if expected is None:
+        assert partial == []
+    else:
+        assert len(partial) == 1 and expected in partial[0], result.warnings
+
+
+@pytest.mark.parametrize(
+    ("data", "link", "expected"),
+    [
+        (
+            {"total": 194, "skip": 0, "limit": 30},
+            "",
+            {
+                "strategy": "offset",
+                "offset_param": "skip",
+                "limit_param": "limit",
+                "page_size": 30,
+                "max_pages": 7,
+            },
+        ),
+        (
+            {"total": 50, "offset": 0, "limit": 20},
+            "",
+            {"strategy": "offset", "page_size": 20, "max_pages": 3},
+        ),
+        (
+            {"page": 1, "total_pages": 4, "per_page": 25},
+            "",
+            {"strategy": "page", "page_size": 25, "max_pages": 4, "page_size_param": "per_page"},
+        ),
+        (
+            {"next": "https://api.example.com/items?page=2"},
+            "",
+            {"strategy": "odata", "next_url_field": "next", "max_pages": 100},
+        ),
+        (
+            [],
+            '<https://api.example.com/items?page=2>; rel="next"',
+            {"strategy": "link_header", "max_pages": 100},
+        ),
+        ({"items": []}, "", None),
+    ],
+)
+def test_infer_pagination_reads_the_first_page(data, link, expected):
+    from elliot_core.sources.api_fetcher import infer_pagination
+
+    assert infer_pagination(data, link, 30) == expected
+
+
+@respx.mock
+async def test_offset_pagination_uses_the_apis_parameter_names():
+    seen = []
+
+    def page(request):  # type: ignore[no-untyped-def]
+        seen.append(dict(request.url.params))
+        skip = int(request.url.params["skip"])
+        return Response(200, json=[{"id": i} for i in range(skip, min(skip + 2, 5))])
+
+    respx.get("https://api.example.com/items").mock(side_effect=page)
+    cfg = SourceConfig(
+        id="items",
+        name="items",
+        type="rest",
+        url="https://api.example.com/items",
+        pagination=PaginationConfig(
+            strategy="offset", offset_param="skip", limit_param="limit", page_size=2
+        ),
+    )
+    result = await fetch_endpoint(cfg, {})
+    assert [r["id"] for r in result.rows] == [0, 1, 2, 3, 4]
+    assert seen[0] == {"skip": "0", "limit": "2"}

@@ -60,7 +60,13 @@ class SessionEvent:
     # the call failed — lets the trace classify a failure at a glance and powers
     # the contract-miss signal, without parsing the human-facing message.
     error_code: str | None = None
-    # A short, bounded preview of what the tool returned (the call's output).
+    # What came back, as metadata only — row count, field names, types and
+    # how many rows filled each field. Never the values: a tool's result is
+    # its end users' private data, and the owner must not read it.
+    result_shape: dict[str, Any] | None = None
+    # A text preview of the output. Only a harness hook (an agent's own
+    # transcript, ingested by its owner) supplies one; tool calls observed on
+    # the MCP wire never do.
     result_preview: str | None = None
     # The agent's reasoning around this call — only populated by a harness
     # hook adapter (Claude Code etc.); never available from MCP traffic.
@@ -219,6 +225,7 @@ class AgentSession:
                     "duration_ms": round(e.duration_ms, 2),
                     "error": e.error,
                     "error_code": e.error_code,
+                    "result_shape": e.result_shape,
                     "result_preview": e.result_preview,
                     "reasoning": e.reasoning,
                 }
@@ -240,30 +247,20 @@ class AgentSession:
 _estimate_tokens = estimate_tokens
 
 
-_PREVIEW_MAX_CHARS = 800
+def _result_shape(data: Any) -> dict[str, Any] | None:
+    """The metadata of a tool's output for the console — never its values.
 
-
-def _result_preview(data: Any) -> str | None:
-    """A short, bounded, REDACTED preview of a tool's output for the console.
-
-    Only the first few rows are kept and the whole thing is capped — enough
-    for a user to see *what* came back without dumping a full result set. The
-    sample is run through the same redactor as the recorded arguments before it
-    is serialized, so a secret an upstream API returns in its response body (an
-    ``access_token`` field, a bearer string) never lands unredacted in the
-    session log or the Agent Console — matching the "never log secrets/PII"
-    policy the arguments already follow.
+    A tool's rows are its end users' data (their orders, their messages, a
+    customer's address), so the session log keeps only the shape: row count
+    and, per field, its type and how many rows had it. The CLAUDE.md rule
+    "never log raw query results" applies to the owner's console too.
     """
-    from elliot_core.redaction import redact_value
+    from elliot_core.redaction import result_shape
 
     try:
-        sample = data[:3] if isinstance(data, list) else data
-        text = json.dumps(redact_value(sample), default=str)
+        return result_shape(data)
     except Exception:
         return None
-    if len(text) > _PREVIEW_MAX_CHARS:
-        return text[:_PREVIEW_MAX_CHARS] + "…"
-    return text
 
 
 class SessionTracker:
@@ -400,7 +397,7 @@ class SessionTracker:
                     duration_ms=duration_ms,
                     error=error,
                     error_code=error_code,
-                    result_preview=_result_preview(result_data),
+                    result_shape=_result_shape(result_data) if error is None else None,
                 )
             )
             session.last_activity = time.time()
@@ -524,9 +521,15 @@ class SessionTracker:
 STITCH_IDLE_GAP_S = 900.0  # 15 min between calls ends a logical session
 
 
-def _identity_key(identity: dict[str, Any] | None) -> tuple[str | None, str | None]:
+def _identity_key(
+    identity: dict[str, Any] | None,
+) -> tuple[str | None, str | None, str | None]:
+    """Who a fragment came from: client, model, and the pseudonymous caller.
+
+    The caller (``principal``) keeps two people who use the same client from
+    being stitched into one journey."""
     ident = identity or {}
-    return (ident.get("client"), ident.get("model"))
+    return (ident.get("client"), ident.get("model"), ident.get("principal"))
 
 
 # (ts, parent_session_id, identity, agent_hint, event_dict)
@@ -567,9 +570,15 @@ def stitch_stateless_fragments(
 
     for s in wire:
         sid = str(s.get("session_id") or "")
-        # An Elliot-minted handle is exact by construction; any other id that
-        # recurs across fragments was a deliberate client correlation id.
-        if sid and (is_minted_handle(sid) or sid_counts.get(sid, 0) > 1):
+        # A handle that recurs across fragments was echoed back by the client:
+        # that IS the journey. A minted handle seen once only names its own
+        # request (the client never echoed it), so on its own it proves
+        # nothing — unless that fragment already holds several calls (a
+        # stateful connection). Treating every minted handle as exact left
+        # each stateless call as its own "session" (17 sessions for 18 calls).
+        echoed = sid_counts.get(sid, 0) > 1
+        whole = is_minted_handle(sid) and len(s.get("events") or []) > 1
+        if sid and (echoed or whole):
             by_handle.setdefault(sid, []).append(s)
         else:
             loose.append(s)
@@ -600,6 +609,9 @@ def stitch_stateless_fragments(
                 duration_ms=float(e.get("duration_ms") or 0.0),
                 error=e.get("error"),
                 error_code=e.get("error_code"),
+                result_shape=e.get("result_shape")
+                if isinstance(e.get("result_shape"), dict)
+                else None,
                 result_preview=e.get("result_preview"),
                 reasoning=e.get("reasoning"),
             )
@@ -621,16 +633,23 @@ def stitch_stateless_fragments(
         if flat:
             kept.append(_rebuild(flat, session_id=sid))
 
-    runs: list[list[_Flat]] = []
+    # Group per caller first, then split each caller's calls on idle gaps.
+    # Grouping only consecutive fragments let any interleaved call — another
+    # agent's, or this agent's own call attributed differently — cut one
+    # journey into several.
+    by_identity: dict[tuple[str | None, str | None, str | None], list[_Flat]] = {}
     for item in _flatten(loose):
-        if runs:
-            prev = runs[-1][-1]
-            same_identity = _identity_key(item[2]) == _identity_key(prev[2])
-            within_gap = item[0] - prev[0] <= idle_gap_s
-            if same_identity and within_gap:
-                runs[-1].append(item)
-                continue
-        runs.append([item])
+        by_identity.setdefault(_identity_key(item[2]), []).append(item)
+    runs: list[list[_Flat]] = []
+    for items in by_identity.values():
+        current: list[_Flat] = []
+        for item in items:
+            if current and item[0] - current[-1][0] > idle_gap_s:
+                runs.append(current)
+                current = []
+            current.append(item)
+        if current:
+            runs.append(current)
     for run in runs:
         kept.append(_rebuild(run))
 

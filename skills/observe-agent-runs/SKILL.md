@@ -65,9 +65,9 @@ If nothing appears:
 ### 4. Uninstall when done
 
 If the user wants to stop streaming runs (e.g. before sharing the harness
-config with a teammate), call
-`elliot_uninstall_trace_hook(harness="<harness>")`. It removes the hook
-entry from the same config file, leaving everything else intact.
+config with a teammate), tell them to delete the `elliot` hook entry from the
+same config file `elliot_install_trace_hook` reported. Everything else in that
+file stays as it was.
 
 ## Rules
 

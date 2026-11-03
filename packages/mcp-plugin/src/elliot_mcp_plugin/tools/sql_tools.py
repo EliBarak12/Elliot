@@ -33,11 +33,24 @@ def _max_result_rows() -> int:
 
 def register_sql_tools(mcp: FastMCP, session: ElliotSession) -> None:
     @mcp.tool()
-    def elliot_get_schema() -> dict:  # type: ignore[type-arg]
-        """Return all table names and their column definitions."""
+    def elliot_get_schema(verbose: bool = False) -> dict:  # type: ignore[type-arg]
+        """Return every table with its columns: ``{table: {column: type}}``.
+
+        ``verbose=true`` returns SQLite's full column records (nullability,
+        defaults, primary key) — rarely needed to write a tool, at several
+        times the tokens.
+        """
         try:
             tables = session.engine.get_table_names()
-            return {t: session.engine.get_table_schema(t) for t in tables}
+            if verbose:
+                return {t: session.engine.get_table_schema(t) for t in tables}
+            return {
+                t: {
+                    str(c["name"]): str(c.get("type") or "")
+                    for c in session.engine.get_table_schema(t)
+                }
+                for t in tables
+            }
         except ElliotError:
             raise
         except Exception as exc:

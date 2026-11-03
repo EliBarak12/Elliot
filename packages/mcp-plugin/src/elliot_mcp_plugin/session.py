@@ -116,6 +116,34 @@ class ElliotSession:
         except FileNotFoundError:
             self._last_loaded_mtime = None
 
+    def resolve_source(self, ref: str) -> tuple[str | None, Any]:
+        """Find a source by its id, its name or its table name.
+
+        Agents see a source's name in one tool's output and its id in
+        another's; asking for the exact id ("Source not found: users" when
+        ``users`` was right there) cost a round trip. Returns ``(id, config)``
+        or ``(None, None)``.
+        """
+        ref = (ref or "").strip()
+        if ref in self.sources:
+            return ref, self.sources[ref]
+        lowered = ref.lower()
+        for sid, src in self.sources.items():
+            names = {str(getattr(src, "name", "") or "").lower()}
+            names.add(str(getattr(src, "table_name", "") or "").lower())
+            if lowered and lowered in names:
+                return sid, src
+        return None, None
+
+    def source_not_found(self, ref: str, hint: str = "") -> str:
+        """An actionable miss: what exists, and that either name or id works."""
+        listed = ", ".join(
+            f"{getattr(src, 'name', sid)} (id {sid}, {getattr(src, 'type', '?')})"
+            for sid, src in list(self.sources.items())[:10]
+        )
+        known = f" Sources: {listed}. Pass a source's name or its id." if listed else ""
+        return f"Source not found: {ref}.{known}{(' ' + hint) if hint else ''}"
+
     def remove_source(self, source_id: str) -> dict[str, Any]:
         """Remove a source, drop its SQLite table, and cascade-delete dependent tools.
 

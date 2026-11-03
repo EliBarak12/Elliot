@@ -60,6 +60,23 @@ class TestHeuristicStitching:
         out = stitch_stateless_fragments(raw)
         assert len(out) == 2
 
+    def test_different_callers_on_the_same_client_do_not_merge(self) -> None:
+        a = _fragment("req-aaaaaaaa", 1000.0)
+        b = _fragment("req-bbbbbbbb", 1010.0)
+        a["agent_identity"]["principal"] = "p_1111"
+        b["agent_identity"]["principal"] = "p_2222"
+        assert len(stitch_stateless_fragments([a, b])) == 2
+
+    def test_an_interleaved_call_does_not_split_a_journey(self) -> None:
+        raw = [
+            _fragment("req-a1", 1000.0, client="claude"),
+            _fragment("req-b1", 1005.0, client="cursor"),
+            _fragment("req-a2", 1010.0, client="claude"),
+        ]
+        out = stitch_stateless_fragments(raw)
+        by_client = {s["agent_identity"]["client"]: s for s in out}
+        assert len(out) == 2 and by_client["claude"]["total_tool_calls"] == 2
+
     def test_different_agents_do_not_merge(self) -> None:
         raw = [
             _fragment("req-aaaaaaaa", 1000.0, client="claude"),
@@ -104,12 +121,22 @@ class TestExactHandleGrouping:
     def test_handle_groups_do_not_absorb_other_agents(self) -> None:
         raw = [
             _fragment("es_abc123abc123", 1000.0, client="claude"),
+            _fragment("es_abc123abc123", 1002.0, client="claude"),
             _fragment("req-aaaaaaaa", 1001.0, client="claude"),
         ]
         out = stitch_stateless_fragments(raw)
-        # The handle-bearing fragment stays its own exact session; the loose
-        # one is a separate heuristic session.
+        # The echoed handle is an exact journey; the loose call next to it is
+        # a separate heuristic session.
         assert len(out) == 2
+
+    def test_a_handle_the_client_never_echoed_stitches_like_any_call(self) -> None:
+        """The runtime mints a handle per stateless request. A client that
+        never echoes it produces one unique handle per call, and treating
+        each as exact left every call its own session (17 for 18 calls)."""
+        raw = [_fragment(f"es_{i:012x}", 1000.0 + i * 20) for i in range(18)]
+        out = stitch_stateless_fragments(raw)
+        assert len(out) == 1
+        assert out[0]["total_tool_calls"] == 18
 
     def test_signals_and_summary_come_from_runtime_code(self) -> None:
         raw = [_fragment("es_abc123abc123", 1000.0)]

@@ -12,7 +12,7 @@ import structlog
 
 from elliot_core.sources.envelope import extract_rows
 from elliot_core.sqlite.engine import SQLiteEngine
-from elliot_core.sqlite.flattener import flatten
+from elliot_core.sqlite.flattener import flatten, snake_case_for
 from elliot_core.tools.query_builder import build_select_sql
 from elliot_core.types import (
     AuthConfig,
@@ -450,7 +450,7 @@ class ToolExecutor:
                 )
                 raise
 
-            flat = flatten(rows, table_name=table_name)
+            flat = flatten(rows, table_name=table_name, snake_case=snake_case_for(source))
             self._engine.load_result(flat)
             self._materialized_at[source.id] = time.monotonic()
             log.info(
@@ -739,10 +739,14 @@ class ToolExecutor:
 
         if tool.sql or tool.filter_groups or tool.return_fields:
             from elliot_core.sqlite.query_runner import validate_tool_sql
+            from elliot_core.tools.query_builder import quote_ident
 
+            table = source.table_name or source.id
             engine = SQLiteEngine()
             try:
-                engine.load_result(flatten(rows, table_name=source.table_name or source.id))
+                engine.load_result(
+                    flatten(rows, table_name=table, snake_case=snake_case_for(source))
+                )
                 if tool.sql:
                     ok, reason = validate_tool_sql(tool.sql)
                     if not ok:
@@ -752,7 +756,13 @@ class ToolExecutor:
                         p.name: arguments.get(p.name) for p in tool.parameters
                     }
                 else:
-                    sql, params = build_select_sql(tool, arguments)
+                    # FROM the table the rows were just loaded into. Without
+                    # from_clause the builder names the first source id (a
+                    # UUID for any discovered source), so a live tool with
+                    # return_fields failed every call with "no such table".
+                    sql, params = build_select_sql(
+                        tool, arguments, from_clause=quote_ident(table, "sqlite")
+                    )
                 rows = engine.query(sql, params)
             finally:
                 engine.close()
@@ -914,7 +924,13 @@ class ToolExecutor:
                 engine.load_result(managed_flat_table(source, rows))
             for source in (s for s in needed if s.type != "elliot"):
                 fetched = await self._fetch_source(source, arguments)
-                engine.load_result(flatten(fetched, table_name=source.table_name or source.id))
+                engine.load_result(
+                    flatten(
+                        fetched,
+                        table_name=source.table_name or source.id,
+                        snake_case=snake_case_for(source),
+                    )
+                )
 
             if tool.sql:
                 ok, reason = validate_tool_sql(tool.sql)

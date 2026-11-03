@@ -37,7 +37,22 @@ log = structlog.get_logger(__name__)
 # FastMCP → MCPServer rename. New code should annotate with ``MCPServer``.
 FastMCP = MCPServer
 
+
+class AgentToolError(ToolError, ValueError):
+    """A tool failure the agent must read: ``[CODE] message — what to do``.
+
+    The MCP SDK hands a ``ToolError``'s text to the client and treats any
+    other exception as a crash whose text stays on the server (since 2.3 the
+    agent only sees "Error executing tool <name>"). Elliot's errors are
+    written for the agent — an invalid enum value names the allowed values, a
+    missing confirmation says to pass ``confirm=true`` — so handlers raise
+    this. It also subclasses ``ValueError`` so callers that already catch
+    that keep working.
+    """
+
+
 __all__ = [
+    "AgentToolError",
     "CacheHint",
     "CacheableMethod",
     "ClientIdentity",
@@ -51,6 +66,7 @@ __all__ = [
     "apply_tool_annotations",
     "build_http_app",
     "capability_names",
+    "client_info_middleware",
     "create_server",
     "get_client_identity",
     "override_resource_text",
@@ -222,6 +238,28 @@ def wrap_tool_calls(mcp: MCPServer, make_wrapper: Callable[[CallToolFn], CallToo
     tool_manager.call_tool = make_wrapper(  # type: ignore[assignment, method-assign]
         tool_manager.call_tool
     )
+
+
+async def client_info_middleware(ctx: Any, call_next: Callable[[Any], Awaitable[Any]]) -> Any:
+    """Remember the ``clientInfo`` a caller announces at ``initialize``.
+
+    On the stateless transport later tool calls carry no client info, so
+    without this they are attributed to whatever HTTP library sent them.
+    See ``agent_identity.remember_client``.
+    """
+    if getattr(ctx, "method", None) == "initialize":
+        params = getattr(ctx, "params", None)
+        info = params.get("clientInfo") if isinstance(params, Mapping) else None
+        if isinstance(info, Mapping) and isinstance(info.get("name"), str):
+            from elliot_core.agent_identity import get_current_agent_identity, remember_client
+
+            version = info.get("version")
+            remember_client(
+                get_current_agent_identity(),
+                info["name"],
+                version if isinstance(version, str) else None,
+            )
+    return await call_next(ctx)
 
 
 async def session_meta_middleware(ctx: Any, call_next: Callable[[Any], Awaitable[Any]]) -> Any:

@@ -135,9 +135,14 @@ def preview_tool(
     tokens = estimate_tokens(rows)
     out: dict[str, Any] = {"rows": rows, "row_count": len(rows), "estimated_tokens": tokens}
     if tokens > _HEAVY_PREVIEW_TOKENS:
-        out["note"] = (
-            f"This result is ~{tokens} tokens — an agent pays that on every call. Project only "
-            "the columns the agent needs and add a LIMIT so it fits a context window (principle 2)."
+        # Advise only what the query lacks: telling an author whose SQL is
+        # already capped to "add a LIMIT" teaches them to ignore the note.
+        capped = re.search(r"\bLIMIT\b", sql, re.IGNORECASE) is not None
+        out["note"] = f"This result is ~{tokens} tokens — an agent pays that on every call. " + (
+            "Return only the fields the agent needs, or lower the row cap (principle 2)."
+            if capped
+            else "Return only the fields the agent needs and add a LIMIT so it fits a "
+            "context window (principle 2)."
         )
     return out
 
@@ -203,7 +208,14 @@ async def _preview_passthrough(
     api_params = {k: validated[k] for k in tool.rest_query_params if k in validated}
     secrets = session.workspace.load_secrets()
     result = await fetch_endpoint(source, secrets, extra_params=api_params)
-    rows = list(result.rows)[:_PASSTHROUGH_PREVIEW_ROWS]
+    rows = _shape_passthrough_rows(
+        tool,
+        list(result.rows),
+        source.table_name or source.id,
+        validated,
+        snake_case=getattr(source, "column_style", "lower") == "snake",
+    )
+    rows = rows[:_PASSTHROUGH_PREVIEW_ROWS]
     log.info("tool.preview.passthrough", tool_id=tool.id, source_id=source.id, rows=len(rows))
     out: dict[str, Any] = {
         "rows": rows,
@@ -220,6 +232,45 @@ async def _preview_passthrough(
     if warnings:
         out["warnings"] = list(warnings)
     return out
+
+
+def _shape_passthrough_rows(
+    tool: ToolDefinition,
+    rows: list[dict[str, Any]],
+    table_name: str,
+    arguments: dict[str, Any],
+    *,
+    snake_case: bool = False,
+) -> list[dict[str, Any]]:
+    """Apply a passthrough tool's post-fetch shaping, exactly as the runtime does.
+
+    A live tool may project and filter the fetched response with ``sql`` or
+    ``return_fields`` / ``filter_groups`` (the runtime's ``_execute_passthrough``
+    runs them over the flattened rows). The preview used to return the raw
+    response, so an author who trimmed a 16k-token result to five fields still
+    saw — and measured — all of it.
+    """
+    if not (tool.sql or tool.filter_groups or tool.return_fields):
+        return rows
+    from elliot_core.sqlite.engine import SQLiteEngine
+    from elliot_core.sqlite.flattener import flatten
+    from elliot_core.tools.query_builder import build_select_sql, quote_ident
+
+    engine = SQLiteEngine()
+    try:
+        engine.load_result(flatten(rows, table_name=table_name, snake_case=snake_case))
+        if tool.sql:
+            valid, reason = validate_tool_sql(tool.sql)
+            if not valid:
+                raise ElliotError("INVALID_SQL", f"Tool '{tool.id}' has invalid SQL: {reason}")
+            params = {p.name: arguments.get(p.name) for p in tool.parameters}
+            return engine.query(tool.sql, params)
+        sql, built = build_select_sql(
+            tool, arguments, from_clause=quote_ident(table_name, "sqlite")
+        )
+        return engine.query(sql, built)
+    finally:
+        engine.close()
 
 
 def _normalize_tool_input(tool: dict[str, Any]) -> dict[str, Any]:
@@ -250,6 +301,52 @@ def _tool_sql_warnings(sql: str) -> list[str]:
             "tool returns a typed, context-sized result (principle 2)."
         )
     return warnings
+
+
+_SEMANTIC_SQL_ERROR = re.compile(r"no such (column|table)", re.IGNORECASE)
+
+
+def sql_compile_error(sql: str, session: ElliotSession) -> str | None:
+    """Why ``sql`` cannot run against the session's tables, or None.
+
+    ``EXPLAIN QUERY PLAN`` compiles the statement without running it, with
+    every ``:param`` bound to NULL. Only unknown columns and tables count:
+    those are mistakes in the tool, while a syntax difference may just be the
+    source database's dialect (the SQL also runs pushed down to Postgres or
+    MySQL). The message names the columns that do exist.
+    """
+    params = {name: None for name in re.findall(r"(?<!:):([A-Za-z_]\w*)", sql)}
+    try:
+        session.engine.query(f"EXPLAIN QUERY PLAN {sql}", params)
+    except Exception as exc:  # noqa: BLE001 - classified below
+        message = str(exc)
+        if not _SEMANTIC_SQL_ERROR.search(message):
+            return None
+        hints: list[str] = []
+        for table in sorted(_sql_tables(sql)):
+            try:
+                cols = [str(c["name"]) for c in session.engine.get_table_schema(table)]
+            except Exception:  # noqa: BLE001 - an unknown table has no columns
+                cols = []
+            if cols:
+                shown = ", ".join(c for c in cols if not c.startswith("_"))[:600]
+                hints.append(f"{table} has: {shown}")
+        tables = [
+            str(getattr(s, "table_name", "") or "")
+            for s in session.sources.values()
+            if getattr(s, "table_name", None)
+        ]
+        if not hints and tables:
+            hints.append(f"Tables: {', '.join(sorted(tables))}")
+        return message + (". " + "; ".join(hints) if hints else "")
+    return None
+
+
+def _sql_tables(sql: str) -> set[str]:
+    return {
+        m.group(1).strip('"`[]')
+        for m in re.finditer(r"\b(?:FROM|JOIN)\s+([\"`\[]?[A-Za-z_][\w]*[\"`\]]?)", sql, re.I)
+    }
 
 
 def _reject_undeclared_params(sql: str, parameters: list[dict[str, Any]]) -> None:
@@ -373,6 +470,11 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             # B2: an undeclared ``:param`` would register fine and fail only at
             # call time with a cryptic SQLite error — reject it at create time.
             _reject_undeclared_params(sql, parameters)
+            # Compile against the loaded tables now: a misspelled column used
+            # to be "created" and fail only on the first preview or call.
+            compile_error = sql_compile_error(sql, session)
+            if compile_error:
+                raise ElliotError("INVALID_SQL", compile_error)
             source_ids = _infer_source_ids_from_sql(sql, session)
             tool = ToolDefinition.model_validate(
                 {
@@ -435,14 +537,14 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 post-filter).
         """
         try:
-            source = session.sources.get(source_id)
+            resolved_id, source = session.resolve_source(source_id)
             if source is None:
                 return {
-                    "error": (
-                        f"Source not found: {source_id}. Discover a REST source first with "
-                        "elliot_discover_source."
+                    "error": session.source_not_found(
+                        source_id, "Discover a REST source first with elliot_discover_source."
                     )
                 }
+            source_id = resolved_id or source_id
             if source.type != "rest":
                 return {
                     "error": (
@@ -553,14 +655,16 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
         creation fails with UNSUPPORTED_PARAM_ROUTING.
         """
         try:
-            source = session.sources.get(source_id)
+            resolved_id, source = session.resolve_source(source_id)
             if source is None:
                 return {
-                    "error": (
-                        f"Source not found: {source_id}. Discover a REST source first with "
-                        "elliot_discover_source (skip_probe=true for mutation-only endpoints)."
+                    "error": session.source_not_found(
+                        source_id,
+                        "Discover a REST source first with elliot_discover_source "
+                        "(skip_probe=true for mutation-only endpoints).",
                     )
                 }
+            source_id = resolved_id or source_id
             if source.type != "rest":
                 return {
                     "error": (
@@ -719,14 +823,14 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
         try:
             from elliot_core.types.tool import DataWriteMapping
 
-            source = session.sources.get(source_id)
+            resolved_id, source = session.resolve_source(source_id)
             if source is None:
                 return {
-                    "error": (
-                        f"Source not found: {source_id}. Create a managed source first "
-                        "with elliot_create_data_source."
+                    "error": session.source_not_found(
+                        source_id, "Create a managed source first with elliot_create_data_source."
                     )
                 }
+            source_id = resolved_id or source_id
             if source.type != "elliot":
                 return {
                     "error": (
@@ -864,6 +968,9 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 if effective_params is None:
                     effective_params = [p.model_dump() for p in tool.parameters]
                 _reject_undeclared_params(sql_patch, effective_params)
+                compile_error = sql_compile_error(sql_patch, session)
+                if compile_error:
+                    raise ElliotError("INVALID_SQL", compile_error)
                 session.tool_sql[tool_id] = sql_patch
                 # SQL changed → the tables it references (and therefore the
                 # sources the runtime must materialize) may have changed too.
@@ -972,13 +1079,15 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
         tool_id: str,
         ui: dict | None = None,  # type: ignore[type-arg]
         branding: dict | None = None,  # type: ignore[type-arg]
+        include_html: bool = False,
     ) -> dict:  # type: ignore[type-arg]
-        """Build the MCP Apps HTML view for a tool — exactly what agents get at
-        ``ui://<slug>/<tool_id>`` — so Studio can render it in its sandboxed
-        preview. Pass ``ui`` (a ToolUIConfig-shaped dict) to preview a DRAFT
-        view config without saving it to the tool first, and ``branding``
-        (a ConnectorBranding-shaped dict) to preview draft accent/logo
-        branding; otherwise the session's saved branding applies.
+        """Check the MCP Apps view a tool will serve at ``ui://<slug>/<tool_id>``:
+        returns its URI, preset, size and the image/font origins it declares.
+        Pass ``ui`` (a ToolUIConfig-shaped dict) to check a DRAFT view config
+        before saving it, and ``branding`` (a ConnectorBranding-shaped dict)
+        for draft branding; otherwise the saved ones apply. The HTML itself
+        is ~120k tokens — pass ``include_html=true`` only to render it (as
+        Studio's preview does), never to read it.
         """
         try:
             from pathlib import Path
@@ -1005,12 +1114,24 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 connector_dir=connector_dir,
                 branding=branding_cfg,
             )
-            return {
+            from elliot_core.apps import view_resource_domains
+
+            out: dict[str, Any] = {
                 "tool_id": tool_id,
                 "uri": ui_resource_uri(slug, tool_id),
-                "html": html,
                 "preset": ui_cfg.preset,
+                "enabled": ui_cfg.enabled,
+                "bytes": len(html.encode("utf-8")),
+                "resource_domains": view_resource_domains(ui_cfg, branding_cfg),
             }
+            if include_html:
+                out["html"] = html
+            else:
+                approx = f"{len(html) // 4:,}"
+                out["note"] = (
+                    f"HTML omitted (~{approx} tokens). Pass include_html=true to render it."
+                )
+            return out
         except ElliotError as exc:
             return to_mcp_error_content(exc)
         except Exception as exc:

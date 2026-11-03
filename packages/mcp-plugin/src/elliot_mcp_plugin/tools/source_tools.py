@@ -19,7 +19,7 @@ from elliot_core.paths import PathEscape, safe_join
 from elliot_core.sources.api_fetcher import _resolve_secret, fetch_endpoint
 from elliot_core.sources.db_connector import query_database
 from elliot_core.sources.file_reader import read_file, resolve_source_path
-from elliot_core.sqlite.flattener import flatten
+from elliot_core.sqlite.flattener import flatten, snake_case_for
 from elliot_core.types.source import SourceConfig
 from elliot_core.types.sqlite import FlattenResult
 from elliot_mcp_plugin.oauth_login import LOGIN_TTL_S, start_login
@@ -304,16 +304,103 @@ def _describe_flattened_schema(flat: FlattenResult) -> tuple[list[dict[str, Any]
     tables: list[dict[str, Any]] = []
     for t in all_tables:
         is_primary = t.name == primary_name
-        tables.append(
-            {
-                "name": t.name,
-                "role": "primary" if is_primary else "child",
-                "parent": None if is_primary else parent_of(t.name),
-                "row_count": len(t.rows),
-                "columns": [c.name for c in t.columns],
-            }
-        )
+        entry: dict[str, Any] = {
+            "name": t.name,
+            "role": "primary" if is_primary else "child",
+            "parent": None if is_primary else parent_of(t.name),
+            "row_count": len(t.rows),
+        }
+        # The primary table's columns are the discovery result's top-level
+        # ``columns``; listing them again here doubled the result for a wide
+        # table.
+        if not is_primary:
+            entry["columns"] = [c.name for c in t.columns]
+        tables.append(entry)
     return tables, (_JOIN_HINT if flat.related_tables else None)
+
+
+async def _fetch_every_page(
+    cfg: Any,
+    config: dict[str, Any],
+    secrets: dict[str, str],
+    first: Any,
+    token_override: str | None,
+) -> Any:
+    """Load the whole dataset when the first page says there is more.
+
+    A snapshot of page one (30 of 194 products) made tools answer from a
+    fraction of the data as if it were all of it — "product 150 does not
+    exist", enums missing real categories. When the author set no pagination
+    and the first page shows how the API pages, fetch every page with it and
+    save the pagination on the source so refreshes and the published
+    connector page too. If paging fails or loads nothing more, keep the first
+    page and its PARTIAL_DATASET warning.
+    """
+    from elliot_core.types.source import PaginationConfig
+
+    suggested = getattr(first, "suggested_pagination", None)
+    if not suggested or cfg.pagination.strategy != "none" or "pagination" in config:
+        return first
+    cfg.pagination = PaginationConfig.model_validate(suggested)
+    try:
+        if token_override is not None:
+            full = await fetch_endpoint(cfg, secrets, auth_token_override=token_override)
+        else:
+            full = await fetch_endpoint(cfg, secrets)
+    except Exception as exc:  # noqa: BLE001 - the first page still stands
+        log.warning("source.autopaginate.failed", error=str(exc))
+        cfg.pagination = PaginationConfig()
+        return first
+    n = len(first.rows)
+    # An API that ignores the paging parameters hands back page one again:
+    # that is duplicates, not more data.
+    repeated = n > 0 and full.rows[n : 2 * n] == first.rows
+    if len(full.rows) <= n or repeated:
+        cfg.pagination = PaginationConfig()
+        return first
+    config["pagination"] = cfg.pagination.model_dump(exclude_defaults=True)
+    partial = [w for w in first.warnings if str(w).startswith("PARTIAL_DATASET")]
+    total = None
+    if partial:
+        import re as _re
+
+        match = _re.search(r"of (\d+) records", partial[0])
+        total = int(match.group(1)) if match else None
+    note = (
+        f"AUTO_PAGINATED: the API pages its results, so Elliot fetched {len(full.rows)} rows "
+        f"over {full.page_count} pages and saved that pagination on the source."
+    )
+    warnings = [w for w in full.warnings if not str(w).startswith("Reached max_pages")]
+    if total and len(full.rows) < total:
+        warnings.append(
+            f"PARTIAL_DATASET: loaded {len(full.rows)} of {total} records — the page limit "
+            "was reached. Raise pagination.max_pages to load the rest."
+        )
+    full.warnings = [note, *warnings]
+    log.info("source.autopaginated", rows=len(full.rows), pages=full.page_count)
+    return full
+
+
+def _short(value: Any, limit: int = 40) -> Any:
+    text = value if isinstance(value, str) else None
+    if text is not None and len(text) > limit:
+        return text[: limit - 1] + "…"
+    return value
+
+
+def _compact_profile(col_type: str, prof: dict[str, Any]) -> dict[str, Any]:
+    """The statistics a tool designer acts on, in a fraction of the tokens."""
+    out: dict[str, Any] = {
+        "type": col_type or None,
+        "nulls": prof.get("null_count"),
+        "distinct": prof.get("distinct_count"),
+    }
+    if prof.get("enum_candidate"):
+        out["enum"] = [_short(v) for v in prof.get("enum_values") or []]
+    else:
+        out["min"] = _short(prof.get("min_val"))
+        out["max"] = _short(prof.get("max_val"))
+    return {k: v for k, v in out.items() if v is not None}
 
 
 def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
@@ -658,6 +745,10 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 }
 
             source_id = str(uuid.uuid4())
+            # New sources name columns in snake_case (discount_percentage, not
+            # discountpercentage). Saved in the source's config, so every
+            # refresh and the published connector name them the same way.
+            config = {**config, "column_style": config.get("column_style", "snake")}
             cfg = _build_source_config(key, config, source_id, name)
             secrets = session.workspace.load_secrets()
 
@@ -714,13 +805,14 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                     result = await fetch_endpoint(cfg, secrets, auth_token_override=token_override)
                 else:
                     result = await fetch_endpoint(cfg, secrets)
+                result = await _fetch_every_page(cfg, config, secrets, result, token_override)
                 rows = result.rows
 
             else:  # postgres / mysql
                 result = query_database(cfg, secrets)
                 rows = result.rows
 
-            flat = flatten(rows, table_name=name)
+            flat = flatten(rows, table_name=name, snake_case=snake_case_for(cfg))
             session.engine.load_result(flat)
             tables, join_hint = _describe_flattened_schema(flat)
 
@@ -747,6 +839,26 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             # records array; set data_path" — which previously never reached the
             # builder, so a connector whose tools return [] looked healthy.
             warnings = list(flat.warnings) + list(getattr(result, "warnings", []) or [])
+            # Personal and secret columns, by name, across every table: the
+            # tools drafted next should leave them out unless the job needs
+            # them (lint flags any READ tool that returns one).
+            from elliot_core.pii import sensitive_fields
+
+            sensitive = sensitive_fields(
+                list(
+                    dict.fromkeys(
+                        c.name
+                        for t in [flat.primary_table, *flat.related_tables]
+                        for c in t.columns
+                    )
+                )
+            )
+            if sensitive:
+                names = ", ".join(f["name"] for f in sensitive[:8])
+                warnings.append(
+                    f"PERSONAL_DATA: {names} hold secrets or personal data. Leave them out of "
+                    "tools unless an agent needs them for the job."
+                )
             return {
                 "source_id": source_id,
                 "table_name": name,
@@ -760,6 +872,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 "tables": tables,
                 "schema_hint": join_hint,
                 "warnings": warnings,
+                "sensitive_columns": sensitive,
             }
 
         except ElliotError as exc:
@@ -953,14 +1066,15 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             return {"error": f"Table '{table_name}' not found or query failed: {exc}"}
 
     @mcp.tool()
-    def elliot_profile_source(table_name: str) -> dict:  # type: ignore[type-arg]
+    def elliot_profile_source(table_name: str, verbose: bool = False) -> dict:  # type: ignore[type-arg]
         """Return column statistics for a table to inform tool design.
 
-        Per column: min, max, null_count, distinct_count, total_count, and the
-        top values. A column flagged ``enum_candidate: true`` is a small,
-        repeated set of text values (its ``enum_values`` list) — declare a
-        matching tool parameter as a typed ``enum`` of those values, not an open
-        string, so an agent can't pass a value the tool would silently reject.
+        Compact by default (about a quarter of the full size): per column its
+        type, nulls, distinct count, min and max, and — for a small repeated
+        set of text values — ``enum`` with the allowed values to declare as a
+        typed ``enum`` parameter. Long values are shortened and Elliot's
+        internal ``_`` columns are left out. ``verbose=true`` returns every
+        statistic and the top values of every column.
         """
         try:
             schema = session.engine.get_table_schema(table_name)
@@ -968,11 +1082,19 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             profiles = {
                 col["name"]: session.engine.profile_column(table_name, col["name"])
                 for col in schema
+                if verbose or not str(col["name"]).startswith("_")
             }
+            if not verbose:
+                types = {str(c["name"]): str(c.get("type") or "") for c in schema}
+                profiles = {
+                    name: _compact_profile(types.get(name, ""), prof)
+                    for name, prof in profiles.items()
+                }
             return {
                 "table": table_name,
                 "row_count": stats["row_count"],
                 "columns": profiles,
+                **({} if verbose else {"note": "Compact profile; verbose=true for all stats."}),
             }
         except Exception as exc:
             log.error("source.profile.failed", table=table_name, error=str(exc))
@@ -982,15 +1104,20 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
     async def elliot_refresh_source(source_id: str) -> dict:  # type: ignore[type-arg]
         """Re-fetch a source from its origin and reload the table in SQLite."""
         try:
-            src = session.sources.get(source_id)
+            resolved_id, src = session.resolve_source(source_id)
             if src is None:
-                return {"error": f"Source not found: {source_id}"}
+                return {"error": session.source_not_found(source_id)}
+            source_id = resolved_id or source_id
             # File sources carry their data inline (or at a local path) — there
             # is no live upstream to re-poll, and config_snapshot intentionally
             # omits the content blob. Re-materialize straight from the stored
             # SourceConfig instead of routing through discover.
             if src.type == "file":
-                flat = flatten(read_file(src).rows, table_name=src.table_name or src.name)
+                flat = flatten(
+                    read_file(src).rows,
+                    table_name=src.table_name or src.name,
+                    snake_case=snake_case_for(src),
+                )
                 session.engine.load_result(flat)
                 src.row_count = len(flat.primary_table.rows)
                 session.save()
@@ -1021,8 +1148,10 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
         re-point or re-create those tools against the source you kept.
         """
         try:
-            if session.sources.get(source_id) is None:
-                return {"error": f"Source not found: {source_id}"}
+            resolved_id, _src = session.resolve_source(source_id)
+            if resolved_id is None:
+                return {"error": session.source_not_found(source_id)}
+            source_id = resolved_id
             result = session.remove_source(source_id)
             # The cascade may have deleted tools that are in the built
             # connector — refresh so the build never goes silently stale (F5).

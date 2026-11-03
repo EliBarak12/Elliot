@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import re
 
 SQL_RESERVED = frozenset(
@@ -37,6 +38,17 @@ SQL_RESERVED = frozenset(
 _MAX_NAME_LEN = 63
 
 
+# Whether names are snake_cased from camelCase ("discountPercentage" →
+# "discount_percentage") or just lowercased ("discountpercentage", the
+# original behaviour). Set per flatten() call from the source's
+# ``column_style``, so a source keeps the names its saved SQL was written
+# against.
+_SNAKE_CASE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "elliot_snake_case_columns", default=False
+)
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
 def safe_name(raw: str) -> str:
     """Convert an arbitrary string to a safe SQLite column name.
 
@@ -47,6 +59,8 @@ def safe_name(raw: str) -> str:
     are replaced with ``_``. The result always satisfies
     :func:`elliot_core.sql.safe_ident`'s identifier rule.
     """
+    if _SNAKE_CASE.get():
+        raw = _CAMEL_BOUNDARY.sub("_", raw)
     name = raw.lower()
     # Replace every non-word character (anything that isn't a Unicode letter,
     # digit, or underscore) with ``_``. This keeps Hebrew/CJK/accented letters.

@@ -32,6 +32,7 @@ from elliot_core.agent_identity import (
     AgentIdentity,
     get_current_agent_identity,
     merge_client_info,
+    recall_client,
     set_current_agent_identity,
 )
 from elliot_core.apps import build_apps_extension, tool_ui_meta, ui_resource_uri
@@ -44,6 +45,7 @@ from elliot_core.http_middleware import (
     UserIdentityMiddleware,
 )
 from elliot_core.mcp_compat import (
+    AgentToolError,
     CacheableMethod,
     CacheHint,
     Context,
@@ -52,6 +54,7 @@ from elliot_core.mcp_compat import (
     MCPDeprecationWarning,
     ToolError,
     build_http_app,
+    client_info_middleware,
     get_client_identity,
     register_legacy_set_level,
     session_meta_middleware,
@@ -376,6 +379,12 @@ def _current_session_and_identity(ctx: Any) -> tuple[str | None, dict[str, Any] 
         client_name = sdk_identity.client_name
         client_version = sdk_identity.client_version
     identity = get_current_agent_identity()
+    if not client_name:
+        # A stateless call: the name the caller announced at initialize, so a
+        # rejected call is attributed like the caller's other calls.
+        recalled = recall_client(identity)
+        if recalled is not None:
+            client_name, client_version = recalled
     if client_name:
         with contextlib.suppress(Exception):
             identity = merge_client_info(identity, client_name, client_version)
@@ -441,7 +450,32 @@ def _payload_for(
         if note:
             payload["empty"] = True
             payload["empty_note"] = note
+    # Count what the agent actually reads — the whole compact payload, notes
+    # included — not just the rows. Rows-only undercounted every result.
+    payload["estimated_tokens"] = _estimate_tokens(
+        {k: v for k, v in payload.items() if k != "estimated_tokens"}
+    )
     return payload
+
+
+def _compact_text_mirror(result: Any) -> Any:
+    """Rewrite a tool result's text mirror as compact JSON.
+
+    The SDK mirrors ``structuredContent`` into the text block as JSON indented
+    by two spaces — whitespace an agent pays for on every call (about a fifth
+    of a typical result). The structure is unchanged; only the spacing goes.
+    """
+    structured = getattr(result, "structured_content", None)
+    content = getattr(result, "content", None)
+    if structured is None or getattr(result, "is_error", False) or not content:
+        return result
+    if len(content) != 1 or getattr(content[0], "type", None) != "text":
+        return result
+    import json as _json
+
+    with contextlib.suppress(Exception):
+        content[0].text = _json.dumps(structured, separators=(",", ":"), default=str)
+    return result
 
 
 def _skill_payload(result: Any) -> dict[str, Any]:
@@ -661,11 +695,13 @@ def create_runtime_server(
     # tool only exists when there's an observation store to persist to, so the
     # instruction is conditional on the same thing the registration is.
     if store is not None:
+        # Optional, and only when something went wrong: asking for a report
+        # after every call doubled the end user's calls and latency in
+        # service of the connector author.
         instructions = (
             instructions.rstrip()
-            + f"\n\nAfter calling a tool, report how it worked with `{feedback_tool_name}` "
-            "(outcome 'success', 'failure', or 'partial') so the connector author "
-            "can see what to improve."
+            + f"\n\nIf a tool fails, returns nothing useful or surprises you, you may tell "
+            f"the connector author with `{feedback_tool_name}`."
         )
     # The MCP Apps extension must exist BEFORE the server is constructed —
     # the SDK consumes extensions in MCPServer.__init__. It registers each
@@ -683,12 +719,15 @@ def create_runtime_server(
     mcp = FastMCP(
         cfg.name or "elliot-runtime",
         instructions=instructions,
-        middleware=[session_meta_middleware],
+        middleware=[session_meta_middleware, client_info_middleware],
         extensions=extensions or None,
         cache_hints=_default_cache_hints(),
     )
 
     task_store = get_task_store()
+    # Sources whose data Elliot holds itself (managed tables, uploaded files):
+    # a tool over only these does not reach the outside world.
+    closed_sources = {s.id for s in cfg.sources if s.type in ("elliot", "file")}
     for tool_def in cfg.tools:
         # The off switch: a disabled tool keeps its definition in the connector
         # but is never registered, so it never reaches tools/list and no agent
@@ -714,6 +753,9 @@ def create_runtime_server(
             executor_pool=executor_pool,
             task_tool_name=task_tool_name,
             ui_meta=ui_meta,
+            open_world=not (
+                tool_def.source_ids and all(sid in closed_sources for sid in tool_def.source_ids)
+            ),
         )
 
     _register_resources(mcp, cfg, executor, json)
@@ -728,12 +770,21 @@ def create_runtime_server(
         connector_slug=connector_slug,
         executor_pool=executor_pool,
     )
-    _register_task_tool(mcp, task_store, task_tool_name)
+    # The polling tool only means something when a tool runs in the
+    # background; otherwise it is context every agent pays for nothing.
+    if any(getattr(t, "run_async", False) for t in cfg.tools if getattr(t, "enabled", True)):
+        _register_task_tool(mcp, task_store, task_tool_name)
     if store is not None:
         _register_feedback_tool(mcp, store, connector_slug, feedback_tool_name)
 
     _register_logging(mcp)
-    _register_validation_capture(mcp, store, tracker, connector_slug)
+    _register_validation_capture(
+        mcp,
+        store,
+        tracker,
+        connector_slug,
+        tools_by_id={t.id: t for t in cfg.tools if getattr(t, "enabled", True)},
+    )
 
     return mcp
 
@@ -743,40 +794,93 @@ def _register_validation_capture(
     store: ObservationStore | None,
     tracker: SessionTracker | None,
     connector_slug: str | None,
+    tools_by_id: dict[str, Any] | None = None,
 ) -> None:
-    """Record argument-validation failures, which FastMCP rejects BEFORE the tool
-    handler runs.
+    """Validate every call at the boundary, in Elliot's words, and record failures.
 
-    FastMCP validates a tool's arguments against its schema and rejects a bad
-    call (missing or wrong-typed required parameter) before the handler executes,
-    so those failures never reach the handler's observation recording — yet
-    "an agent keeps calling my tool with the wrong parameters" is one of the most
-    common real-world failures and, uncaptured, leaves the connector owner seeing
-    a 0% error rate while agents struggle. Wrap the tool manager's call_tool
-    (which ``FastMCP.call_tool`` resolves at call time, so the wrap takes effect)
-    and, on a ``ToolError`` whose cause is a pydantic ``ValidationError`` — the
-    stable signal that this is a pre-handler validation failure and not a handler
-    error (which is already recorded) — write one error observation. Best-effort:
-    it never changes the call result and never raises into the call path.
+    The SDK checks arguments against the tool's schema before the handler
+    runs, and it does so in its own terms: unknown keys are silently dropped
+    (``{"query": "phone"}`` returned 20 unrelated rows), and a wrong type
+    comes back as a pydantic dump with a docs URL. So a connector tool's
+    arguments go through ``validate_call_params`` first — the same rules the
+    executor and the builder's preview apply — and the agent reads an
+    actionable ``[CODE] message``: "Unknown parameter 'query'. Did you mean
+    'search_text'?", the allowed values, the bounds. An unknown tool name
+    lists the tools that exist.
+
+    Every failure is recorded (masked like any other call) so "agents keep
+    calling my tool wrong" shows up for the owner instead of a 0% error rate.
     """
-    if store is None and tracker is None:
-        return
-
     import pydantic
+
+    from elliot_core.errors import ElliotError, to_mcp_error_content
+    from elliot_core.tools.param_validation import validate_call_params
+
+    tools = tools_by_id or {}
+
+    def _fail(ctx: Any, name: str, arguments: dict[str, Any], exc: ElliotError) -> None:
+        td = tools.get(name)
+        with contextlib.suppress(Exception):
+            _record_validation_failure(
+                ctx,
+                store,
+                tracker,
+                connector_slug,
+                name,
+                arguments,
+                exc,
+                visible=_visible_argument_names(td) if td is not None else frozenset(),
+            )
+        raise AgentToolError(to_mcp_error_content(exc)["text"]) from exc
 
     def _make_wrapped(orig_call: Any) -> Any:
         async def _wrapped(name: str, arguments: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+            # The SDK context rides as call_tool's third argument (v2 removed
+            # mcp.get_context()); use it for correlation.
+            ctx = args[0] if args else kwargs.get("context")
+            arguments = dict(arguments or {})
+            td = tools.get(name)
+            if td is not None:
+                supplied = {k: v for k, v in arguments.items() if k != "confirm" and v is not None}
+                try:
+                    validate_call_params(td, supplied)
+                except ElliotError as exc:
+                    _fail(ctx, name, arguments, exc)
             try:
-                return await orig_call(name, arguments, *args, **kwargs)
+                return _compact_text_mirror(await orig_call(name, arguments, *args, **kwargs))
             except ToolError as exc:
+                text = str(exc)
                 if isinstance(exc.__cause__, pydantic.ValidationError):
-                    # The SDK context rides as call_tool's third argument; use
-                    # it for correlation (v2 removed mcp.get_context()).
-                    ctx = args[0] if args else kwargs.get("context")
-                    with contextlib.suppress(Exception):
-                        _record_validation_failure(
-                            ctx, store, tracker, connector_slug, name, arguments, exc
-                        )
+                    first = next(
+                        (
+                            ln.strip()
+                            for ln in str(exc.__cause__).splitlines()[1:]
+                            if ln.strip() and "errors.pydantic.dev" not in ln
+                        ),
+                        "the arguments do not match the tool's input schema",
+                    )
+                    _fail(
+                        ctx,
+                        name,
+                        arguments,
+                        ElliotError(
+                            "VALIDATION_INVALID_PARAMS",
+                            f"Invalid arguments for '{name}': {first}. "
+                            "Check the tool's inputSchema and call again.",
+                        ),
+                    )
+                if text.startswith("Unknown tool"):
+                    known = sorted(tools) or sorted(
+                        getattr(t, "name", "") for t in mcp._tool_manager.list_tools()
+                    )
+                    import difflib
+
+                    near = difflib.get_close_matches(name, known, n=1, cutoff=0.5)
+                    hint = f" Did you mean '{near[0]}'?" if near else ""
+                    raise AgentToolError(
+                        f"[UNKNOWN_TOOL] No tool named '{name}'.{hint} "
+                        f"Tools on this connector: {', '.join(known[:20])}."
+                    ) from exc
                 raise
 
         return _wrapped
@@ -792,15 +896,22 @@ def _record_validation_failure(
     tool_id: str,
     arguments: dict[str, Any],
     exc: Exception,
+    visible: frozenset[str] = frozenset(),
 ) -> None:
     """Write one error observation for an argument-validation failure."""
+    from elliot_core.errors import ElliotError
+    from elliot_core.redaction import mask_call_arguments
+
     session_id, identity_payload = _current_session_and_identity(ctx)
     if not session_id:
         return
-    # Single compact line — never the full multi-line pydantic dump.
-    first_line = next((ln for ln in str(exc).splitlines() if ln.strip()), "")
+    arguments = mask_call_arguments(arguments, visible)
+    code = exc.code if isinstance(exc, ElliotError) else "VALIDATION_INVALID_PARAMS"
+    message = exc.message if isinstance(exc, ElliotError) else str(exc)
+    # Single compact line — never a multi-line dump.
+    first_line = next((ln for ln in message.splitlines() if ln.strip()), "")
     reason = first_line[:200] if first_line else "argument validation failed"
-    error = f"[VALIDATION_INVALID_PARAMS] {reason}"
+    error = f"[{code}] {reason}"
     agent_hint = _agent_hint_from_identity(get_current_agent_identity())
     if store is not None:
         store.open_session(
@@ -817,7 +928,7 @@ def _record_validation_failure(
             result_token_estimate=0,
             duration_ms=0.0,
             error=error,
-            error_code="VALIDATION_INVALID_PARAMS",
+            error_code=code,
             connector_slug=connector_slug,
         )
     if tracker is not None:
@@ -842,7 +953,7 @@ def _record_validation_failure(
             result_data=[],
             duration_ms=0.0,
             error=error,
-            error_code="VALIDATION_INVALID_PARAMS",
+            error_code=code,
         )
 
 
@@ -895,17 +1006,31 @@ def _current_handle_source() -> str | None:
     return handle.source if handle is not None else None
 
 
+def _visible_argument_names(td: Any) -> frozenset[str]:
+    """Arguments whose values an owner may see: closed value sets the author
+    defined (enums) and the confirmation flag. Everything else an end user's
+    agent sends is shown by shape only (see ``mask_call_arguments``)."""
+    names = {p.name for p in getattr(td, "parameters", None) or [] if getattr(p, "enum", None)}
+    names.add("confirm")
+    return frozenset(names)
+
+
 def _make_observe(
     audit: AuditLog | None,
     tracker: SessionTracker | None,
     store: ObservationStore | None,
     connector_slug: str | None,
+    visible_arguments: frozenset[str] = frozenset({"confirm"}),
 ) -> Callable[..., Awaitable[None]]:
     """Build the per-call observer shared by the tool and skill handlers: record
     one call to the audit log, session tracker, and observation store so every
     call — tool or skill — is equally observable (principle 4). Blocking I/O runs
     in a worker thread; every write is best-effort so observability never breaks a
-    call."""
+    call.
+
+    What is observed is metadata, not people's data: argument values are kept
+    only for ``visible_arguments`` (enums, flags) and numbers, and the result is
+    recorded as its shape (row count, fields, types) — never its rows."""
 
     def _observe_blocking(
         tool_id: str,
@@ -919,6 +1044,9 @@ def _make_observe(
         handle_source: str | None = None,
     ) -> None:
         row_count = len(result_rows)
+        from elliot_core.redaction import mask_call_arguments
+
+        arguments = mask_call_arguments(arguments, visible_arguments)
         # Estimate tokens up-front so the audit row, the observation store, and
         # /v1/sessions all report the same per-call figure.
         from .session_tracker import _estimate_tokens
@@ -1095,6 +1223,7 @@ def _register_tool(
     executor_pool: ExecutorPool | None = None,
     task_tool_name: str = "elliot_get_task",
     ui_meta: dict[str, Any] | None = None,
+    open_world: bool = True,
 ) -> None:
     from elliot_core.errors import ElliotError, to_mcp_error_content
     from elliot_core.types import ToolDefinition
@@ -1108,16 +1237,18 @@ def _register_tool(
     # product freely, and only genuinely destructive calls prompt for approval.
     is_destructive = _is_destructive(td.category, td.id, getattr(td, "destructive", None))
     annotations = ToolAnnotations(
-        title=td.name,
+        title=_human_title(td),
         read_only_hint=read_only,
         destructive_hint=is_destructive,
         idempotent_hint=read_only,
-        open_world_hint=True,
+        open_world_hint=open_world,
     )
     run_async: bool = getattr(td, "run_async", False)
     require_confirmation = is_destructive and _require_destructive_confirmation()
 
-    _observe = _make_observe(audit, tracker, store, connector_slug)
+    _observe = _make_observe(
+        audit, tracker, store, connector_slug, visible_arguments=_visible_argument_names(td)
+    )
 
     async def _handler(**kwargs: Any) -> dict[str, Any]:
         import time
@@ -1165,6 +1296,12 @@ def _register_tool(
             if not client_name and header_client:
                 client_name = header_client
                 client_version = client_version or header_client_version
+            if not client_name:
+                # A stateless call after this caller's initialize: use the
+                # name it announced there rather than its HTTP library's.
+                recalled = recall_client(get_current_agent_identity())
+                if recalled is not None:
+                    client_name, client_version = recalled
         if client_name or protocol_version or capabilities or header_model:
             with contextlib.suppress(Exception):
                 set_current_agent_identity(
@@ -1191,7 +1328,7 @@ def _register_tool(
                 )
                 await _observe(td.id, kwargs, [], 0.0, str(exc), session_id, error_code=exc.code)
                 error_content = to_mcp_error_content(exc)
-                raise ValueError(error_content["text"])
+                raise AgentToolError(error_content["text"])
         else:
             kwargs.pop("confirm", None)
 
@@ -1208,7 +1345,7 @@ def _register_tool(
             except ElliotError as exc:
                 await _observe(td.id, kwargs, [], 0.0, str(exc), session_id, error_code=exc.code)
                 error_content = to_mcp_error_content(exc)
-                raise ValueError(error_content["text"]) from exc
+                raise AgentToolError(error_content["text"]) from exc
 
         if run_async:
 
@@ -1274,7 +1411,7 @@ def _register_tool(
                 "warning",
                 {"event": "tool.call.error", "tool": td.id, "code": elliot_exc.code},
             )
-            raise ValueError(error_content["text"]) from exc
+            raise AgentToolError(error_content["text"]) from exc
 
     _handler.__name__ = td.id
     _handler.__doc__ = td.description
@@ -1300,8 +1437,21 @@ def _register_tool(
         field_kwargs: dict[str, Any] = {}
         if p.description.strip():
             field_kwargs["description"] = p.description.strip()
+        # Advertise the closed value set and the numeric bounds so the agent
+        # sends a valid value the first time. They are enforced by Elliot's
+        # boundary validation (actionable errors), not by the SDK's pydantic.
+        extra: dict[str, Any] = {}
         if p.enum:
-            field_kwargs["json_schema_extra"] = {"enum": list(p.enum)}
+            extra["enum"] = list(p.enum)
+        if p.type in ("integer", "number"):
+            if p.minimum is not None:
+                extra["minimum"] = p.minimum
+            if p.maximum is not None:
+                extra["maximum"] = p.maximum
+        if not p.required and p.default is not None:
+            extra["default"] = p.default
+        if extra:
+            field_kwargs["json_schema_extra"] = extra
         annotation: Any = Annotated[base, Field(**field_kwargs)] if field_kwargs else base
         default = inspect.Parameter.empty if p.required else None
         params.append(
@@ -1341,11 +1491,63 @@ def _register_tool(
 
     mcp.tool(
         name=td.id,
-        title=td.name,
+        title=_human_title(td),
         description=_tool_registration_description(td),
         annotations=annotations,
         meta=ui_meta,
     )(_handler)
+    # Arguments the tool does not declare are an error (named, with the
+    # closest real one), not something to drop silently — say so in the
+    # schema the agent reads.
+    registered = mcp._tool_manager.get_tool(td.id)
+    if registered is not None and isinstance(getattr(registered, "parameters", None), dict):
+        registered.parameters["additionalProperties"] = False
+    # Say what comes back: the generic {"type": "object"} told an agent
+    # nothing. Rows carry the tool's declared fields; the envelope is the same
+    # for every READ/WRITE tool (a background tool answers with a task id, so
+    # it keeps the generic schema). Only the advertised schema changes — the
+    # SDK still validates against the generic model.
+    if registered is not None and not run_async:
+        with contextlib.suppress(Exception):
+            registered.fn_metadata.output_schema = _result_output_schema(td)
+
+
+def _result_output_schema(td: Any) -> dict[str, Any]:
+    """The JSON schema of a tool result as ``_payload_for`` builds it."""
+    row: dict[str, Any] = {"type": "object", "additionalProperties": True}
+    names = _returned_field_names(td)
+    if names:
+        row["properties"] = {name: {} for name in names}
+    return {
+        "type": "object",
+        "properties": {
+            "rows": {"type": "array", "items": row},
+            "count": {"type": "integer", "description": "Rows returned."},
+            "estimated_tokens": {
+                "type": "integer",
+                "description": "What this result costs in context.",
+            },
+            "truncated": {"type": "boolean"},
+            "truncation_note": {"type": "string"},
+            "empty": {"type": "boolean"},
+            "empty_note": {"type": "string", "description": "What to try when nothing matched."},
+        },
+        "required": ["rows", "count", "estimated_tokens"],
+    }
+
+
+def _human_title(td: Any) -> str:
+    """A display title: the author's name, or the id in words.
+
+    Tools drafted from a schema are often named like their id
+    (``search_products``); hosts show ``title`` to people, so it reads
+    "Search products" instead.
+    """
+    name = (getattr(td, "name", "") or "").strip()
+    if name and name != td.id and not re.fullmatch(r"[a-z0-9_]+", name):
+        return name
+    words = (name or td.id).replace("_", " ").strip()
+    return words[:1].upper() + words[1:]
 
 
 def _register_task_tool(
@@ -1370,7 +1572,7 @@ def _register_task_tool(
         """Retrieve background task status and result by task_id."""
         record = task_store.get(task_id)
         if record is None:
-            raise ValueError(
+            raise AgentToolError(
                 f"TASK_NOT_FOUND: No task with id '{task_id}'. "
                 "Tasks expire after 1 hour. Check the task_id and retry."
             )
@@ -1410,25 +1612,31 @@ def _register_feedback_tool(
 
     @mcp.tool(
         name=feedback_tool_name,
-        title="Submit agent feedback",
+        title="Report a problem with a tool",
         description=(
-            "Report how one of this connector's tools worked so the connector "
-            "author can improve it. Call after using a tool when the result is "
-            "worth noting — a clean success, a failure, or a partial result. "
-            "Args: tool_id (the tool you used); outcome (one of 'success', "
-            "'failure', 'partial'); why_chosen (why you picked this tool); "
-            "input_summary (the input you passed); output_summary (what you got "
-            "back); detail (failure description or any notes)."
+            "Optional. Tell the connector author when one of its tools failed, returned "
+            "nothing useful or behaved unexpectedly. Describe what happened, never the "
+            "data itself: no names, emails, addresses or other personal details."
         ),
         annotations=annotations,
     )
     async def submit_feedback(
-        tool_id: str,
-        outcome: str,
-        why_chosen: str = "",
-        input_summary: str = "",
-        output_summary: str = "",
-        detail: str = "",
+        tool_id: Annotated[str, Field(description="The tool you called.")],
+        outcome: Annotated[
+            str,
+            Field(
+                description="How the call went.",
+                json_schema_extra={"enum": list(_FEEDBACK_OUTCOMES)},
+            ),
+        ],
+        why_chosen: Annotated[str, Field(description="Why you picked this tool.")] = "",
+        input_summary: Annotated[
+            str, Field(description="What kind of input you passed, not its values.")
+        ] = "",
+        output_summary: Annotated[
+            str, Field(description="What kind of result came back, not its contents.")
+        ] = "",
+        detail: Annotated[str, Field(description="What went wrong or could be better.")] = "",
         ctx: Context = None,  # type: ignore[assignment]  # injected by the SDK
     ) -> dict[str, Any]:
         normalized = (outcome or "").strip().lower()
@@ -1438,20 +1646,24 @@ def _register_feedback_tool(
                 (f"outcome must be one of {list(_FEEDBACK_OUTCOMES)}; got {outcome!r}."),
                 {"field": "outcome", "allowed": list(_FEEDBACK_OUTCOMES)},
             )
-            raise ValueError(to_mcp_error_content(exc)["text"])
+            raise AgentToolError(to_mcp_error_content(exc)["text"])
 
         session_id, identity = _current_session_and_identity(ctx)
 
+        from elliot_core.redaction import scrub_personal_text
+
         def _persist() -> None:
+            # The owner reads these; an agent that slips a customer's email
+            # or phone number into a summary must not put it in front of them.
             store.write_feedback(
                 tool_id=tool_id,
                 outcome=normalized,
                 session_id=session_id,
                 connector_slug=connector_slug,
-                why_chosen=why_chosen,
-                input_summary=input_summary,
-                output_summary=output_summary,
-                detail=detail,
+                why_chosen=scrub_personal_text(why_chosen),
+                input_summary=scrub_personal_text(input_summary),
+                output_summary=scrub_personal_text(output_summary),
+                detail=scrub_personal_text(detail),
                 agent_identity=identity,
             )
 
@@ -1459,7 +1671,7 @@ def _register_feedback_tool(
             await run_in_threadpool(_persist)
         except Exception as exc:
             elliot_exc = ElliotError("FEEDBACK_WRITE_FAILED", str(exc))
-            raise ValueError(to_mcp_error_content(elliot_exc)["text"]) from exc
+            raise AgentToolError(to_mcp_error_content(elliot_exc)["text"]) from exc
 
         log.info("agent.feedback.recorded", tool_id=tool_id, outcome=normalized)
         return {
@@ -1497,12 +1709,18 @@ def _redact_secret_blocks(node: Any) -> None:
 
 
 def _register_resources(mcp: FastMCP, cfg: Any, executor: ToolExecutor, json: Any) -> None:
-    """Register MCP Resources: connector schema, per-tool sample rows, source status."""
+    """Register MCP Resources: the connector schema and each source's status."""
     from elliot_core.types import ConnectorConfig
 
     c: ConnectorConfig = cfg
 
-    @mcp.resource("connector://schema")
+    @mcp.resource(
+        "connector://schema",
+        description=(
+            "This connector's tools, their parameters and its sources as JSON. "
+            "Read it only when tools/list is not enough; it costs context like any result."
+        ),
+    )
     def connector_schema() -> str:
         """Full connector definition including all sources, tools, and skills.
 
@@ -1530,35 +1748,13 @@ def _register_resources(mcp: FastMCP, cfg: Any, executor: ToolExecutor, json: An
             _redact_secret_blocks(source)
         return json.dumps(snapshot, indent=2, default=str)
 
-    for tool_def in c.tools:
-        # No sample resource for a tool the agent cannot call.
-        if not getattr(tool_def, "enabled", True):
-            continue
-        _register_sample_resource(mcp, executor, tool_def, json)
-
+    # No per-tool "sample rows" resources. They ran every tool — writes
+    # included — with no arguments under the connector's shared identity, so
+    # reading one could act, and on a per-user connector could hand one
+    # person's rows to another person's agent. Calling the tool is the way to
+    # see what it returns.
     for source in c.sources:
         _register_source_status_resource(mcp, source)
-
-
-def _register_sample_resource(
-    mcp: FastMCP, executor: ToolExecutor, tool_def: Any, json: Any
-) -> None:
-    tool_id = tool_def.id
-    tool_name = tool_def.name
-
-    @mcp.resource(
-        f"connector://sample/{tool_id}",
-        description=f"Sample rows from {tool_name} (up to 5). Does not count against the agent's context budget.",
-    )
-    async def sample_resource() -> str:
-        try:
-            result = await executor.execute(tool_def, {})
-            sample = result.rows[:5]
-            return json.dumps({"tool": tool_id, "sample_rows": sample}, default=str)
-        except Exception as exc:
-            return json.dumps({"tool": tool_id, "error": str(exc)})
-
-    sample_resource.__name__ = f"sample_{tool_id}"
 
 
 def _register_source_status_resource(mcp: FastMCP, source: Any) -> None:
@@ -1856,7 +2052,7 @@ def _register_one_skill_tool(
                     ),
                     {"skill_id": skill_id},
                 )
-                raise ValueError(to_mcp_error_content(exc)["text"])
+                raise AgentToolError(to_mcp_error_content(exc)["text"])
         else:
             kwargs.pop("confirm", None)
 
@@ -1867,7 +2063,7 @@ def _register_one_skill_tool(
                     get_current_user_id(), skill_source_ids or None
                 )
             except ElliotError as exc:
-                raise ValueError(to_mcp_error_content(exc)["text"]) from exc
+                raise AgentToolError(to_mcp_error_content(exc)["text"]) from exc
 
         async def _run_step(tool_id: str, params: dict[str, Any]) -> Any:
             std = tools_by_id.get(tool_id)
@@ -1902,7 +2098,7 @@ def _register_one_skill_tool(
                 session_id,
                 error_code=elliot_exc.code,
             )
-            raise ValueError(to_mcp_error_content(elliot_exc)["text"]) from exc
+            raise AgentToolError(to_mcp_error_content(elliot_exc)["text"]) from exc
 
     _skill_handler.__name__ = skill_id
     _skill_handler.__doc__ = skill_desc

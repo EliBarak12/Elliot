@@ -375,7 +375,10 @@ async def test_argument_validation_failures_are_recorded(mode: str) -> None:
     assert len(calls) == 2, "both the valid call and the validation failure must be recorded"
     errored = [c for c in calls if (c.get("error") or "")]
     assert len(errored) == 1
-    assert "VALIDATION_INVALID_PARAMS" in errored[0]["error"]
+    # Elliot validates at the boundary, so the failure carries its specific
+    # code (still a contract miss) and Elliot's message, not pydantic's.
+    assert "MISSING_PARAM" in errored[0]["error"]
+    assert "thing_id" in errored[0]["error"]
     assert errored[0]["tool_id"] == "get_thing"
 
 
@@ -446,7 +449,7 @@ async def test_argument_validation_failures_reach_the_session_trace() -> None:
     events = [e for s in tracker.tail(10) for e in s.get("events") or []]
     assert len(events) == 1, f"validation failure missing from the session trace: {events}"
     assert events[0]["tool_id"] == "get_thing"
-    assert events[0]["error_code"] == "VALIDATION_INVALID_PARAMS"
+    assert events[0]["error_code"] == "MISSING_PARAM"
 
 
 async def test_runtime_advertises_logging_and_streams_structured_telemetry() -> None:
@@ -1072,7 +1075,11 @@ def test_feedback_tool_absent_without_store(tmp_path: Path) -> None:
 
 
 def test_task_tool_namespaced_under_slug(tmp_path: Path) -> None:
-    """The background-task polling tool carries the connector slug prefix."""
+    """The background-task polling tool carries the connector slug prefix, and
+    exists only when some tool runs in the background — otherwise it is
+    context every agent pays for nothing."""
+    import copy
+
     from elliot_connector_runtime.cache import ConnectorCache
     from elliot_connector_runtime.executor import ToolExecutor
     from elliot_connector_runtime.server import create_runtime_server
@@ -1080,8 +1087,15 @@ def test_task_tool_namespaced_under_slug(tmp_path: Path) -> None:
     cfg_path = tmp_path / "pets.connector.json"
     cfg_path.write_text(json.dumps(MINIMAL_CONNECTOR))
     config = ConnectorCache().get(cfg_path)
-    executor = ToolExecutor(config, secrets={})
-    mcp = create_runtime_server(config, executor)
+    mcp = create_runtime_server(config, ToolExecutor(config, secrets={}))
+    assert mcp._tool_manager.get_tool("pets_get_task") is None
+
+    spec = copy.deepcopy(MINIMAL_CONNECTOR)
+    spec["tools"][0]["run_async"] = True
+    async_path = tmp_path / "pets-async.connector.json"
+    async_path.write_text(json.dumps(spec))
+    config = ConnectorCache().get(async_path)
+    mcp = create_runtime_server(config, ToolExecutor(config, secrets={}))
     assert mcp._tool_manager.get_tool("pets_get_task") is not None
     assert mcp._tool_manager.get_tool("elliot_get_task") is None
 
@@ -2010,3 +2024,201 @@ async def test_tools_without_ui_have_no_ui_meta() -> None:
         assert not (tool.meta or {}).get("ui")
         resources = await client.list_resources()
         assert not [r for r in resources.resources if str(r.uri).startswith("ui://")]
+
+
+@pytest.mark.parametrize("mode", ["legacy", "auto"])
+async def test_agent_sees_the_error_code_and_fix(mode: str, tmp_path: Path) -> None:
+    """Principle 3 on the wire: an agent that calls a tool wrongly must read
+    the code and what to do next, not just "Error executing tool X". The SDK
+    keeps the text only for a ``ToolError`` — anything else counts as a crash
+    and is reduced to the bare prefix — so handlers raise ``AgentToolError``."""
+    from mcp.client import Client
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from elliot_connector_runtime.cache import ConnectorCache
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.observation_store import ObservationStore as _Store
+    from elliot_connector_runtime.server import create_runtime_server
+
+    cfg_path = tmp_path / "pets.connector.json"
+    cfg_path.write_text(json.dumps(MINIMAL_CONNECTOR))
+    config = ConnectorCache().get(cfg_path)
+    mcp = create_runtime_server(
+        config,
+        ToolExecutor(config, secrets={}),
+        store=_Store(f"sqlite:///{tmp_path / 'obs.db'}"),
+    )
+
+    async with Client(mcp, mode=mode) as client:  # type: ignore[arg-type]
+        res = await client.call_tool(
+            "pets_submit_feedback", {"tool_id": "list_animals", "outcome": "great"}
+        )
+    assert res.is_error
+    text = " ".join(getattr(c, "text", "") for c in res.content)
+    assert "VALIDATION_INVALID_OUTCOME" in text, text
+    assert "outcome must be one of" in text, text
+
+    # Version-independent: the handler raises a ToolError, which every SDK
+    # release passes through to the client.
+    tool = mcp._tool_manager.get_tool("pets_submit_feedback")
+    assert tool is not None
+    with pytest.raises(ToolError, match="VALIDATION_INVALID_OUTCOME"):
+        await tool.fn(tool_id="list_animals", outcome="great")
+
+
+def _people_server(tmp_path: Path):  # type: ignore[no-untyped-def]
+    """A connector whose rows are people — the case privacy rules are for."""
+    from elliot_connector_runtime.executor import ToolExecutor
+    from elliot_connector_runtime.observation_store import ObservationStore
+    from elliot_connector_runtime.server import create_runtime_server
+    from elliot_connector_runtime.session_tracker import SessionTracker
+    from elliot_core.types import (
+        ConnectorConfig,
+        ParameterDefinition,
+        SourceConfig,
+        ToolDefinition,
+    )
+
+    class _Eng:
+        def query(self, sql, params):  # type: ignore[no-untyped-def]
+            return [
+                {"id": 1, "name": "Rex Carter", "email": "rex@example.com", "tier": "gold"},
+                {"id": 2, "name": "Ada Byron", "email": None, "tier": "silver"},
+            ]
+
+    tool = ToolDefinition(
+        id="find_customers",
+        name="find_customers",
+        description="Find customers by name; returns id, name, email and tier.",
+        category="READ",
+        source_ids=["people"],
+        sql="SELECT id, name, email, tier FROM people WHERE name LIKE :search_text LIMIT :limit",
+        parameters=[
+            ParameterDefinition(
+                name="search_text", type="string", required=False, description="Name to find"
+            ),
+            ParameterDefinition(
+                name="tier",
+                type="string",
+                required=False,
+                description="Only this tier",
+                enum=["gold", "silver"],
+            ),
+            ParameterDefinition(
+                name="limit",
+                type="integer",
+                required=False,
+                description="Rows to return",
+                default=20,
+                minimum=1,
+                maximum=50,
+            ),
+        ],
+    )
+    cfg = ConnectorConfig(
+        name="People",
+        slug="people",
+        version="1.0.0",
+        sources=[SourceConfig(id="people", name="people", type="file", url="x")],
+        tools=[tool],
+        skills=[],
+    )
+    store = ObservationStore(f"sqlite:///{tmp_path / 'obs.db'}")
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    mcp = create_runtime_server(
+        cfg,
+        ToolExecutor(cfg, secrets={}, engine=_Eng()),  # type: ignore[arg-type]
+        store=store,
+        tracker=tracker,
+    )
+    return mcp, store, tracker
+
+
+async def test_inputs_are_bounded_and_unknown_arguments_are_named(tmp_path: Path) -> None:
+    from mcp.client import Client
+
+    mcp, _store, _tracker = _people_server(tmp_path)
+    async with Client(mcp, mode="legacy") as client:  # type: ignore[arg-type]
+        listed = {t.name: t for t in (await client.list_tools()).tools}
+        tool = listed["find_customers"]
+        schema = tool.input_schema
+        assert schema["additionalProperties"] is False
+        limit = schema["properties"]["limit"]
+        assert (limit["minimum"], limit["maximum"], limit["default"]) == (1, 50, 20)
+        assert schema["properties"]["tier"]["enum"] == ["gold", "silver"]
+        assert tool.title == "Find customers"
+        # A tool over Elliot-held data does not reach the outside world.
+        assert tool.annotations.open_world_hint is False
+        # No background tool, so no polling tool to pay for.
+        assert "people_get_task" not in listed
+        # The result's shape is advertised, not a bare object.
+        out = tool.output_schema
+        assert out["required"] == ["rows", "count", "estimated_tokens"]
+        assert out["properties"]["rows"]["items"]["type"] == "object"
+
+        unknown = await client.call_tool("find_customers", {"query": "rex"})
+        text = unknown.content[0].text
+        assert unknown.is_error and "UNKNOWN_PARAM" in text and "query" in text, text
+
+        too_big = await client.call_tool("find_customers", {"limit": 1000})
+        text = too_big.content[0].text
+        assert too_big.is_error and "limit" in text and "50" in text, text
+        assert "pydantic" not in text
+
+        typo = await client.call_tool("find_customer", {})
+        text = typo.content[0].text
+        assert typo.is_error and "UNKNOWN_TOOL" in text and "find_customers" in text, text
+
+        ok = await client.call_tool("find_customers", {"search_text": "Rex", "tier": "gold"})
+        assert not ok.is_error
+        body = ok.content[0].text
+        # Compact JSON: the agent pays for no indentation.
+        assert "\n" not in body and '"count":2' in body
+        payload = json.loads(body)
+        assert payload["estimated_tokens"] >= len(body) // 8
+
+
+async def test_owner_sees_metadata_not_peoples_data(tmp_path: Path) -> None:
+    """What a tool returns, and what an end user's agent typed, is private.
+    The observation store and the session trace keep the shape of each call
+    (row count, fields, types, how many rows filled each) and the values of
+    closed choices only."""
+    from mcp.client import Client
+
+    mcp, store, tracker = _people_server(tmp_path)
+    async with Client(mcp, mode="legacy") as client:  # type: ignore[arg-type]
+        await client.call_tool("find_customers", {"search_text": "Rex Carter", "tier": "gold"})
+        resources = [str(r.uri) for r in (await client.list_resources()).resources]
+    assert not any(uri.startswith("connector://sample/") for uri in resources)
+
+    call = store.recent_tool_calls(5)[0]
+    stored = json.dumps(call, default=str)
+    event = [e for s in tracker.tail(5) for e in s.get("events") or []][-1]
+    traced = json.dumps(event, default=str)
+    for private in ("Rex Carter", "rex@example.com", "Ada Byron"):
+        assert private not in stored, private
+        assert private not in traced, private
+    assert event["arguments"]["tier"] == "gold"  # a closed choice
+    assert event["arguments"]["search_text"] == "‹text · 10 chars›"
+    assert event["result_preview"] is None
+    shape = {f["name"]: f for f in event["result_shape"]["fields"]}
+    assert event["result_shape"]["rows"] == 2
+    assert shape["email"] == {"name": "email", "type": "text", "filled": 1}
+
+
+async def test_feedback_keeps_contact_details_out(tmp_path: Path) -> None:
+    from mcp.client import Client
+
+    mcp, store, _tracker = _people_server(tmp_path)
+    async with Client(mcp, mode="legacy") as client:  # type: ignore[arg-type]
+        await client.call_tool(
+            "people_submit_feedback",
+            {
+                "tool_id": "find_customers",
+                "outcome": "partial",
+                "output_summary": "Got rex@example.com, phone +1 415 555 0134, no tier",
+            },
+        )
+    saved = store.recent_feedback(5)[0]["output_summary"]
+    assert "rex@example.com" not in saved and "555" not in saved
+    assert "‹email›" in saved and "no tier" in saved

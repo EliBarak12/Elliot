@@ -8,7 +8,7 @@ import structlog
 
 from elliot_core.errors import ElliotError, NotFoundError, SourceFetchError
 from elliot_core.sqlite.engine import SQLiteEngine
-from elliot_core.sqlite.flattener import flatten
+from elliot_core.sqlite.flattener import flatten, snake_case_for
 from elliot_core.tools.param_validation import coerce_value as _coerce  # noqa: F401  (re-exported)
 from elliot_core.tools.param_validation import validate_call_params
 from elliot_core.tools.query_builder import build_select_sql
@@ -123,7 +123,7 @@ class ToolExecutor:
         if tool.filter_groups or tool.return_fields or tool.having or tool.order_by:
             engine = SQLiteEngine()
             try:
-                engine.load_result(flatten(rows, source.id))
+                engine.load_result(flatten(rows, source.id, snake_case=snake_case_for(source)))
                 sql, sql_params = build_select_sql(tool, params)
                 rows = engine.query(sql, sql_params)
             finally:
@@ -165,7 +165,9 @@ class ToolExecutor:
 
                     engine.load_result(managed_flat_table(source, fetch_result.rows))
                 else:
-                    engine.load_result(flatten(fetch_result.rows, table_name))
+                    engine.load_result(
+                        flatten(fetch_result.rows, table_name, snake_case=snake_case_for(source))
+                    )
 
             if tool.sql:
                 # Defence in depth: a stored tool.sql must be a read-only

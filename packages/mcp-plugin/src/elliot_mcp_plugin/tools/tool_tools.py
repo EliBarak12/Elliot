@@ -209,7 +209,11 @@ async def _preview_passthrough(
     secrets = session.workspace.load_secrets()
     result = await fetch_endpoint(source, secrets, extra_params=api_params)
     rows = _shape_passthrough_rows(
-        tool, list(result.rows), source.table_name or source.id, validated
+        tool,
+        list(result.rows),
+        source.table_name or source.id,
+        validated,
+        snake_case=getattr(source, "column_style", "lower") == "snake",
     )
     rows = rows[:_PASSTHROUGH_PREVIEW_ROWS]
     log.info("tool.preview.passthrough", tool_id=tool.id, source_id=source.id, rows=len(rows))
@@ -235,6 +239,8 @@ def _shape_passthrough_rows(
     rows: list[dict[str, Any]],
     table_name: str,
     arguments: dict[str, Any],
+    *,
+    snake_case: bool = False,
 ) -> list[dict[str, Any]]:
     """Apply a passthrough tool's post-fetch shaping, exactly as the runtime does.
 
@@ -252,7 +258,7 @@ def _shape_passthrough_rows(
 
     engine = SQLiteEngine()
     try:
-        engine.load_result(flatten(rows, table_name=table_name))
+        engine.load_result(flatten(rows, table_name=table_name, snake_case=snake_case))
         if tool.sql:
             valid, reason = validate_tool_sql(tool.sql)
             if not valid:

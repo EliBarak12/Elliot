@@ -163,6 +163,12 @@ class SourceConfig(BaseModel):
     # table app-wide — every authenticated user of the connector shares it.
     user_scoped: bool = True
 
+    # How column names are made from the data's keys. "snake" turns
+    # ``discountPercentage`` into ``discount_percentage``; "lower" (sources
+    # discovered before snake_case existed) gives ``discountpercentage``.
+    # Fixed per source so its saved SQL keeps matching on every refresh.
+    column_style: Literal["lower", "snake"] = "lower"
+
     # Runtime tracking (populated after a fetch)
     table_name: str | None = None
     row_count: int | None = None

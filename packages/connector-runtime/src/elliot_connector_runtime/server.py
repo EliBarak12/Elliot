@@ -379,6 +379,12 @@ def _current_session_and_identity(ctx: Any) -> tuple[str | None, dict[str, Any] 
         client_name = sdk_identity.client_name
         client_version = sdk_identity.client_version
     identity = get_current_agent_identity()
+    if not client_name:
+        # A stateless call: the name the caller announced at initialize, so a
+        # rejected call is attributed like the caller's other calls.
+        recalled = recall_client(identity)
+        if recalled is not None:
+            client_name, client_version = recalled
     if client_name:
         with contextlib.suppress(Exception):
             identity = merge_client_info(identity, client_name, client_version)

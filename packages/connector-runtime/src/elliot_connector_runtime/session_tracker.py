@@ -633,16 +633,23 @@ def stitch_stateless_fragments(
         if flat:
             kept.append(_rebuild(flat, session_id=sid))
 
-    runs: list[list[_Flat]] = []
+    # Group per caller first, then split each caller's calls on idle gaps.
+    # Grouping only consecutive fragments let any interleaved call — another
+    # agent's, or this agent's own call attributed differently — cut one
+    # journey into several.
+    by_identity: dict[tuple[str | None, str | None, str | None], list[_Flat]] = {}
     for item in _flatten(loose):
-        if runs:
-            prev = runs[-1][-1]
-            same_identity = _identity_key(item[2]) == _identity_key(prev[2])
-            within_gap = item[0] - prev[0] <= idle_gap_s
-            if same_identity and within_gap:
-                runs[-1].append(item)
-                continue
-        runs.append([item])
+        by_identity.setdefault(_identity_key(item[2]), []).append(item)
+    runs: list[list[_Flat]] = []
+    for items in by_identity.values():
+        current: list[_Flat] = []
+        for item in items:
+            if current and item[0] - current[-1][0] > idle_gap_s:
+                runs.append(current)
+                current = []
+            current.append(item)
+        if current:
+            runs.append(current)
     for run in runs:
         kept.append(_rebuild(run))
 

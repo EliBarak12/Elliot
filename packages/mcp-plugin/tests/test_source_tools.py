@@ -1028,3 +1028,20 @@ def test_discovery_names_personal_and_secret_columns(mcp: FastMCP, tmp_path: Pat
     kinds = {c["name"]: c["kind"] for c in out["sensitive_columns"]}
     assert kinds == {"email": "personal", "password": "secret"}
     assert any(w.startswith("PERSONAL_DATA: email, password") for w in out["warnings"])
+
+
+def test_new_sources_name_columns_in_snake_case_and_keep_it(
+    mcp: FastMCP, session: ElliotSession, tmp_path: Path
+):
+    path = tmp_path / "products.json"
+    path.write_text('[{"id": 1, "discountPercentage": 5.5}, {"id": 2, "discountPercentage": 1}]')
+    out = _tool(mcp, "elliot_discover_source")(
+        source_type="file", config={"path": str(path)}, name="products"
+    )
+    assert "discount_percentage" in out["columns"]
+    src = session.sources[out["source_id"]]
+    assert src.column_style == "snake" and src.config_snapshot["column_style"] == "snake"
+    # A refresh rebuilds the table with the same names, so saved SQL keeps working.
+    _tool(mcp, "elliot_refresh_source")(source_id=out["source_id"])
+    names = [c["name"] for c in session.engine.get_table_schema("products")]
+    assert "discount_percentage" in names

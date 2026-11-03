@@ -14,7 +14,24 @@ _MAX_INLINE_KEYS = (
 )
 
 
-def flatten(data: list[Any], table_name: str) -> FlattenResult:
+def flatten(data: list[Any], table_name: str, *, snake_case: bool = False) -> FlattenResult:
+    """See ``_flatten``. ``snake_case`` names columns ``discount_percentage``
+    instead of ``discountpercentage`` (a source's ``column_style``)."""
+    from elliot_core.sqlite.column_namer import _SNAKE_CASE
+
+    token = _SNAKE_CASE.set(snake_case)
+    try:
+        return _flatten(data, table_name)
+    finally:
+        _SNAKE_CASE.reset(token)
+
+
+def snake_case_for(source: Any) -> bool:
+    """Whether a source's columns are snake_cased (see ``column_style``)."""
+    return getattr(source, "column_style", "lower") == "snake"
+
+
+def _flatten(data: list[Any], table_name: str) -> FlattenResult:
     """Flatten a list of JSON objects into SQLite-ready tables.
 
     Each output row carries an ``_id`` (sequential within its table) and,

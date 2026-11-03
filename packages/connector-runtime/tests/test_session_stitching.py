@@ -67,6 +67,16 @@ class TestHeuristicStitching:
         b["agent_identity"]["principal"] = "p_2222"
         assert len(stitch_stateless_fragments([a, b])) == 2
 
+    def test_an_interleaved_call_does_not_split_a_journey(self) -> None:
+        raw = [
+            _fragment("req-a1", 1000.0, client="claude"),
+            _fragment("req-b1", 1005.0, client="cursor"),
+            _fragment("req-a2", 1010.0, client="claude"),
+        ]
+        out = stitch_stateless_fragments(raw)
+        by_client = {s["agent_identity"]["client"]: s for s in out}
+        assert len(out) == 2 and by_client["claude"]["total_tool_calls"] == 2
+
     def test_different_agents_do_not_merge(self) -> None:
         raw = [
             _fragment("req-aaaaaaaa", 1000.0, client="claude"),

@@ -19,7 +19,7 @@ from elliot_core.paths import PathEscape, safe_join
 from elliot_core.sources.api_fetcher import _resolve_secret, fetch_endpoint
 from elliot_core.sources.db_connector import query_database
 from elliot_core.sources.file_reader import read_file, resolve_source_path
-from elliot_core.sqlite.flattener import flatten
+from elliot_core.sqlite.flattener import flatten, snake_case_for
 from elliot_core.types.source import SourceConfig
 from elliot_core.types.sqlite import FlattenResult
 from elliot_mcp_plugin.oauth_login import LOGIN_TTL_S, start_login
@@ -745,6 +745,10 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 }
 
             source_id = str(uuid.uuid4())
+            # New sources name columns in snake_case (discount_percentage, not
+            # discountpercentage). Saved in the source's config, so every
+            # refresh and the published connector name them the same way.
+            config = {**config, "column_style": config.get("column_style", "snake")}
             cfg = _build_source_config(key, config, source_id, name)
             secrets = session.workspace.load_secrets()
 
@@ -808,7 +812,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 result = query_database(cfg, secrets)
                 rows = result.rows
 
-            flat = flatten(rows, table_name=name)
+            flat = flatten(rows, table_name=name, snake_case=snake_case_for(cfg))
             session.engine.load_result(flat)
             tables, join_hint = _describe_flattened_schema(flat)
 
@@ -1109,7 +1113,11 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             # omits the content blob. Re-materialize straight from the stored
             # SourceConfig instead of routing through discover.
             if src.type == "file":
-                flat = flatten(read_file(src).rows, table_name=src.table_name or src.name)
+                flat = flatten(
+                    read_file(src).rows,
+                    table_name=src.table_name or src.name,
+                    snake_case=snake_case_for(src),
+                )
                 session.engine.load_result(flat)
                 src.row_count = len(flat.primary_table.rows)
                 session.save()

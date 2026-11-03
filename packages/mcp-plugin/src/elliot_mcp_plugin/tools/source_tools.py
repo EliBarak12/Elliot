@@ -319,6 +319,68 @@ def _describe_flattened_schema(flat: FlattenResult) -> tuple[list[dict[str, Any]
     return tables, (_JOIN_HINT if flat.related_tables else None)
 
 
+async def _fetch_every_page(
+    cfg: Any,
+    config: dict[str, Any],
+    secrets: dict[str, str],
+    first: Any,
+    token_override: str | None,
+) -> Any:
+    """Load the whole dataset when the first page says there is more.
+
+    A snapshot of page one (30 of 194 products) made tools answer from a
+    fraction of the data as if it were all of it — "product 150 does not
+    exist", enums missing real categories. When the author set no pagination
+    and the first page shows how the API pages, fetch every page with it and
+    save the pagination on the source so refreshes and the published
+    connector page too. If paging fails or loads nothing more, keep the first
+    page and its PARTIAL_DATASET warning.
+    """
+    from elliot_core.types.source import PaginationConfig
+
+    suggested = getattr(first, "suggested_pagination", None)
+    if not suggested or cfg.pagination.strategy != "none" or "pagination" in config:
+        return first
+    cfg.pagination = PaginationConfig.model_validate(suggested)
+    try:
+        if token_override is not None:
+            full = await fetch_endpoint(cfg, secrets, auth_token_override=token_override)
+        else:
+            full = await fetch_endpoint(cfg, secrets)
+    except Exception as exc:  # noqa: BLE001 - the first page still stands
+        log.warning("source.autopaginate.failed", error=str(exc))
+        cfg.pagination = PaginationConfig()
+        return first
+    n = len(first.rows)
+    # An API that ignores the paging parameters hands back page one again:
+    # that is duplicates, not more data.
+    repeated = n > 0 and full.rows[n : 2 * n] == first.rows
+    if len(full.rows) <= n or repeated:
+        cfg.pagination = PaginationConfig()
+        return first
+    config["pagination"] = cfg.pagination.model_dump(exclude_defaults=True)
+    partial = [w for w in first.warnings if str(w).startswith("PARTIAL_DATASET")]
+    total = None
+    if partial:
+        import re as _re
+
+        match = _re.search(r"of (\d+) records", partial[0])
+        total = int(match.group(1)) if match else None
+    note = (
+        f"AUTO_PAGINATED: the API pages its results, so Elliot fetched {len(full.rows)} rows "
+        f"over {full.page_count} pages and saved that pagination on the source."
+    )
+    warnings = [w for w in full.warnings if not str(w).startswith("Reached max_pages")]
+    if total and len(full.rows) < total:
+        warnings.append(
+            f"PARTIAL_DATASET: loaded {len(full.rows)} of {total} records — the page limit "
+            "was reached. Raise pagination.max_pages to load the rest."
+        )
+    full.warnings = [note, *warnings]
+    log.info("source.autopaginated", rows=len(full.rows), pages=full.page_count)
+    return full
+
+
 def _short(value: Any, limit: int = 40) -> Any:
     text = value if isinstance(value, str) else None
     if text is not None and len(text) > limit:
@@ -739,6 +801,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                     result = await fetch_endpoint(cfg, secrets, auth_token_override=token_override)
                 else:
                     result = await fetch_endpoint(cfg, secrets)
+                result = await _fetch_every_page(cfg, config, secrets, result, token_override)
                 rows = result.rows
 
             else:  # postgres / mysql
@@ -772,6 +835,26 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
             # records array; set data_path" — which previously never reached the
             # builder, so a connector whose tools return [] looked healthy.
             warnings = list(flat.warnings) + list(getattr(result, "warnings", []) or [])
+            # Personal and secret columns, by name, across every table: the
+            # tools drafted next should leave them out unless the job needs
+            # them (lint flags any READ tool that returns one).
+            from elliot_core.pii import sensitive_fields
+
+            sensitive = sensitive_fields(
+                list(
+                    dict.fromkeys(
+                        c.name
+                        for t in [flat.primary_table, *flat.related_tables]
+                        for c in t.columns
+                    )
+                )
+            )
+            if sensitive:
+                names = ", ".join(f["name"] for f in sensitive[:8])
+                warnings.append(
+                    f"PERSONAL_DATA: {names} hold secrets or personal data. Leave them out of "
+                    "tools unless an agent needs them for the job."
+                )
             return {
                 "source_id": source_id,
                 "table_name": name,
@@ -785,6 +868,7 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
                 "tables": tables,
                 "schema_hint": join_hint,
                 "warnings": warnings,
+                "sensitive_columns": sensitive,
             }
 
         except ElliotError as exc:

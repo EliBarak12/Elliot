@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from .danger_zone import DESTRUCTIVE_VERBS, HIGH_IMPACT_VERBS, name_tokens
 from .sql import extract_sql_params, referenced_base_tables
@@ -809,6 +809,83 @@ def _is_list_tool(tool_id: str) -> bool:
     return first in _LIST_TOOL_PREFIXES
 
 
+_SELECT_LIST = re.compile(r"^\s*SELECT\s+(?:DISTINCT\s+)?(.*?)\s+FROM\s", re.IGNORECASE | re.DOTALL)
+_LAST_IDENT = re.compile(r"[\"`\[]?([A-Za-z_][\w]*)[\"`\]]?\s*$")
+
+
+def returned_field_names(tool: Any) -> list[str]:
+    """The names a READ tool hands back, as far as the definition says.
+
+    Read from ``return_fields`` (alias or field) and, for SQL, each item of
+    the SELECT list (its alias, or its column). ``*`` and computed values
+    without an alias say nothing about names and are skipped.
+    """
+    names: list[str] = []
+    for rf in getattr(tool, "return_fields", None) or []:
+        name = (getattr(rf, "alias", None) or getattr(rf, "field", "") or "").strip()
+        if name and name != "*":
+            names.append(name)
+    match = _SELECT_LIST.match(getattr(tool, "sql", None) or "")
+    if match:
+        depth = 0
+        item = ""
+        items: list[str] = []
+        for ch in match.group(1):
+            depth += ch == "("
+            depth -= ch == ")"
+            if ch == "," and depth == 0:
+                items.append(item)
+                item = ""
+            else:
+                item += ch
+        items.append(item)
+        for raw in items:
+            last = _LAST_IDENT.search(raw.strip())
+            if last and last.group(1) != "*":
+                names.append(last.group(1))
+    return names
+
+
+def _personal_field_issues(config: ConnectorConfig) -> list[LintIssue]:
+    """READ tools that return secrets (error) or personal data (warning).
+
+    By name alone, so it needs no product intent: a public catalog connector
+    that returned reviewers' email addresses passed lint before.
+    """
+    from .pii import classify_field
+
+    out: list[LintIssue] = []
+    for tool in config.tools:
+        if tool.category != "READ":
+            continue
+        for name in dict.fromkeys(returned_field_names(tool)):
+            kind = classify_field(name)
+            if kind == "secret":
+                out.append(
+                    LintIssue(
+                        severity="ERROR",
+                        code="SENSITIVE_FIELD_EXPOSED",
+                        tool_id=tool.id,
+                        message=f"Tool '{tool.id}' returns '{name}', which looks like a secret.",
+                        suggestion=f"Stop returning '{name}'. Agents never need it.",
+                    )
+                )
+            elif kind == "personal":
+                out.append(
+                    LintIssue(
+                        severity="WARN",
+                        code="PERSONAL_FIELD_EXPOSED",
+                        tool_id=tool.id,
+                        message=f"Tool '{tool.id}' returns '{name}', personal data about someone.",
+                        suggestion=(
+                            f"Keep '{name}' only if agents need it for this job, and only on a "
+                            "connector whose users may see it."
+                        ),
+                    )
+                )
+    return out
+
+
 def lint_connector(
     config: ConnectorConfig,
     sensitive_fields: list[str] | None = None,
@@ -1145,6 +1222,8 @@ def lint_connector(
                     suggestion="Use auth.secret_key to reference an env var; never put secrets in URLs.",
                 )
             )
+
+    issues.extend(_personal_field_issues(config))
 
     for field in sensitive_fields or []:
         if not field.strip():

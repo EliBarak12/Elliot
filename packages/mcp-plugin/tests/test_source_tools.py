@@ -970,3 +970,61 @@ async def test_connect_then_discover_oauth2_end_to_end(
     # Token stays in memory only — never serialized into a stored SourceConfig.
     dumped = json.dumps([s.model_dump() for s in session.sources.values()])
     assert "live-tok" not in dumped
+
+
+@respx.mock
+def test_discovery_fetches_every_page_when_the_api_says_there_are_more(
+    mcp: FastMCP, session: ElliotSession
+):
+    """DummyJSON answers /products with 30 of 194 and {total, skip, limit}.
+    Discovery used to keep those 30; now it pages through and saves how."""
+    import httpx
+
+    def page(request: httpx.Request) -> httpx.Response:
+        skip = int(request.url.params.get("skip", 0))
+        limit = int(request.url.params.get("limit", 30))
+        items = [{"id": i, "title": f"Item {i}"} for i in range(skip, min(skip + limit, 75))]
+        return httpx.Response(
+            200, json={"products": items, "total": 75, "skip": skip, "limit": limit}
+        )
+
+    respx.get("https://api.example.com/products").mock(side_effect=page)
+    out = _tool(mcp, "elliot_discover_source")(
+        source_type="rest", config={"url": "https://api.example.com/products"}, name="products"
+    )
+    assert out["row_count"] == 75, out
+    assert out["warnings"][0].startswith("AUTO_PAGINATED")
+    assert not any(w.startswith("PARTIAL_DATASET") for w in out["warnings"])
+    src = session.sources[out["source_id"]]
+    assert src.pagination.strategy == "offset" and src.pagination.offset_param == "skip"
+    assert src.config_snapshot["pagination"]["offset_param"] == "skip"
+
+
+@respx.mock
+def test_discovery_keeps_the_first_page_when_paging_does_not_help(
+    mcp: FastMCP, session: ElliotSession
+):
+    import httpx
+
+    respx.get("https://api.example.com/stuck").mock(
+        return_value=httpx.Response(
+            200, json={"items": [{"id": 1}, {"id": 2}], "total": 9, "skip": 0, "limit": 2}
+        )
+    )
+    out = _tool(mcp, "elliot_discover_source")(
+        source_type="rest", config={"url": "https://api.example.com/stuck"}, name="stuck"
+    )
+    assert out["row_count"] == 2
+    assert any(w.startswith("PARTIAL_DATASET") for w in out["warnings"])
+    assert session.sources[out["source_id"]].pagination.strategy == "none"
+
+
+def test_discovery_names_personal_and_secret_columns(mcp: FastMCP, tmp_path: Path):
+    path = tmp_path / "users.csv"
+    path.write_text("id,firstName,email,password\n1,Ada,ada@example.com,x\n")
+    out = _tool(mcp, "elliot_discover_source")(
+        source_type="file", config={"path": str(path)}, name="users"
+    )
+    kinds = {c["name"]: c["kind"] for c in out["sensitive_columns"]}
+    assert kinds == {"email": "personal", "password": "secret"}
+    assert any(w.startswith("PERSONAL_DATA: email, password") for w in out["warnings"])

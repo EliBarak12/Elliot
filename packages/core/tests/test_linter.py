@@ -595,7 +595,9 @@ def test_sensitive_field_exposed_is_error() -> None:
     assert any(i.code == "SENSITIVE_FIELD_EXPOSED" and i.severity == "ERROR" for i in issues)
 
 
-def test_sensitive_field_not_passed_no_issue() -> None:
+def test_secret_fields_are_flagged_by_name_without_a_product_intent() -> None:
+    """Returning an SSN used to pass lint unless the product intent listed it
+    as never-expose; the name alone is enough."""
     config = ConnectorConfig(
         name="S",
         slug="s",
@@ -603,7 +605,50 @@ def test_sensitive_field_not_passed_no_issue() -> None:
         tools=[_tool("list_users", sql="SELECT id, ssn FROM users LIMIT 20")],
     )
     issues = lint_connector(config)
-    assert not any(i.code == "SENSITIVE_FIELD_EXPOSED" for i in issues)
+    flagged = [i for i in issues if i.code == "SENSITIVE_FIELD_EXPOSED"]
+    assert flagged and flagged[0].severity == "ERROR" and "'ssn'" in flagged[0].message
+
+
+def test_personal_fields_are_a_warning_and_aliases_count() -> None:
+    config = ConnectorConfig(
+        name="S",
+        slug="s",
+        version="1.0.0",
+        tools=[
+            _tool(
+                "list_reviews",
+                sql=(
+                    "SELECT r.rating, ROUND(AVG(r.score), 1) AS score, "
+                    'r."reviewerEmail" AS contact, r.reviewer_phone FROM reviews r LIMIT 20'
+                ),
+            ),
+            _tool(
+                "save_contact",
+                category="WRITE",
+                description="Save a contact email for follow-up",
+                sql=None,
+            ),
+        ],
+    )
+    issues = [i for i in lint_connector(config) if i.code == "PERSONAL_FIELD_EXPOSED"]
+    assert {i.tool_id for i in issues} == {"list_reviews"}
+    assert all(i.severity == "WARN" for i in issues)
+    assert any("reviewer_phone" in i.message for i in issues)
+
+
+def test_pii_classifier() -> None:
+    from elliot_core.pii import classify_field, sensitive_fields
+
+    assert classify_field("reviewerEmail") == "personal"
+    assert classify_field("bank.cardNumber") == "secret"
+    assert classify_field("estimated_tokens") is None
+    assert classify_field("wallet_balance") is None
+    assert classify_field("access_token") == "secret"
+    assert classify_field("") is None
+    assert sensitive_fields(["id", "phone", "password"]) == [
+        {"name": "phone", "kind": "personal"},
+        {"name": "password", "kind": "secret"},
+    ]
 
 
 def test_sensitive_field_in_write_api_mapping_is_error() -> None:

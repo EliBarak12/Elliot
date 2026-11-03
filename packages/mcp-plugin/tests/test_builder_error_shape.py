@@ -88,6 +88,14 @@ def test_blocked_gate_keeps_its_detail_but_is_an_error() -> None:
         content=[types.TextContent(type="text", text='{"status": "blocked"}')]
     )
     assert _as_error_when_refused(text_only).is_error
+    import pytest
+    from elliot_core.mcp_compat import ToolError
+
+    nested = types.CallToolResult(
+        content=[], structured_content={"error": {"code": "TOO_BIG", "message": "Max 10 MB."}}
+    )
+    with pytest.raises(ToolError, match=r"^\[TOO_BIG\] Max 10 MB\.$"):
+        _as_error_when_refused(nested)
     not_json = types.CallToolResult(content=[types.TextContent(type="text", text="{oops")])
     assert _as_error_when_refused(not_json) is not_json
     assert _as_error_when_refused("not a result") == "not a result"

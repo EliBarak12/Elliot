@@ -211,10 +211,18 @@ users authenticate themselves at runtime.
 - `format` — `csv`, `json`, or `jsonl`.
 - `encoding` (optional, default `utf-8`), `delimiter` (optional, default `,`).
 
+<!-- local-only -->
 **If the file is on the user's machine and not under Elliot's workspace**,
 upload it first with `elliot_upload_file(file_name, content, encoding="text")`.
 It returns a `managed_path` already inside the allowlist — use that as
 `config.path`.
+<!-- /local-only -->
+<!-- hosted-only
+**If the file is on the user's machine**, call
+`elliot_request_file_upload(file_name)`. It returns an `upload_url` (and a
+ready `curl`) for the user to send the file straight to Elliot Cloud, plus the
+`managed_path` to use as `config.path` once they have.
+-->
 
 ## Step 3 — Call `elliot_discover_source`
 
@@ -255,7 +263,7 @@ If `elliot_discover_source` returns an error:
 | `AUTH_REQUIRED` ("client id is not set") | The user hasn't registered the OAuth **app** yet. Tell them to create an OAuth app with the provider, allow a `http://127.0.0.1` loopback redirect, and export the **Client ID** + **Client Secret** as the env vars named in `client_id_secret` / `client_secret_secret`. Then retry. These are app-level, one-time, not a personal token. |
 | `AUTH_REQUIRED` (login) | An `oauth2` source needs a login. During **discovery**, surface the `authorize_url`<!-- local-only --> (`elliot_connect_source` with the same args returns it)<!-- /local-only -->, let the user log in, then retry discover. At **runtime**, a `per_user` source surfaces connect URL(s) in `details.connect`; the user logs in once, then retry. Never paste a token. |
 | `VALIDATION_ERROR` | The `config` shape is wrong for this `source_type` (a missing/misnamed field, a bad `encoding`, an unsupported file extension). Read the message, fix the offending field, and retry. |
-| `FILE_NOT_FOUND` / `FILE_TOO_LARGE` / `INVALID_FILE_NAME` | A file source problem — a path outside the allowlist, a too-large upload, or a bad name. Upload the file with `elliot_upload_file` and use the returned `managed_path`. |
+| `FILE_NOT_FOUND` / `FILE_TOO_LARGE` / `INVALID_FILE_NAME` | A file source problem — a path outside the allowlist, a too-large upload, or a bad name. Upload the file<!-- local-only --> with `elliot_upload_file`<!-- /local-only --> and use the returned `managed_path`. |
 | anything else | Surface the error message verbatim and ask the user how they want to proceed. |
 
 Do not retry blindly. Errors from Elliot are actionable by design — read the

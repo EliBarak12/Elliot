@@ -430,6 +430,9 @@ def _as_error_when_refused(result: Any) -> Any:
         if match:
             raise ToolError(f"[{match.group(1)}] {match.group(2)}")
     error = structured.get("error")
+    if isinstance(error, dict) and isinstance(error.get("message"), str):
+        code = error.get("code") if isinstance(error.get("code"), str) else "REFUSED"
+        raise ToolError(f"[{code}] {error['message']}")
     if isinstance(error, str) and error:
         code = structured.get("code") if isinstance(structured.get("code"), str) else None
         match = _ERROR_TEXT.match(error)

@@ -89,6 +89,7 @@ def test_blocked_gate_keeps_its_detail_but_is_an_error() -> None:
     )
     assert _as_error_when_refused(text_only).is_error
     import pytest
+
     from elliot_core.mcp_compat import ToolError
 
     nested = types.CallToolResult(

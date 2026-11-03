@@ -521,9 +521,15 @@ class SessionTracker:
 STITCH_IDLE_GAP_S = 900.0  # 15 min between calls ends a logical session
 
 
-def _identity_key(identity: dict[str, Any] | None) -> tuple[str | None, str | None]:
+def _identity_key(
+    identity: dict[str, Any] | None,
+) -> tuple[str | None, str | None, str | None]:
+    """Who a fragment came from: client, model, and the pseudonymous caller.
+
+    The caller (``principal``) keeps two people who use the same client from
+    being stitched into one journey."""
     ident = identity or {}
-    return (ident.get("client"), ident.get("model"))
+    return (ident.get("client"), ident.get("model"), ident.get("principal"))
 
 
 # (ts, parent_session_id, identity, agent_hint, event_dict)
@@ -564,9 +570,15 @@ def stitch_stateless_fragments(
 
     for s in wire:
         sid = str(s.get("session_id") or "")
-        # An Elliot-minted handle is exact by construction; any other id that
-        # recurs across fragments was a deliberate client correlation id.
-        if sid and (is_minted_handle(sid) or sid_counts.get(sid, 0) > 1):
+        # A handle that recurs across fragments was echoed back by the client:
+        # that IS the journey. A minted handle seen once only names its own
+        # request (the client never echoed it), so on its own it proves
+        # nothing — unless that fragment already holds several calls (a
+        # stateful connection). Treating every minted handle as exact left
+        # each stateless call as its own "session" (17 sessions for 18 calls).
+        echoed = sid_counts.get(sid, 0) > 1
+        whole = is_minted_handle(sid) and len(s.get("events") or []) > 1
+        if sid and (echoed or whole):
             by_handle.setdefault(sid, []).append(s)
         else:
             loose.append(s)

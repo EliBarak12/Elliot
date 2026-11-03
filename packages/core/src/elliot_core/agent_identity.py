@@ -30,6 +30,9 @@ from typing import Any
 
 __all__ = [
     "AgentIdentity",
+    "principal_from_headers",
+    "recall_client",
+    "remember_client",
     "parse_agent_identity",
     "merge_client_info",
     "get_current_agent_identity",
@@ -53,6 +56,13 @@ class AgentIdentity:
     # not carry, so it must be volunteered by the client (X-Model header / UA).
     protocol_version: str | None = None
     capabilities: tuple[str, ...] | None = None
+    # A pseudonymous id for WHO is calling — a short hash of the signed-in
+    # end user (or of the connector key / bearer token when there is no
+    # user). Never reversible to the person. It keeps two people's calls
+    # from being stitched into one "session" just because they use the same
+    # client, and lets a client name learned at initialize follow the same
+    # caller's later stateless calls.
+    principal: str | None = None
 
     def display(self) -> str:
         """One-line label for logs and the legacy ``agent_hint`` column."""
@@ -79,6 +89,7 @@ class AgentIdentity:
             "user_agent": self.user_agent,
             "protocol_version": self.protocol_version,
             "capabilities": list(self.capabilities) if self.capabilities is not None else None,
+            "principal": self.principal,
         }
 
 
@@ -163,7 +174,65 @@ def parse_agent_identity(headers: Mapping[str, str]) -> AgentIdentity:
         model=model,
         modality=modality,
         user_agent=user_agent,
+        principal=principal_from_headers(headers),
     )
+
+
+def _digest(value: str) -> str:
+    import hashlib
+
+    return "p_" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def principal_from_headers(headers: Mapping[str, str]) -> str | None:
+    """A pseudonymous caller id: the end user if known, else the credential.
+
+    The signed-in Elliot user (``x-elliot-user``, set by the gateway after it
+    verified the token) is the most stable; a connector key or bearer token
+    stands in when there is no user. Only a truncated SHA-256 is kept.
+    """
+    for name in ("x-elliot-user", "x-elliot-key", "authorization"):
+        value = (headers.get(name) or "").strip()
+        if value:
+            return _digest(f"{name}:{value}")
+    return None
+
+
+# Client names learned from ``initialize``, for the stateless calls after it.
+# On a stateless transport each request stands alone: the handshake carries
+# ``clientInfo`` ("review-agent", "claude-ai") but tool calls do not, so they
+# were attributed to the HTTP library ("python-httpx/0.28"). Keyed by caller
+# and User-Agent, bounded, and expiring.
+_CLIENT_MEMORY_TTL_S = 6 * 3600.0
+_CLIENT_MEMORY_MAX = 4096
+_client_memory: dict[tuple[str | None, str | None], tuple[str, str | None, float]] = {}
+
+
+def remember_client(
+    identity: AgentIdentity | None, name: str | None, version: str | None = None
+) -> None:
+    """Record the client name a caller announced in its handshake."""
+    import time
+
+    if not name or identity is None or not (identity.principal or identity.user_agent):
+        return
+    key = (identity.principal, identity.user_agent)
+    _client_memory.pop(key, None)
+    _client_memory[key] = (name, version, time.time())
+    while len(_client_memory) > _CLIENT_MEMORY_MAX:
+        _client_memory.pop(next(iter(_client_memory)))
+
+
+def recall_client(identity: AgentIdentity | None) -> tuple[str, str | None] | None:
+    """The client name this caller announced at its last handshake, if fresh."""
+    import time
+
+    if identity is None or not (identity.principal or identity.user_agent):
+        return None
+    hit = _client_memory.get((identity.principal, identity.user_agent))
+    if hit is None or time.time() - hit[2] > _CLIENT_MEMORY_TTL_S:
+        return None
+    return hit[0], hit[1]
 
 
 def merge_client_info(

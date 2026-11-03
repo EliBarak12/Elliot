@@ -66,6 +66,7 @@ __all__ = [
     "apply_tool_annotations",
     "build_http_app",
     "capability_names",
+    "client_info_middleware",
     "create_server",
     "get_client_identity",
     "override_resource_text",
@@ -237,6 +238,28 @@ def wrap_tool_calls(mcp: MCPServer, make_wrapper: Callable[[CallToolFn], CallToo
     tool_manager.call_tool = make_wrapper(  # type: ignore[assignment, method-assign]
         tool_manager.call_tool
     )
+
+
+async def client_info_middleware(ctx: Any, call_next: Callable[[Any], Awaitable[Any]]) -> Any:
+    """Remember the ``clientInfo`` a caller announces at ``initialize``.
+
+    On the stateless transport later tool calls carry no client info, so
+    without this they are attributed to whatever HTTP library sent them.
+    See ``agent_identity.remember_client``.
+    """
+    if getattr(ctx, "method", None) == "initialize":
+        params = getattr(ctx, "params", None)
+        info = params.get("clientInfo") if isinstance(params, Mapping) else None
+        if isinstance(info, Mapping) and isinstance(info.get("name"), str):
+            from elliot_core.agent_identity import get_current_agent_identity, remember_client
+
+            version = info.get("version")
+            remember_client(
+                get_current_agent_identity(),
+                info["name"],
+                version if isinstance(version, str) else None,
+            )
+    return await call_next(ctx)
 
 
 async def session_meta_middleware(ctx: Any, call_next: Callable[[Any], Awaitable[Any]]) -> Any:

@@ -147,3 +147,67 @@ def test_contextvar_set_get_reset() -> None:
     finally:
         reset_current_agent_identity(token)
     assert get_current_agent_identity() is None
+
+
+# ── who is calling, pseudonymously, and the client they announced ────────────
+
+
+def test_principal_is_a_stable_pseudonym_for_the_caller():
+    from elliot_core.agent_identity import parse_agent_identity, principal_from_headers
+
+    a = principal_from_headers({"x-elliot-user": "user_123"})
+    assert a and a.startswith("p_") and "user_123" not in a
+    assert a == principal_from_headers({"x-elliot-user": "user_123", "x-elliot-key": "k"})
+    assert principal_from_headers({"x-elliot-key": "k"}) != a
+    assert principal_from_headers({"authorization": "Bearer t"}) is not None
+    assert principal_from_headers({}) is None
+    ident = parse_agent_identity({"x-elliot-user": "user_123", "user-agent": "python-httpx/0.28"})
+    assert ident.principal == a and ident.to_dict()["principal"] == a
+
+
+def test_client_name_announced_at_initialize_follows_the_caller(monkeypatch):
+    from elliot_core import agent_identity as ai
+
+    monkeypatch.setattr(ai, "_client_memory", {})
+    caller = ai.AgentIdentity(user_agent="python-httpx/0.28", principal="p_1")
+    other = ai.AgentIdentity(user_agent="python-httpx/0.28", principal="p_2")
+    assert ai.recall_client(caller) is None
+    ai.remember_client(caller, "review-agent", "1.0")
+    assert ai.recall_client(caller) == ("review-agent", "1.0")
+    assert ai.recall_client(other) is None
+    # Nothing to key on, or nothing announced: not remembered.
+    ai.remember_client(ai.AgentIdentity(), "x")
+    ai.remember_client(caller, None)
+    assert ai.recall_client(None) is None and ai.recall_client(ai.AgentIdentity()) is None
+    # Expired entries are ignored; the memory is bounded.
+    monkeypatch.setattr(ai, "_CLIENT_MEMORY_TTL_S", -1.0)
+    assert ai.recall_client(caller) is None
+    monkeypatch.setattr(ai, "_CLIENT_MEMORY_MAX", 2)
+    for i in range(5):
+        ai.remember_client(ai.AgentIdentity(principal=f"p_{i}"), "c")
+    assert len(ai._client_memory) == 2
+
+
+async def test_initialize_middleware_remembers_client_info(monkeypatch):
+    from types import SimpleNamespace
+
+    from elliot_core import agent_identity as ai
+    from elliot_core.mcp_compat import client_info_middleware
+
+    monkeypatch.setattr(ai, "_client_memory", {})
+    caller = ai.AgentIdentity(user_agent="ua", principal="p_9")
+    token = ai.set_current_agent_identity(caller)
+    try:
+
+        async def call_next(ctx):  # type: ignore[no-untyped-def]
+            return "ok"
+
+        init = SimpleNamespace(
+            method="initialize", params={"clientInfo": {"name": "review-agent", "version": "2"}}
+        )
+        assert await client_info_middleware(init, call_next) == "ok"
+        other = SimpleNamespace(method="tools/call", params={"name": "x"})
+        assert await client_info_middleware(other, call_next) == "ok"
+    finally:
+        ai.reset_current_agent_identity(token)
+    assert ai.recall_client(caller) == ("review-agent", "2")

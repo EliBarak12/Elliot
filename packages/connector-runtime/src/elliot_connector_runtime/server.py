@@ -32,6 +32,7 @@ from elliot_core.agent_identity import (
     AgentIdentity,
     get_current_agent_identity,
     merge_client_info,
+    recall_client,
     set_current_agent_identity,
 )
 from elliot_core.apps import build_apps_extension, tool_ui_meta, ui_resource_uri
@@ -53,6 +54,7 @@ from elliot_core.mcp_compat import (
     MCPDeprecationWarning,
     ToolError,
     build_http_app,
+    client_info_middleware,
     get_client_identity,
     register_legacy_set_level,
     session_meta_middleware,
@@ -711,7 +713,7 @@ def create_runtime_server(
     mcp = FastMCP(
         cfg.name or "elliot-runtime",
         instructions=instructions,
-        middleware=[session_meta_middleware],
+        middleware=[session_meta_middleware, client_info_middleware],
         extensions=extensions or None,
         cache_hints=_default_cache_hints(),
     )
@@ -1288,6 +1290,12 @@ def _register_tool(
             if not client_name and header_client:
                 client_name = header_client
                 client_version = client_version or header_client_version
+            if not client_name:
+                # A stateless call after this caller's initialize: use the
+                # name it announced there rather than its HTTP library's.
+                recalled = recall_client(get_current_agent_identity())
+                if recalled is not None:
+                    client_name, client_version = recalled
         if client_name or protocol_version or capabilities or header_model:
             with contextlib.suppress(Exception):
                 set_current_agent_identity(

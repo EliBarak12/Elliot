@@ -72,6 +72,16 @@ def test_design_time_uses_the_bound_caller_then_a_saved_test_value() -> None:
     }
 
 
+def test_design_time_reads_an_exported_test_value_only_where_host_env_is_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CALLER_SUB", "env-user")
+    assert _resolve_secret("{{ caller:sub }}", {}) == "env-user"
+    monkeypatch.setenv("ELLIOT_RUNTIME_NO_HOST_ENV_SECRETS", "1")
+    with pytest.raises(CallerCredentialMissingError):
+        _resolve_secret("{{ caller:sub }}", {})
+
+
 def test_design_time_without_a_test_value_says_how_to_add_one() -> None:
     with pytest.raises(CallerCredentialMissingError, match="CALLER_TOKEN"):
         _resolve_secret("{{ caller:token }}", {})

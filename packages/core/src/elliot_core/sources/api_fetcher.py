@@ -15,6 +15,7 @@ from elliot_core.caller import CallerCredentialMissingError, bound_caller, calle
 from elliot_core.errors import SourceFetchError
 from elliot_core.http import SSRFError, safe_client, validate_url
 from elliot_core.redaction import redact_url
+from elliot_core.secrets import host_env_secrets_allowed
 from elliot_core.sources.envelope import extract_rows, looks_like_unextracted_envelope
 from elliot_core.types.source import FetchResult, SourceConfig
 
@@ -132,14 +133,17 @@ def _design_time_caller(field: str, secrets: dict[str, str]) -> str:
 
     A bound caller wins. Otherwise a test value saved as the secret
     ``CALLER_<FIELD>`` (a test user's token or id) lets discovery and previews
-    run. The published runtime never uses that fallback: it resolves only the
-    caller bound to the request.
+    run; single-user Elliot also reads it from the environment. The published
+    runtime never uses that fallback: it resolves only the caller bound to the
+    request.
     """
     bound = bound_caller()
     if bound and bound.get(field):
         return bound[field]
     name = f"CALLER_{field.upper()}"
     value = secrets.get(name) or secrets.get(name.lower())
+    if not value and host_env_secrets_allowed():
+        value = os.environ.get(name, "")  # local Elliot: an exported test value
     if value:
         return value
     raise CallerCredentialMissingError(

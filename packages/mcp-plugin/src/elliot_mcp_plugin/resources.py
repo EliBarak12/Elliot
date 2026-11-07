@@ -135,6 +135,15 @@ A source's `auth` block has a `type` and a `scope`.
   OAuth access token for the source whose `id` is `SOURCE_ID`. Put this in the
   `secret_key` of a `per_user` source. Auto-refreshed before expiry; raises
   `AUTH_REQUIRED` if the user hasn't connected yet.
+- `{{ caller:sub }}`, `{{ caller:email }}`, `{{ caller:token }}` — **(Elliot
+  Cloud, "your own sign-in")** the signed-in caller, when the connector sits
+  behind its owner's OAuth / OpenID Connect server. `sub` is the user's id
+  there; `token` is an access token for your API obtained for that user by
+  token exchange (never the token the client presented). Use the whole value
+  (`"X-User-Id": "{{ caller:sub }}"`; for `auth`, `"secret_key":
+  "{{ caller:token }}"`). Sources that use them are fetched live per call and
+  never cached across users. To preview while building, save a test user's
+  values as the secrets `CALLER_SUB` / `CALLER_TOKEN`.
 - Never put a literal credential in a connector file. Lint rejects it.
 
 ## Per-user OAuth — the full pattern

@@ -10,6 +10,7 @@ from typing import Any
 
 import structlog
 
+from elliot_core.caller import caller_placeholder, resolve_caller, source_uses_caller
 from elliot_core.sources.envelope import extract_rows
 from elliot_core.sqlite.engine import SQLiteEngine
 from elliot_core.sqlite.flattener import flatten, snake_case_for
@@ -198,6 +199,14 @@ class ToolExecutor:
             s.type == "elliot" for s in self._sources_needed_for(tool)
         ):
             return await self._execute_managed_read(tool, arguments)
+
+        # Sources that act as the signed-in caller ({{ caller:... }}) return
+        # that caller's data, so they are fetched for this call only — never
+        # loaded into the shared engine, whose cache serves every caller.
+        if self._injected_engine is None and any(
+            source_uses_caller(s) for s in self._sources_needed_for(tool)
+        ):
+            return await self._execute_per_caller_read(tool, arguments)
 
         # DB filter push-down: when a tool's filters compile to a SELECT and
         # it needs exactly one Postgres/MySQL source, run that SELECT straight
@@ -396,6 +405,9 @@ class ToolExecutor:
         now = time.monotonic()
 
         for source in needed:
+            if source_uses_caller(source):
+                # Defense in depth: execute() routes these per call.
+                raise ExecutorError(f"Source {source.id!r} acts as the caller and cannot be cached")
             last = self._materialized_at.get(source.id)
             if last is not None and (now - last) < self._ttl:
                 continue
@@ -895,6 +907,54 @@ class ToolExecutor:
             self._managed_store = ManagedStore(managed_db_path())
         return self._managed_store
 
+    async def _execute_per_caller_read(
+        self,
+        tool: ToolDefinition,
+        arguments: dict[str, Any],
+    ) -> QueryResult:
+        """READ over sources fetched as the signed-in caller, for this call only.
+
+        Each needed source is fetched into a per-call SQLite engine that is
+        closed before returning, then the tool's SQL / compiled SELECT runs
+        over it. Nothing is cached: the next caller fetches their own data.
+        """
+        from elliot_core.sqlite.query_runner import validate_tool_sql
+        from elliot_core.tools.query_builder import quote_ident
+
+        needed = self._sources_needed_for(tool)
+        engine = SQLiteEngine()
+        try:
+            for source in needed:
+                self._truncated_sources.discard(source.id)
+                fetched = await self._fetch_source(source, arguments)
+                engine.load_result(
+                    flatten(
+                        fetched,
+                        table_name=source.table_name or source.id,
+                        snake_case=snake_case_for(source),
+                    )
+                )
+            first_table = quote_ident(needed[0].table_name or needed[0].id, "sqlite")
+            if tool.sql:
+                ok, reason = validate_tool_sql(tool.sql)
+                if not ok:
+                    raise ExecutorError(f"Tool {tool.id!r} has invalid SQL: {reason}")
+                sql: str = tool.sql
+                params: dict[str, Any] = {p.name: arguments.get(p.name) for p in tool.parameters}
+            elif tool.filter_groups or tool.return_fields:
+                sql, params = build_select_sql(
+                    tool, arguments, from_clause=first_table if len(needed) == 1 else None
+                )
+            else:
+                sql, params = f"SELECT * FROM {first_table}", {}
+            rows = engine.query(sql, params)
+        finally:
+            engine.close()
+
+        log.info("tool.per_caller_read", tool_id=tool.id, row_count=len(rows))
+        capped = any(s.id in self._truncated_sources for s in needed)
+        return self._capped_result(tool.id, rows, source_capped=capped)
+
     async def _execute_managed_read(
         self,
         tool: ToolDefinition,
@@ -1179,7 +1239,14 @@ def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
 
     Mirroring ``api_fetcher`` keeps plugin-time and runtime-time fetches
     behaving identically.
+
+    ``{{ caller:NAME }}`` resolves only from the caller bound to this request
+    (``elliot_core.caller``). Unlike the design-time fetcher there is no
+    fallback: a published connector never acts as anyone but the caller.
     """
+    caller_field = caller_placeholder(key)
+    if caller_field is not None:
+        return resolve_caller(caller_field)
     if key.startswith("{{ env:") and key.endswith(" }}"):
         env_var = key[len("{{ env:") : -len(" }}")].strip()
         resolved = secrets.get(env_var) or secrets.get(env_var.lower())

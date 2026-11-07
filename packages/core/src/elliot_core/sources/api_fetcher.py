@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 import httpx
 import structlog
 
+from elliot_core.caller import CallerCredentialMissingError, bound_caller, caller_placeholder
 from elliot_core.errors import SourceFetchError
 from elliot_core.http import SSRFError, safe_client, validate_url
 from elliot_core.redaction import redact_url
@@ -115,12 +116,37 @@ def _resolve_secret(key: str, secrets: dict[str, str]) -> str:
       ``elliot_core.secrets.resolve_secrets`` has already replaced a
       ``{{ env:VAR }}`` template at load time with the resolved value.
     """
+    caller_field = caller_placeholder(key)
+    if caller_field is not None:
+        return _design_time_caller(caller_field, secrets)
     if key.startswith("{{ env:") and key.endswith(" }}"):
         env_var = key[len("{{ env:") : -len(" }}")].strip()
         return secrets.get(env_var) or secrets.get(env_var.lower()) or os.environ.get(env_var, "")
     if _ENV_VAR_NAME.match(key):
         return secrets.get(key) or secrets.get(key.lower()) or os.environ.get(key) or ""
     return secrets.get(key, key)
+
+
+def _design_time_caller(field: str, secrets: dict[str, str]) -> str:
+    """``{{ caller:FIELD }}`` while building, when no signed-in user is calling.
+
+    A bound caller wins. Otherwise a test value saved as the secret
+    ``CALLER_<FIELD>`` (a test user's token or id) lets discovery and previews
+    run. The published runtime never uses that fallback: it resolves only the
+    caller bound to the request.
+    """
+    bound = bound_caller()
+    if bound and bound.get(field):
+        return bound[field]
+    name = f"CALLER_{field.upper()}"
+    value = secrets.get(name) or secrets.get(name.lower())
+    if value:
+        return value
+    raise CallerCredentialMissingError(
+        field,
+        f"This source acts as the signed-in user ({{{{ caller:{field} }}}}). To preview it "
+        f"while building, save a test user's value as the secret {name}.",
+    )
 
 
 def _sanitize_header_value(value: str) -> str:

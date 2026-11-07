@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from .caller import CALLER_FIELDS, caller_placeholder, mentions_caller
 from .danger_zone import DESTRUCTIVE_VERBS, HIGH_IMPACT_VERBS, name_tokens
 from .sql import extract_sql_params, referenced_base_tables
 from .types import ConnectorConfig
@@ -150,6 +151,45 @@ def _is_bare_env_name(value: str) -> bool:
     return bool(re.fullmatch(r"[A-Z][A-Z0-9_]*", value))
 
 
+def _lint_caller_placeholders(config: ConnectorConfig) -> list[LintIssue]:
+    """``{{ caller:NAME }}`` must be a whole value, name a known field, on a REST source."""
+    issues: list[LintIssue] = []
+    for source in config.sources:
+        where = f"source '{source.id}'"
+        values = [("auth.secret_key", source.auth.secret_key)] if source.auth else []
+        values += [(f"headers.{k}", v) for k, v in (source.headers or {}).items()]
+        used = False
+        for field_name, value in values:
+            if not mentions_caller(value):
+                continue
+            used = True
+            name = caller_placeholder(value)
+            if name is None or name not in CALLER_FIELDS:
+                issues.append(
+                    LintIssue(
+                        severity="ERROR",
+                        code="CALLER_PLACEHOLDER_INVALID",
+                        tool_id=None,
+                        message=f"{where} {field_name} is not a valid caller placeholder: {value!r}.",
+                        suggestion=(
+                            "Use the whole value {{ caller:token }}, {{ caller:sub }} or "
+                            "{{ caller:email }} (auth adds 'Bearer ' itself)."
+                        ),
+                    )
+                )
+        if used and source.type != "rest":
+            issues.append(
+                LintIssue(
+                    severity="ERROR",
+                    code="CALLER_NOT_REST",
+                    tool_id=None,
+                    message=f"{where} uses the caller's credential but is a {source.type} source.",
+                    suggestion="Caller credentials apply to REST sources only.",
+                )
+            )
+    return issues
+
+
 def _lint_source_auth(config: ConnectorConfig) -> list[LintIssue]:
     """Validate auth blocks so per-user / distributable connectors are safe.
 
@@ -200,6 +240,8 @@ def _lint_source_auth(config: ConnectorConfig) -> list[LintIssue]:
                         suggestion="For per_user auth, secret_key is a vault slot name (e.g. 'access_token'), not {{ env }}.",
                     )
                 )
+        elif caller_placeholder(auth.secret_key) is not None:
+            pass  # the signed-in caller's credential; checked in _lint_caller_placeholders
         elif not _is_env_placeholder(auth.secret_key) and not _is_bare_env_name(auth.secret_key):
             issues.append(
                 LintIssue(
@@ -924,6 +966,7 @@ def lint_connector(
 
     # ── source auth checks (per-user / OAuth distribution safety) ────────────
     issues.extend(_lint_source_auth(config))
+    issues.extend(_lint_caller_placeholders(config))
 
     # ── SQL ↔ source_ids coverage (runtime "no such table" guard) ────────────
     issues.extend(_lint_tool_source_coverage(config))

@@ -640,6 +640,74 @@ def test_preview_passthrough_applies_return_fields_like_the_runtime(
     assert result["estimated_tokens"] < 60
 
 
+def test_preview_passthrough_runs_its_sql_over_the_live_response(
+    mcp: FastMCP, session: ElliotSession, monkeypatch: pytest.MonkeyPatch
+):
+    """A live tool with SQL previews live: calculations and summaries run over
+    the API's response (as the runtime does), not over the design-time sample.
+    ``"sql": ""`` drops the SQL and the raw response comes back."""
+    from elliot_core.types.source import FetchResult, SourceConfig
+
+    session.sources["api1"] = SourceConfig.model_validate(
+        {
+            "id": "api1",
+            "type": "rest",
+            "name": "orders",
+            "url": "https://api.example.com/orders",
+            "table_name": "orders",
+        }
+    )
+    created = _tool(mcp, "elliot_create_rest_tool")(
+        name="Search orders",
+        description="Search orders live via the API by customer.",
+        source_id="api1",
+        query_params=[{"name": "q", "type": "string", "required": True, "description": "customer"}],
+    )
+    tool_id = created["tool_id"]
+    session.tool_sql[tool_id] = (
+        'SELECT status, COUNT(*) AS "orders", ROUND(SUM(price * qty), 2) AS "value" '
+        "FROM orders GROUP BY status ORDER BY value DESC"
+    )
+
+    async def _fake_fetch(config, secrets, *, auth_token_override=None, extra_params=None):
+        return FetchResult(
+            rows=[
+                {"id": 1, "status": "paid", "price": 2.5, "qty": 2},
+                {"id": 2, "status": "open", "price": 1.25, "qty": 2},
+                {"id": 3, "status": "paid", "price": 1.0, "qty": 1},
+            ],
+            fetched_at="now",
+        )
+
+    monkeypatch.setattr("elliot_core.sources.api_fetcher.fetch_endpoint", _fake_fetch)
+    result = _tool(mcp, "elliot_preview_tool")(tool_id=tool_id, params={"q": "a"})
+    assert result.get("live") is True
+    assert result["rows"] == [
+        {"status": "paid", "orders": 2, "value": 6.0},
+        {"status": "open", "orders": 1, "value": 2.5},
+    ]
+
+    cleared = _tool(mcp, "elliot_update_tool")(tool_id=tool_id, patch={"sql": ""})
+    assert cleared.get("status") == "updated", cleared
+    assert tool_id not in session.tool_sql
+    raw = _tool(mcp, "elliot_preview_tool")(tool_id=tool_id, params={"q": "a"})
+    assert raw["rows"][0] == {"id": 1, "status": "paid", "price": 2.5, "qty": 2}
+
+
+def test_only_a_live_tool_can_drop_its_sql(mcp: FastMCP, session: ElliotSession, tmp_path: Path):
+    _load_table(session, tmp_path)
+    created = _tool(mcp, "elliot_create_tool")(
+        name="orders_listing",
+        description="Return all orders for the agent",
+        category="READ",
+        sql='SELECT id, amount FROM "orders"',
+        parameters=[],
+    )
+    result = _tool(mcp, "elliot_update_tool")(tool_id=created["tool_id"], patch={"sql": ""})
+    assert "INVALID_SQL" in result.get("text", ""), result
+    assert session.tool_sql.get(created["tool_id"])
+
+
 def test_preview_passthrough_tool_enforces_required(mcp: FastMCP, session: ElliotSession):
     from elliot_core.types.source import SourceConfig
 

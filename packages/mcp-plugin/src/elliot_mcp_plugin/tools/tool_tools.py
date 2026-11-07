@@ -169,7 +169,13 @@ async def preview_tool_live(
     tool = session.registry.get(tool_id)
     if tool is None:
         raise ElliotError("NOT_FOUND", f"Tool not found: {tool_id}")
-    if not session.tool_sql.get(tool_id) and tool.rest_query_params:
+    if tool.rest_query_params:
+        # A live tool with SQL runs that SQL over the live response at runtime
+        # (calculations, summaries, grouping), so the preview fetches live and
+        # applies it the same way — not against the design-time sample.
+        sql = session.tool_sql.get(tool_id)
+        if sql and not tool.sql:
+            tool = tool.model_copy(update={"sql": sql})
         return await _preview_passthrough(session, tool, dict(supplied or {}))
     return preview_tool(session, tool_id, supplied)
 
@@ -950,6 +956,9 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
         ``output_schema``, ``run_async``, ``destructive``, and per-parameter
         ``enum`` / ``minimum`` / ``maximum`` / ``default``. Use them to keep
         results small and typed instead of hand-writing SQL projections.
+        On a live API tool (``rest_query_params``), ``sql`` runs over each
+        live response (its table is the source's table name) — for
+        calculations, summaries and grouping — and ``"sql": ""`` removes it.
         The built connector is refreshed automatically after the update.
         """
         try:
@@ -957,6 +966,17 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             if tool is None:
                 return {"error": f"Tool not found: {tool_id}"}
             sql_patch = patch.pop("sql", None)
+            if sql_patch == "" and tool.rest_query_params:
+                # A live tool's SQL only shapes the API's response; clearing it
+                # returns the response as the API sends it.
+                session.tool_sql.pop(tool_id, None)
+                sql_patch = None
+            elif sql_patch == "":
+                raise ElliotError(
+                    "INVALID_SQL",
+                    "Only a live API tool can drop its SQL; this tool's SQL is how it reads "
+                    "its data.",
+                )
             if sql_patch is not None:
                 sql_ok, sql_reason = validate_tool_sql(sql_patch)
                 if not sql_ok:

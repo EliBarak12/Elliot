@@ -13,6 +13,22 @@ from elliot_core.types.sqlite import FlattenedTable, FlattenResult
 # A text column with at most this many distinct values is a candidate for a
 # typed enum parameter rather than an open string (profile_column).
 _ENUM_MAX_DISTINCT = 12
+# How many distinct values profile_column reads to decide a column holds lists.
+_LIST_SAMPLE = 50
+
+
+def is_json_list_of_scalars(value: Any) -> bool:
+    """A value the flattener stored for an array of plain values: JSON text
+    such as '["Lunch", "Dinner"]'. Objects and nested lists don't count."""
+    if not isinstance(value, str) or not value.startswith("["):
+        return False
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return False
+    return isinstance(parsed, list) and all(
+        v is None or isinstance(v, (str, int, float, bool)) for v in parsed
+    )
 
 
 def _bindable(value: Any) -> Any:
@@ -200,6 +216,8 @@ class SQLiteEngine:
         # sample table isn't either. The exact allowed values ride along so the
         # agent can drop them straight into the tool's `enum`.
         row["enum_candidate"] = False
+        if isinstance(row.get("min_val"), str) and self._holds_lists(quoted_table, quoted_col):
+            return self._profile_list_column(row, table_name, col)
         distinct = int(row.get("distinct_count") or 0)
         total = int(row.get("total_count") or 0)
         max_len = len(str(row.get("max_val") or ""))
@@ -217,6 +235,54 @@ class SQLiteEngine:
                 ).fetchall()
             row["enum_candidate"] = True
             row["enum_values"] = [v[0] for v in vals]
+        return row
+
+    def _holds_lists(self, quoted_table: str, quoted_col: str) -> bool:
+        """Whether every value in the column is a list of plain values."""
+        with self._lock:
+            sample = self._conn.execute(
+                f"SELECT DISTINCT {quoted_col} FROM {quoted_table} "
+                f"WHERE {quoted_col} IS NOT NULL LIMIT {_LIST_SAMPLE}"
+            ).fetchall()
+        values = [r[0] for r in sample]
+        return bool(values) and all(is_json_list_of_scalars(v) for v in values)
+
+    def _profile_list_column(
+        self, row: dict[str, Any], table_name: str, col: str
+    ) -> dict[str, Any]:
+        """Profile a column of lists by the values inside them.
+
+        Flattened arrays arrive as JSON text ('["Lunch", "Dinner"]'). Read as
+        text they look like a small repeated set, and they used to be offered
+        as an enum: no agent sends '["Lunch", "Dinner"]', and `col = :value`
+        never matches "Dinner", so every natural value was refused. The values
+        inside the lists are what an agent asks for; membership is the filter,
+        and json_each is how to group per value.
+        """
+        quoted_table = safe_ident(table_name)
+        quoted_col = safe_ident(col)
+        with self._lock:
+            elements = self._conn.execute(
+                f"SELECT DISTINCT each_value.value FROM {quoted_table}, "
+                f"json_each({quoted_table}.{quoted_col}) AS each_value "
+                f"WHERE each_value.value IS NOT NULL "
+                f"ORDER BY 1 LIMIT {_ENUM_MAX_DISTINCT + 1}"
+            ).fetchall()
+        values = [e[0] for e in elements]
+        param = col if col.isidentifier() else "value"
+        row["list_column"] = True
+        if 1 <= len(values) <= _ENUM_MAX_DISTINCT and all(
+            isinstance(v, str) and len(v) <= 100 for v in values
+        ):
+            row["list_values"] = values
+        row["list_filter"] = (
+            f"(:{param} IS NULL OR EXISTS (SELECT 1 FROM json_each({quoted_col}) "
+            f"WHERE value = :{param}))"
+        )
+        row["list_group_by"] = (
+            f"SELECT each_value.value AS {quoted_col}, COUNT(*) FROM {quoted_table}, "
+            f"json_each({quoted_table}.{quoted_col}) AS each_value GROUP BY each_value.value"
+        )
         return row
 
     def close(self) -> None:

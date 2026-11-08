@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -9,6 +10,7 @@ from typing import Any, Literal
 from .caller import CALLER_FIELDS, caller_placeholder, mentions_caller
 from .danger_zone import DESTRUCTIVE_VERBS, HIGH_IMPACT_VERBS, name_tokens
 from .sql import extract_sql_params, referenced_base_tables
+from .sqlite.engine import is_json_list_of_scalars
 from .types import ConnectorConfig
 
 Severity = Literal["ERROR", "WARN", "INFO"]
@@ -1164,6 +1166,39 @@ def lint_connector(
                             "fixed value set but is an open string."
                         ),
                         suggestion="Declare the allowed values as an `enum` so agents can't guess wrong.",
+                    )
+                )
+
+            # Allowed values that are lists written as text ('["Lunch",
+            # "Dinner"]'): a profile used to offer a column of arrays as an
+            # enum. No agent sends that text, so a natural "Dinner" is refused,
+            # and `col = :value` never matches a value inside a list.
+            if param.enum and any(is_json_list_of_scalars(v) for v in param.enum):
+                inside = sorted(
+                    {
+                        str(x)
+                        for v in param.enum
+                        if is_json_list_of_scalars(v)
+                        for x in json.loads(v)
+                        if x is not None
+                    }
+                )
+                issues.append(
+                    LintIssue(
+                        severity="WARN",
+                        code="ENUM_HOLDS_LISTS",
+                        tool_id=tool.id,
+                        message=(
+                            f"Tool '{tool.id}' parameter '{param.name}' allows lists written "
+                            f"as text (e.g. {param.enum[0]}); agents send one value, such as "
+                            f"'{inside[0] if inside else 'Dinner'}', and it is refused."
+                        ),
+                        suggestion=(
+                            f"Allow the values inside the lists ({', '.join(inside[:6])}"
+                            f"{'…' if len(inside) > 6 else ''}) and filter by membership: "
+                            f"`(:{param.name} IS NULL OR EXISTS (SELECT 1 FROM json_each(<column>) "
+                            f"WHERE value = :{param.name}))`."
+                        ),
                     )
                 )
 

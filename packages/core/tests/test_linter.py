@@ -1054,3 +1054,40 @@ def test_skill_step_calling_disabled_tool_is_error() -> None:
     )
     issues = [i for i in lint_connector(config) if i.code == "SKILL_STEP_DISABLED_TOOL"]
     assert issues and issues[0].severity == "ERROR"
+
+
+def test_enum_of_lists_written_as_text_is_flagged() -> None:
+    """A column of arrays profiled as text gave enums like '["Dinner"]'; an
+    agent asking for Dinner was refused. Lint names the values to allow and
+    the membership filter."""
+    config = _make_connector(
+        sql="SELECT id FROM recipes WHERE (:meal_type IS NULL OR meal_type = :meal_type)",
+        parameters=[
+            {
+                "name": "meal_type",
+                "type": "string",
+                "required": False,
+                "description": "Only recipes for this meal, exact match",
+                "enum": ['["Dinner"]', '["Lunch", "Dinner"]', '["Breakfast"]'],
+            }
+        ],
+    )
+    issue = next(i for i in lint_connector(config) if i.code == "ENUM_HOLDS_LISTS")
+    assert issue.severity == "WARN"
+    assert "Breakfast, Dinner, Lunch" in (issue.suggestion or "")
+    assert "json_each" in (issue.suggestion or "")
+
+
+def test_plain_enum_is_not_a_list() -> None:
+    config = _make_connector(
+        parameters=[
+            {
+                "name": "order_status",
+                "type": "string",
+                "required": False,
+                "description": "The status, exact match",
+                "enum": ["[draft]", "open"],
+            }
+        ]
+    )
+    assert not any(i.code == "ENUM_HOLDS_LISTS" for i in lint_connector(config))

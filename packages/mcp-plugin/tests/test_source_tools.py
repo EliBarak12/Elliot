@@ -497,6 +497,25 @@ def test_profile_source_is_compact_unless_verbose(mcp: FastMCP, tmp_path: Path):
     assert len(str(full)) > 2 * len(str(compact))
 
 
+def test_profile_source_offers_list_values_not_list_text(mcp: FastMCP, tmp_path: Path):
+    """A column of arrays (recipes' meal types) is profiled by the values inside
+    the lists, with the filter and grouping that work on them, not as an enum of
+    JSON text that agents can't send."""
+    import json
+
+    path = tmp_path / "recipes.json"
+    meals = [["Dinner"], ["Lunch", "Dinner"], ["Breakfast"], ["Dinner"], ["Lunch", "Dinner"]]
+    path.write_text(json.dumps([{"id": i, "meal_type": m} for i, m in enumerate(meals)]))
+    _tool(mcp, "elliot_discover_source")(
+        source_type="file", config={"path": str(path)}, name="recipes"
+    )
+    col = _tool(mcp, "elliot_profile_source")(table_name="recipes")["columns"]["meal_type"]
+    assert "enum" not in col
+    assert col["list_of"] == ["Breakfast", "Dinner", "Lunch"]
+    assert "json_each" in col["filter"] and ":meal_type" in col["filter"]
+    assert "GROUP BY" in col["group_by"]
+
+
 def test_profile_source_missing_table_returns_error(mcp: FastMCP):
     result = _tool(mcp, "elliot_profile_source")(table_name="ghost")
     assert "text" in result or "error" in result

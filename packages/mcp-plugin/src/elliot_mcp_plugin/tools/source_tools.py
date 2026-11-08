@@ -397,6 +397,13 @@ def _compact_profile(col_type: str, prof: dict[str, Any]) -> dict[str, Any]:
     }
     if prof.get("enum_candidate"):
         out["enum"] = [_short(v) for v in prof.get("enum_values") or []]
+    elif prof.get("list_column"):
+        # Each value is a list ('["Lunch", "Dinner"]'): the values inside are
+        # what an agent asks for, and these are the SQL that works on them.
+        if prof.get("list_values"):
+            out["list_of"] = [_short(v) for v in prof["list_values"]]
+        out["filter"] = prof.get("list_filter")
+        out["group_by"] = prof.get("list_group_by")
     else:
         out["min"] = _short(prof.get("min_val"))
         out["max"] = _short(prof.get("max_val"))
@@ -1072,9 +1079,13 @@ def register_source_tools(mcp: FastMCP, session: ElliotSession) -> None:
         Compact by default (about a quarter of the full size): per column its
         type, nulls, distinct count, min and max, and — for a small repeated
         set of text values — ``enum`` with the allowed values to declare as a
-        typed ``enum`` parameter. Long values are shortened and Elliot's
-        internal ``_`` columns are left out. ``verbose=true`` returns every
-        statistic and the top values of every column.
+        typed ``enum`` parameter. A column whose every value is a list
+        ('["Lunch", "Dinner"]') shows ``list_of`` (the values inside, for the
+        enum), ``filter`` (the WHERE clause that tests membership — ``col =
+        :value`` never matches) and ``group_by`` (one row per value). Long
+        values are shortened and Elliot's internal ``_`` columns are left out.
+        ``verbose=true`` returns every statistic and the top values of every
+        column.
         """
         try:
             schema = session.engine.get_table_schema(table_name)

@@ -219,6 +219,42 @@ def mask_call_arguments(arguments: Any, keep: frozenset[str] | set[str] = frozen
     return out
 
 
+_PARAM_IN_MESSAGE = re.compile(r"[Pp]arameter '([^']+)'")
+# "got: 'abc'", "got int: 5" — the value an agent sent, quoted at the end of a
+# validation message ("…, got: 'abc'." with an optional trailing hint).
+_SENT_VALUE = re.compile(r"(\bgot(?: [A-Za-z_]+)?:? )(.+)$", re.DOTALL)
+
+
+def mask_sent_value(message: str | None, masked_arguments: Any) -> str | None:
+    """A recorded error message without the value the agent sent.
+
+    Validation errors quote the rejected value back ("Parameter 'recipe_id':
+    Expected integer, got: 'jane@x.com'") — right for the agent, which needs
+    it, and wrong for the owner, who sees the arguments masked and must not
+    get the value back through the message. The value is replaced by what the
+    masked arguments show for that input (its shape, or the value itself when
+    an owner may see it); with no input to match, by a placeholder.
+    """
+    if not message:
+        return message
+    m = _SENT_VALUE.search(message)
+    if m is None:
+        return message
+    name = _PARAM_IN_MESSAGE.search(message)
+    shown: Any = None
+    if (
+        name is not None
+        and isinstance(masked_arguments, dict)
+        and name.group(1) in masked_arguments
+    ):
+        shown = masked_arguments[name.group(1)]
+        if not (isinstance(shown, str) and shown.startswith("‹")):
+            # An owner already sees this value in the arguments: keep the message.
+            return message
+    replacement = shown if isinstance(shown, str) else "‹value hidden›"
+    return message[: m.start(2)] + replacement
+
+
 def result_shape(rows: Any, *, max_fields: int = 40) -> dict[str, Any] | None:
     """The metadata of a tool result — never its values.
 

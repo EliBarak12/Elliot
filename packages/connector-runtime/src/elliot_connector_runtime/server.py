@@ -894,7 +894,7 @@ def _record_validation_failure(
 ) -> None:
     """Write one error observation for an argument-validation failure."""
     from elliot_core.errors import ElliotError
-    from elliot_core.redaction import mask_call_arguments
+    from elliot_core.redaction import mask_call_arguments, mask_sent_value
 
     session_id, identity_payload = _current_session_and_identity(ctx)
     if not session_id:
@@ -905,7 +905,7 @@ def _record_validation_failure(
     # Single compact line — never a multi-line dump.
     first_line = next((ln for ln in message.splitlines() if ln.strip()), "")
     reason = first_line[:200] if first_line else "argument validation failed"
-    error = f"[{code}] {reason}"
+    error = mask_sent_value(f"[{code}] {reason}", arguments)
     agent_hint = _agent_hint_from_identity(get_current_agent_identity())
     if store is not None:
         store.open_session(
@@ -1038,9 +1038,12 @@ def _make_observe(
         handle_source: str | None = None,
     ) -> None:
         row_count = len(result_rows)
-        from elliot_core.redaction import mask_call_arguments
+        from elliot_core.redaction import mask_call_arguments, mask_sent_value
 
         arguments = mask_call_arguments(arguments, visible_arguments)
+        # The agent got the full message; the recorded copy (owners read it)
+        # loses the value the agent sent, as the arguments above do.
+        error = mask_sent_value(error, arguments)
         # Estimate tokens up-front so the audit row, the observation store, and
         # /v1/sessions all report the same per-call figure.
         from .session_tracker import _estimate_tokens

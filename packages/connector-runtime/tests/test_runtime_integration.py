@@ -2248,6 +2248,25 @@ async def test_owner_sees_metadata_not_peoples_data(tmp_path: Path) -> None:
     assert shape["email"] == {"name": "email", "type": "text", "filled": 1}
 
 
+async def test_a_rejected_value_stays_with_the_agent(tmp_path: Path) -> None:
+    """The agent is told which value was wrong; the owner reading the trace is
+    not. A type error quotes the value back ("got: 'rex@example.com'"), and the
+    arguments are masked, so the message must not carry it out either."""
+    from mcp.client import Client
+
+    mcp, store, tracker = _people_server(tmp_path)
+    async with Client(mcp, mode="legacy") as client:  # type: ignore[arg-type]
+        bad = await client.call_tool("find_customers", {"limit": "rex@example.com"})
+    assert bad.is_error and "rex@example.com" in bad.content[0].text
+
+    call = store.recent_tool_calls(5)[0]
+    event = [e for s in tracker.tail(5) for e in s.get("events") or []][-1]
+    assert call["error"] and event["error"]
+    for recorded in (json.dumps(call, default=str), json.dumps(event, default=str)):
+        assert "rex@example.com" not in recorded
+    assert "‹text · 15 chars›" in call["error"], call["error"]
+
+
 async def test_feedback_keeps_contact_details_out(tmp_path: Path) -> None:
     from mcp.client import Client
 

@@ -244,3 +244,30 @@ def test_mask_call_arguments_is_idempotent():
 
     once = mask_call_arguments({"q": "Rex Carter", "n": 3})
     assert mask_call_arguments(once) == once == {"q": "‹text · 10 chars›", "n": 3}
+
+
+def test_mask_sent_value_keeps_the_value_out_of_recorded_errors() -> None:
+    from elliot_core.redaction import mask_sent_value
+
+    masked = {"recipe_id": "‹text · 10 chars›", "limit": 500, "tier": "gold"}
+    assert (
+        mask_sent_value(
+            "[INVALID_PARAM_TYPE] Parameter 'recipe_id': Expected integer, got: 'jane@x.com'",
+            masked,
+        )
+        == "[INVALID_PARAM_TYPE] Parameter 'recipe_id': Expected integer, got: ‹text · 10 chars›"
+    )
+    # A value the owner already sees in the arguments stays in the message.
+    kept = "[INVALID_PARAM_VALUE] Parameter 'limit' must be <= 50, got: 500"
+    assert mask_sent_value(kept, masked) == kept
+    # No input to match: the value is hidden all the same.
+    assert (
+        mask_sent_value("Expected string, got int: 5551234", {})
+        == "Expected string, got int: ‹value hidden›"
+    )
+    # Messages that quote nothing pass through.
+    assert (
+        mask_sent_value("[UPSTREAM_FETCH_FAILED] HTTP 502", masked)
+        == "[UPSTREAM_FETCH_FAILED] HTTP 502"
+    )
+    assert mask_sent_value(None, masked) is None

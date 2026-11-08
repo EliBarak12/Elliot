@@ -362,6 +362,48 @@ async def test_execute_read_passthrough():
 
 
 @pytest.mark.asyncio
+@respx.mock
+async def test_passthrough_sql_computes_over_the_live_response():
+    """A live tool's SQL runs over each response: summaries and grouping of
+    the raw API rows, as the connector runtime does."""
+    respx.get("https://api.example.com/items").mock(
+        return_value=Response(
+            200,
+            json=[
+                {"id": 1, "kind": "a", "price": 2.5, "qty": 2},
+                {"id": 2, "kind": "a", "price": 1.0, "qty": 3},
+                {"id": 3, "kind": "b", "price": 4.0, "qty": 1},
+            ],
+        )
+    )
+    tool = _make_read_tool(rest_query_params=["q"]).model_copy(
+        update={
+            "sql": 'SELECT kind, COUNT(*) AS "items", SUM(price * qty) AS "value" '
+            "FROM src GROUP BY kind ORDER BY value DESC"
+        }
+    )
+    executor = ToolExecutor(_make_config(tools=[tool]))
+    result = await executor.execute("list_items", {"q": "x"})
+    assert result.rows == [
+        {"kind": "a", "items": 2, "value": 8.0},
+        {"kind": "b", "items": 1, "value": 4.0},
+    ]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_passthrough_sql_that_fails_is_a_tool_error():
+    respx.get("https://api.example.com/items").mock(return_value=Response(200, json=[{"id": 1}]))
+    tool = _make_read_tool(rest_query_params=["q"]).model_copy(
+        update={"sql": "SELECT missing_column FROM src"}
+    )
+    executor = ToolExecutor(_make_config(tools=[tool]))
+    with pytest.raises(ElliotError) as exc_info:
+        await executor.execute("list_items", {"q": "x"})
+    assert exc_info.value.code == "SQL_EXECUTION_FAILED"
+
+
+@pytest.mark.asyncio
 async def test_passthrough_non_rest_source_raises():
     tool = ToolDefinition(
         id="list_items",

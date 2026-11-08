@@ -15,7 +15,8 @@ content, the frontmatter becomes the prompt name + description.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -135,12 +136,62 @@ def _prompt_name(skill_name: str) -> str:
     return skill_name.replace("-", "_")
 
 
-def _render_prompt_body(skill: Skill) -> str:
+# A SKILL.md can mark passages that only make sense in one deployment:
+#
+#   <!-- local-only -->            a passage about local install, loopback
+#   ...                             logins or runtime processes — dropped when
+#   <!-- /local-only -->            the builder is hosted;
+#
+#   <!-- hosted-only               the hosted equivalent, invisible to local
+#   text for the hosted builder     markdown readers and dropped locally.
+#   -->
+_LOCAL_ONLY = re.compile(r"<!-- local-only -->\n?(.*?)<!-- /local-only -->\n?", re.DOTALL)
+_HOSTED_ONLY = re.compile(r"<!-- hosted-only\n(.*?)-->\n?", re.DOTALL)
+_TOOL_TOKEN = re.compile(r"\b(?:elliot|studio)_[a-z0-9_]+\b")
+
+
+def render_skill_body(
+    body: str,
+    *,
+    hosted: bool = False,
+    substitutions: Mapping[str, str] | None = None,
+) -> str:
+    """The skill text for one deployment.
+
+    Locally, hosted-only notes are removed and local-only passages kept (the
+    markers themselves dropped). Hosted, the reverse; then each tool name in
+    ``substitutions`` is replaced by the tool that does the same job there
+    (``elliot_upload_file`` → ``elliot_request_file_upload``).
+    """
+    if hosted:
+        body = _LOCAL_ONLY.sub("", body)
+        body = _HOSTED_ONLY.sub(lambda m: m.group(1), body)
+    else:
+        body = _LOCAL_ONLY.sub(lambda m: m.group(1), body)
+        body = _HOSTED_ONLY.sub("", body)
+    if substitutions:
+        body = _TOOL_TOKEN.sub(lambda m: substitutions.get(m.group(0), m.group(0)), body)
+    return body
+
+
+def referenced_tools(text: str) -> set[str]:
+    """Every Elliot tool name a prompt mentions — for the check that a
+    deployment's prompts only point at tools it serves."""
+    return set(_TOOL_TOKEN.findall(text))
+
+
+def _render_prompt_body(
+    skill: Skill,
+    *,
+    hosted: bool = False,
+    substitutions: Mapping[str, str] | None = None,
+) -> str:
     """Wrap the skill body with a header that mentions when_to_use, if present."""
     header_parts: list[str] = [f"# Elliot skill: {skill.name}", ""]
     if skill.when_to_use:
         header_parts.extend([f"_When to use:_ {skill.when_to_use}", ""])
-    return "\n".join(header_parts) + skill.body
+    body = render_skill_body(skill.body, hosted=hosted, substitutions=substitutions)
+    return "\n".join(header_parts) + body
 
 
 def _make_body_fn(body: str) -> Callable[[], str]:
@@ -194,11 +245,12 @@ def register_session_skill_prompt(mcp: FastMCP, skill: Any) -> str:
     return name
 
 
-def get_prompts_instructions_text() -> str:
+def get_prompts_instructions_text(exclude: Collection[str] = ()) -> str:
     """Build the 'Available prompts' section of the server instructions from the
     skills actually on disk, so the advertised list can't drift from what
-    ``prompts/list`` really serves."""
-    skills = load_skills()
+    ``prompts/list`` really serves. ``exclude`` names prompts a deployment
+    does not serve."""
+    skills = [s for s in load_skills() if _prompt_name(s.name) not in set(exclude)]
     if not skills:
         return "Available prompts (call `prompts/list` any time): (none found)"
     lines = ["Available prompts (call `prompts/list` any time):"]
@@ -212,16 +264,34 @@ def get_prompts_instructions_text() -> str:
     return "\n".join(lines)
 
 
-def register_prompts(mcp: FastMCP, session: Any = None) -> int:
+def register_prompts(
+    mcp: FastMCP,
+    session: Any = None,
+    *,
+    hosted: bool = False,
+    overrides: Mapping[str, str] | None = None,
+    exclude: Collection[str] = (),
+    substitutions: Mapping[str, str] | None = None,
+) -> int:
     """Register every plugin-root skill — and, when a session is supplied, every
     session-created skill — as an MCP prompt.
 
+    A deployment that serves a different tool set (the hosted builder) passes
+    ``hosted=True`` so local-only passages drop out, ``substitutions`` for
+    tools it serves under another name, ``overrides`` for prompts it rewrites
+    whole (keyed by prompt name, body only), and ``exclude`` for prompts that
+    mean nothing there. A prompt must never send an agent to a tool that does
+    not exist.
+
     Returns the number of prompts registered.
     """
-    skills = load_skills()
+    skills = [s for s in load_skills() if _prompt_name(s.name) not in set(exclude)]
     for skill in skills:
         prompt_name = _prompt_name(skill.name)
-        rendered = _render_prompt_body(skill)
+        if overrides and prompt_name in overrides:
+            rendered = f"# Elliot skill: {skill.name}\n\n{overrides[prompt_name]}"
+        else:
+            rendered = _render_prompt_body(skill, hosted=hosted, substitutions=substitutions)
         fn = _make_body_fn(rendered)
         # FastMCP also uses fn.__doc__ as a description fallback. We pass the
         # description explicitly below, so this is just future-proofing.

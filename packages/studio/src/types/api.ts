@@ -34,7 +34,16 @@ export interface ConnectorBranding {
 /** MCP Apps view config for a tool (ToolUIConfig on the Python side). */
 export interface ToolUiConfig {
   enabled: boolean;
-  preset: "auto" | "table" | "detail" | "metric" | "chart" | "form" | "markdown" | "custom";
+  preset:
+    | "auto"
+    | "table"
+    | "cards"
+    | "detail"
+    | "metric"
+    | "chart"
+    | "form"
+    | "markdown"
+    | "custom";
   title?: string | null;
   mapping: Record<string, string>;
   custom_html?: string | null;

@@ -11,6 +11,7 @@ import type { ToolUiConfig } from "@/types/api";
 const PRESETS: Array<{ id: ToolUiConfig["preset"]; label: string; pending?: boolean }> = [
   { id: "auto", label: "Auto" },
   { id: "table", label: "Table" },
+  { id: "cards", label: "Cards" },
   { id: "detail", label: "Detail" },
   { id: "metric", label: "Metrics" },
   { id: "chart", label: "Chart" },
@@ -40,6 +41,15 @@ function mappingSlots(
   switch (preset) {
     case "table":
       return [{ key: "columns", label: "Columns" }];
+    case "cards":
+      return [
+        { key: "image", label: "Image field", hint: "image URL; inferred when empty" },
+        { key: "title", label: "Title field", hint: "inferred when empty" },
+        { key: "subtitle", label: "Subtitle field", hint: "e.g. brand or category" },
+        { key: "price", label: "Price field", hint: "numeric" },
+        { key: "currency", label: "Currency", hint: "ISO code, e.g. USD" },
+        { key: "badge", label: "Badge field", hint: "e.g. stock or status" },
+      ];
     case "detail":
       return [{ key: "fields", label: "Fields" }];
     case "metric":

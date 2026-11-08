@@ -97,3 +97,14 @@ def test_extract_sql_params():
 def test_has_select_star():
     assert has_select_star("SELECT * FROM t")
     assert not has_select_star("SELECT COUNT(*) FROM t")
+
+
+def test_a_table_valued_function_is_not_a_table():
+    """`FROM json_each(col)` searches a column of lists; json_each is not a
+    source to load, and must not be reported as a missing table."""
+    sql = (
+        'SELECT "id" FROM "recipes" WHERE (:meal IS NULL OR EXISTS '
+        '(SELECT 1 FROM json_each("meal_type") WHERE value = :meal)) LIMIT 5'
+    )
+    assert referenced_base_tables(sql) == ["recipes"]
+    assert extract_table_names("SELECT * FROM json_eachx JOIN t2 ON 1") == ["json_eachx", "t2"]

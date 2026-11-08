@@ -71,6 +71,12 @@ class PaginationConfig(BaseModel):
     # Response field that holds the next-page URL. For ``odata`` this defaults to
     # the standard ``@odata.nextLink`` when left unset.
     next_url_field: str | None = None
+    # Query parameter names. APIs differ: DummyJSON pages with ``skip`` /
+    # ``limit``, others with ``offset`` / ``limit`` or ``page`` / ``per_page``.
+    offset_param: str = "offset"
+    limit_param: str = "limit"
+    page_param: str = "page"
+    page_size_param: str | None = None
 
 
 class ManagedColumn(BaseModel):
@@ -157,6 +163,12 @@ class SourceConfig(BaseModel):
     # table app-wide — every authenticated user of the connector shares it.
     user_scoped: bool = True
 
+    # How column names are made from the data's keys. "snake" turns
+    # ``discountPercentage`` into ``discount_percentage``; "lower" (sources
+    # discovered before snake_case existed) gives ``discountpercentage``.
+    # Fixed per source so its saved SQL keeps matching on every refresh.
+    column_style: Literal["lower", "snake"] = "lower"
+
     # Runtime tracking (populated after a fetch)
     table_name: str | None = None
     row_count: int | None = None
@@ -176,3 +188,7 @@ class FetchResult(BaseModel):
     # Populated by passthrough fetcher so the agent knows how to get the next page.
     # Keys depend on pagination strategy: next_cursor, next_url, total, has_more, etc.
     pagination_meta: dict[str, Any] = {}
+    # When a source with no pagination got only the first page, how to page
+    # it (a PaginationConfig as a dict), inferred from that page. Discovery
+    # uses it to fetch everything and saves it on the source.
+    suggested_pagination: dict[str, Any] | None = None

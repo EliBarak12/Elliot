@@ -64,8 +64,10 @@ def is_valid_ident(name: str) -> bool:
     return isinstance(name, str) and bool(_IDENT_RE.match(name))
 
 
+# A bare name followed by "(" is a table-valued function (``FROM
+# json_each(col)``, how a column of lists is searched), not a table to load.
 _TABLE_REF_RE = re.compile(
-    r"(?:FROM|JOIN)\s+(?:\"([^\"]+)\"|`([^`]+)`|([A-Za-z_][A-Za-z0-9_]*))",
+    r"(?:FROM|JOIN)\s+(?:\"([^\"]+)\"|`([^`]+)`|([A-Za-z_][A-Za-z0-9_]*)\b(?!\s*\())",
     re.IGNORECASE,
 )
 

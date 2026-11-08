@@ -8,10 +8,10 @@ import structlog
 
 from elliot_core.errors import ElliotError, NotFoundError, SourceFetchError
 from elliot_core.sqlite.engine import SQLiteEngine
-from elliot_core.sqlite.flattener import flatten
+from elliot_core.sqlite.flattener import flatten, snake_case_for
 from elliot_core.tools.param_validation import coerce_value as _coerce  # noqa: F401  (re-exported)
 from elliot_core.tools.param_validation import validate_call_params
-from elliot_core.tools.query_builder import build_select_sql
+from elliot_core.tools.query_builder import build_select_sql, quote_ident
 from elliot_core.types.connector import ConnectorConfig
 from elliot_core.types.source import FetchResult, SourceConfig
 from elliot_core.types.tool import ToolDefinition, ToolResult
@@ -119,13 +119,31 @@ class ToolExecutor:
 
         rows = fetch_result.rows
 
-        # Optional: apply filter_groups / return_fields as SQL post-filter
-        if tool.filter_groups or tool.return_fields or tool.having or tool.order_by:
+        # Optional: shape the live response — the tool's SQL (calculations,
+        # summaries, grouping over the response's table), else filter_groups /
+        # return_fields as a generated SELECT. Same as the connector runtime.
+        if tool.sql or tool.filter_groups or tool.return_fields or tool.having or tool.order_by:
+            table = source.table_name or source.id
             engine = SQLiteEngine()
             try:
-                engine.load_result(flatten(rows, source.id))
-                sql, sql_params = build_select_sql(tool, params)
-                rows = engine.query(sql, sql_params)
+                engine.load_result(flatten(rows, table, snake_case=snake_case_for(source)))
+                if tool.sql:
+                    from elliot_core.sqlite.query_runner import validate_tool_sql
+
+                    valid, reason = validate_tool_sql(tool.sql)
+                    if not valid:
+                        raise ElliotError("INVALID_SQL", reason)
+                    sql = tool.sql
+                    sql_params = {p.name: params.get(p.name) for p in tool.parameters}
+                else:
+                    sql, sql_params = build_select_sql(
+                        tool, params, from_clause=quote_ident(table, "sqlite")
+                    )
+                try:
+                    rows = engine.query(sql, sql_params)
+                except Exception as exc:
+                    log.error("tool.sql.failed", tool_id=tool.id, error=str(exc))
+                    raise ElliotError("SQL_EXECUTION_FAILED", str(exc)) from exc
             finally:
                 engine.close()
 
@@ -165,7 +183,9 @@ class ToolExecutor:
 
                     engine.load_result(managed_flat_table(source, fetch_result.rows))
                 else:
-                    engine.load_result(flatten(fetch_result.rows, table_name))
+                    engine.load_result(
+                        flatten(fetch_result.rows, table_name, snake_case=snake_case_for(source))
+                    )
 
             if tool.sql:
                 # Defence in depth: a stored tool.sql must be a read-only

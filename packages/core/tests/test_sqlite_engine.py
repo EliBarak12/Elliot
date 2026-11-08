@@ -202,3 +202,38 @@ def test_load_result_rolls_back_when_child_table_fails(
     tables = engine.get_table_names()
     assert "projects" not in tables
     assert not any("tags" in t for t in tables)
+
+
+def test_profile_column_offers_the_values_inside_lists(engine: SQLiteEngine):
+    """A column of arrays arrives as JSON text. Its text values are not the
+    enum: the values inside are, filtered by membership."""
+    rows = [
+        {"name": "Pasta", "meal_type": ["Dinner"]},
+        {"name": "Salad", "meal_type": ["Lunch", "Dinner"]},
+        {"name": "Eggs", "meal_type": ["Breakfast"]},
+        {"name": "Soup", "meal_type": ["Lunch", "Dinner"]},
+        {"name": "Toast", "meal_type": ["Breakfast"]},
+        {"name": "Stew", "meal_type": ["Dinner"]},
+    ]
+    engine.load_result(flatten(rows, "recipes"))
+    profile = engine.profile_column("recipes", "meal_type")
+    assert profile["enum_candidate"] is False
+    assert "enum_values" not in profile
+    assert profile["list_column"] is True
+    assert profile["list_values"] == ["Breakfast", "Dinner", "Lunch"]
+
+    # The filter it offers works: Dinner is in four recipes' lists.
+    sql = f"SELECT name FROM recipes WHERE {profile['list_filter']} ORDER BY name"
+    names = [r["name"] for r in engine.query(sql, {"meal_type": "Dinner"})]
+    assert names == ["Pasta", "Salad", "Soup", "Stew"]
+    assert len(engine.query(sql, {"meal_type": None})) == 6
+    # And grouping by it counts each value once per recipe that has it.
+    grouped = {r["meal_type"]: r["COUNT(*)"] for r in engine.query(profile["list_group_by"], {})}
+    assert grouped == {"Breakfast": 2, "Dinner": 4, "Lunch": 2}
+
+
+def test_profile_column_lists_of_objects_are_not_list_columns(engine: SQLiteEngine):
+    rows = [{"tags": '[{"a": 1}]'} for _ in range(4)] + [{"tags": "[]"}]
+    engine.load_result(flatten(rows, "things"))
+    profile = engine.profile_column("things", "tags")
+    assert "list_column" not in profile

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from elliot_connector_runtime.session_tracker import (
@@ -269,39 +270,43 @@ def test_append_ingested_accumulates_across_calls(tmp_path: Path) -> None:
     assert out["source"] == "hook"
 
 
-def test_result_preview_recorded_for_tool_call(tmp_path: Path) -> None:
+def test_tool_results_are_recorded_as_shape_never_values(tmp_path: Path) -> None:
+    """A tool's rows are its end users' private data. The session log (and
+    so the owner's console) keeps the shape of what came back — row count,
+    fields, types, how many rows filled each — and none of the values."""
     tracker = SessionTracker(tmp_path / "sessions.ndjson")
     sid = tracker.start_session(session_id="s")
-    tracker.record_tool_call(sid, "fetch", {}, 1, [{"name": "Rex"}], 5.0)
-    preview = tracker.tail(1)[0]["events"][0]["result_preview"]
-    assert preview is not None and "Rex" in preview
-
-
-def test_result_preview_redacts_secrets_in_response_body(tmp_path: Path) -> None:
-    # An upstream API can return a secret in its *response body* — an OAuth
-    # token endpoint, a "create API key" call. The result preview is stored in
-    # the session log and shown in the Agent Console, so it must be redacted
-    # exactly like the recorded arguments are: a secret the tool RETURNS is no
-    # safer to persist than one the agent PASSED IN. (never log secrets/PII.)
-    tracker = SessionTracker(tmp_path / "sessions.ndjson")
-    sid = tracker.start_session(session_id="s")
-    result = [
-        {
-            "user": "rex",
-            "access_token": "super-secret-value",  # sensitive key name
-            "note": "Bearer ghp_ABCDEFGHIJ0123456789KLMNOPQRSTUV",  # secret-shaped value
-        }
+    rows = [
+        {"name": "Rex Carter", "email": "rex@example.com", "age": 31, "note": None},
+        {"name": "Ada Byron", "email": "", "age": 36, "note": "VIP"},
     ]
-    tracker.record_tool_call(sid, "create_token", {}, 1, result, 5.0)
+    tracker.record_tool_call(sid, "find_customers", {}, 2, rows, 5.0)
 
-    preview = tracker.tail(1)[0]["events"][0]["result_preview"]
-    assert preview is not None
-    # The benign field survives; both the sensitive-keyed value and the
-    # secret-shaped token are gone, replaced by the redaction placeholder.
-    assert "rex" in preview
-    assert "super-secret-value" not in preview
-    assert "ghp_ABCDEFGHIJ0123456789KLMNOPQRSTUV" not in preview
-    assert "***" in preview
+    event = tracker.tail(1)[0]["events"][0]
+    assert event["result_preview"] is None
+    assert event["result_shape"] == {
+        "rows": 2,
+        "fields": [
+            {"name": "name", "type": "text", "filled": 2},
+            {"name": "email", "type": "text", "filled": 1},
+            {"name": "age", "type": "number", "filled": 2},
+            {"name": "note", "type": "text", "filled": 1},
+        ],
+    }
+    logged = (
+        (tmp_path / "sessions.ndjson").read_text()
+        if (tmp_path / "sessions.ndjson").exists()
+        else ""
+    )
+    for value in ("Rex Carter", "rex@example.com", "Ada Byron", "VIP"):
+        assert value not in json.dumps(event) and value not in logged
+
+
+def test_failed_call_has_no_result_shape(tmp_path: Path) -> None:
+    tracker = SessionTracker(tmp_path / "sessions.ndjson")
+    sid = tracker.start_session(session_id="s")
+    tracker.record_tool_call(sid, "fetch", {}, 0, [], 5.0, error="[X] boom")
+    assert tracker.tail(1)[0]["events"][0]["result_shape"] is None
 
 
 def test_subscribe_receives_published_updates(tmp_path: Path) -> None:

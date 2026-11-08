@@ -168,3 +168,159 @@ def redact_value(value: Any) -> Any:
 def redact_audit_arguments(arguments: Any) -> Any:
     """Public entry point for audit-log payload redaction."""
     return redact_value(arguments)
+
+
+def describe_value(value: Any) -> str:
+    """What a value is, without what it says: ``‹text · 12 chars›``.
+
+    Observability shows connector owners *how* agents used a tool, never the
+    private data their end users typed or got back.
+    """
+    if isinstance(value, bool):
+        return "‹true›" if value else "‹false›"
+    if isinstance(value, str):
+        return f"‹text · {len(value)} chars›"
+    if isinstance(value, int | float):
+        return "‹number›"
+    if isinstance(value, dict):
+        return f"‹object · {len(value)} keys›"
+    if isinstance(value, list | tuple):
+        return f"‹list · {len(value)} items›"
+    if value is None:
+        return "‹empty›"
+    return f"‹{type(value).__name__}›"
+
+
+def mask_call_arguments(arguments: Any, keep: frozenset[str] | set[str] = frozenset()) -> Any:
+    """Agent arguments as an owner may see them.
+
+    An argument keeps its value only when the value cannot identify a person:
+    a key named in ``keep`` (the tool's closed value sets — enums the author
+    defined — and flags such as ``confirm``), a boolean, or a number used as a
+    bound or a count. Free text, dates, objects and lists are replaced by
+    :func:`describe_value`. Secret-bearing keys are masked as before.
+    """
+    if not isinstance(arguments, dict):
+        return arguments
+    out: dict[str, Any] = {}
+    for key, value in redact_value(arguments).items():
+        # Booleans and numbers (bounds, counts, ids) are kept; bool is an int.
+        # A value already masked passes through, so masking is idempotent.
+        if (
+            value == _REDACTED
+            or key in keep
+            or value is None
+            or isinstance(value, int | float)
+            or (isinstance(value, str) and value.startswith("‹") and value.endswith("›"))
+        ):
+            out[key] = value
+        else:
+            out[key] = describe_value(value)
+    return out
+
+
+_PARAM_IN_MESSAGE = re.compile(r"[Pp]arameter '([^']+)'")
+# "got: 'abc'", "got int: 5" — the value an agent sent, quoted at the end of a
+# validation message ("…, got: 'abc'." with an optional trailing hint).
+_SENT_VALUE = re.compile(r"(\bgot(?: [A-Za-z_]+)?:? )(.+)$", re.DOTALL)
+
+
+def mask_sent_value(message: str | None, masked_arguments: Any) -> str | None:
+    """A recorded error message without the value the agent sent.
+
+    Validation errors quote the rejected value back ("Parameter 'recipe_id':
+    Expected integer, got: 'jane@x.com'") — right for the agent, which needs
+    it, and wrong for the owner, who sees the arguments masked and must not
+    get the value back through the message. The value is replaced by what the
+    masked arguments show for that input (its shape, or the value itself when
+    an owner may see it); with no input to match, by a placeholder.
+    """
+    if not message:
+        return message
+    m = _SENT_VALUE.search(message)
+    if m is None:
+        return message
+    name = _PARAM_IN_MESSAGE.search(message)
+    shown: Any = None
+    if (
+        name is not None
+        and isinstance(masked_arguments, dict)
+        and name.group(1) in masked_arguments
+    ):
+        shown = masked_arguments[name.group(1)]
+        if not (isinstance(shown, str) and shown.startswith("‹")):
+            # An owner already sees this value in the arguments: keep the message.
+            return message
+    replacement = shown if isinstance(shown, str) else "‹value hidden›"
+    return message[: m.start(2)] + replacement
+
+
+def result_shape(rows: Any, *, max_fields: int = 40) -> dict[str, Any] | None:
+    """The metadata of a tool result — never its values.
+
+    ``{"rows": 12, "fields": [{"name": "title", "type": "text", "filled": 12},
+    …]}``: how many rows came back, which fields they carried, each field's
+    JSON type, and in how many rows it had a value. Enough to see that a tool
+    answered, how much, and whether a field the agent needed was empty — and
+    nothing a person could be identified from.
+    """
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not isinstance(rows, list):
+        return None
+    fields: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for key, value in row.items():
+            entry = fields.get(key)
+            if entry is None:
+                if len(fields) >= max_fields:
+                    continue
+                entry = fields[key] = {"name": str(key), "type": None, "filled": 0}
+            if value is None or value == "" or value == [] or value == {}:
+                continue
+            entry["filled"] += 1
+            kind = _json_kind(value)
+            if entry["type"] is None:
+                entry["type"] = kind
+            elif entry["type"] != kind:
+                entry["type"] = "mixed"
+    return {
+        "rows": len(rows),
+        "fields": [{**f, "type": f["type"] or "empty"} for f in fields.values()],
+    }
+
+
+def _json_kind(value: Any) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int | float):
+        return "number"
+    if isinstance(value, str):
+        return "text"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list | tuple):
+        return "list"
+    return type(value).__name__
+
+
+_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# 9+ digits, optionally separated by spaces, dots or dashes: phone numbers,
+# card and account numbers, national ids. Short numbers (prices, counts, ids
+# like 150) are left alone.
+_LONG_NUMBER = re.compile(r"\+?\d(?:[\s.\-()]*\d){8,}")
+
+
+def scrub_personal_text(text: str) -> str:
+    """Remove contact details and long identifying numbers from free text.
+
+    For text an agent writes about a call (feedback summaries) that an owner
+    will read: the agent is told not to include personal data, and this
+    catches the common slips — an email address, a phone or card number.
+    """
+    if not text:
+        return text
+    text = _EMAIL.sub("‹email›", text)
+    return _LONG_NUMBER.sub("‹number›", text)

@@ -260,13 +260,32 @@ def test_build_warns_on_tool_referencing_missing_table(
         sql='SELECT COUNT(*) as total FROM "customers"',
         parameters=[],
     )
-    bad = _tool(mcp, "elliot_create_tool")(
+    refused = _tool(mcp, "elliot_create_tool")(
         name="list_ghosts",
         description="References a table that does not exist in the session",
         category="READ",
         sql='SELECT id FROM "ghosts"',
         parameters=[],
     )
+    # Create now compiles the SQL against the loaded tables and refuses it,
+    # naming what exists...
+    assert "INVALID_SQL" in refused["text"] and "no such table" in refused["text"]
+    assert "Tables: customers" in refused["text"]
+    # ...but a tool can still arrive broken (a session file edited by hand, a
+    # source removed later), so the build keeps flagging it.
+    from elliot_core.types.tool import ToolDefinition
+
+    session.registry.add(
+        ToolDefinition(
+            id="list_ghosts",
+            name="list_ghosts",
+            description="References a table that does not exist in the session",
+            category="READ",
+            source_ids=[],
+        )
+    )
+    session.tool_sql["list_ghosts"] = 'SELECT id FROM "ghosts"'
+    bad = {"tool_id": "list_ghosts"}
     r = _tool(mcp, "elliot_build_connector")(
         name="TestCo Connector",
         slug="testco",

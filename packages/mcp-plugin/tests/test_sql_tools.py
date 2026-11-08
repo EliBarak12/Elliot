@@ -66,9 +66,10 @@ def test_get_schema_after_load(mcp: FastMCP, session: ElliotSession, tmp_path: P
     _load_table(session, tmp_path)
     result = _tool(mcp, "elliot_get_schema")()
     assert "items" in result
-    col_names = [c["name"] for c in result["items"]]
-    assert "id" in col_names
-    assert "val" in col_names
+    assert {"id", "val"} <= set(result["items"])
+    assert all(isinstance(t, str) for t in result["items"].values())
+    full = _tool(mcp, "elliot_get_schema")(verbose=True)
+    assert {"id", "val"} <= {c["name"] for c in full["items"]}
 
 
 # ---------------------------------------------------------------------------

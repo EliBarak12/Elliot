@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
+from .caller import CALLER_FIELDS, caller_placeholder, mentions_caller
 from .danger_zone import DESTRUCTIVE_VERBS, HIGH_IMPACT_VERBS, name_tokens
 from .sql import extract_sql_params, referenced_base_tables
+from .sqlite.engine import is_json_list_of_scalars
 from .types import ConnectorConfig
 
 Severity = Literal["ERROR", "WARN", "INFO"]
@@ -16,6 +19,11 @@ Severity = Literal["ERROR", "WARN", "INFO"]
 # agent call and makes tool selection harder (Anthropic, "Writing effective
 # tools for AI agents").
 _MAX_TOOLS = 25
+
+# One minimum for a tool description, shared by validation, the linter and
+# the quality scan. Each used to carry its own (10, 15, 20), so a description
+# could pass one check and fail the next.
+MIN_DESCRIPTION_CHARS = 15
 
 # Parameter names that are technically valid but tell an agent nothing about
 # what value to pass. The existing PARAMETER_NAME_TOO_SHORT rule catches the
@@ -145,6 +153,45 @@ def _is_bare_env_name(value: str) -> bool:
     return bool(re.fullmatch(r"[A-Z][A-Z0-9_]*", value))
 
 
+def _lint_caller_placeholders(config: ConnectorConfig) -> list[LintIssue]:
+    """``{{ caller:NAME }}`` must be a whole value, name a known field, on a REST source."""
+    issues: list[LintIssue] = []
+    for source in config.sources:
+        where = f"source '{source.id}'"
+        values = [("auth.secret_key", source.auth.secret_key)] if source.auth else []
+        values += [(f"headers.{k}", v) for k, v in (source.headers or {}).items()]
+        used = False
+        for field_name, value in values:
+            if not mentions_caller(value):
+                continue
+            used = True
+            name = caller_placeholder(value)
+            if name is None or name not in CALLER_FIELDS:
+                issues.append(
+                    LintIssue(
+                        severity="ERROR",
+                        code="CALLER_PLACEHOLDER_INVALID",
+                        tool_id=None,
+                        message=f"{where} {field_name} is not a valid caller placeholder: {value!r}.",
+                        suggestion=(
+                            "Use the whole value {{ caller:token }}, {{ caller:sub }} or "
+                            "{{ caller:email }} (auth adds 'Bearer ' itself)."
+                        ),
+                    )
+                )
+        if used and source.type != "rest":
+            issues.append(
+                LintIssue(
+                    severity="ERROR",
+                    code="CALLER_NOT_REST",
+                    tool_id=None,
+                    message=f"{where} uses the caller's credential but is a {source.type} source.",
+                    suggestion="Caller credentials apply to REST sources only.",
+                )
+            )
+    return issues
+
+
 def _lint_source_auth(config: ConnectorConfig) -> list[LintIssue]:
     """Validate auth blocks so per-user / distributable connectors are safe.
 
@@ -195,6 +242,8 @@ def _lint_source_auth(config: ConnectorConfig) -> list[LintIssue]:
                         suggestion="For per_user auth, secret_key is a vault slot name (e.g. 'access_token'), not {{ env }}.",
                     )
                 )
+        elif caller_placeholder(auth.secret_key) is not None:
+            pass  # the signed-in caller's credential; checked in _lint_caller_placeholders
         elif not _is_env_placeholder(auth.secret_key) and not _is_bare_env_name(auth.secret_key):
             issues.append(
                 LintIssue(
@@ -804,6 +853,83 @@ def _is_list_tool(tool_id: str) -> bool:
     return first in _LIST_TOOL_PREFIXES
 
 
+_SELECT_LIST = re.compile(r"^\s*SELECT\s+(?:DISTINCT\s+)?(.*?)\s+FROM\s", re.IGNORECASE | re.DOTALL)
+_LAST_IDENT = re.compile(r"[\"`\[]?([A-Za-z_][\w]*)[\"`\]]?\s*$")
+
+
+def returned_field_names(tool: Any) -> list[str]:
+    """The names a READ tool hands back, as far as the definition says.
+
+    Read from ``return_fields`` (alias or field) and, for SQL, each item of
+    the SELECT list (its alias, or its column). ``*`` and computed values
+    without an alias say nothing about names and are skipped.
+    """
+    names: list[str] = []
+    for rf in getattr(tool, "return_fields", None) or []:
+        name = (getattr(rf, "alias", None) or getattr(rf, "field", "") or "").strip()
+        if name and name != "*":
+            names.append(name)
+    match = _SELECT_LIST.match(getattr(tool, "sql", None) or "")
+    if match:
+        depth = 0
+        item = ""
+        items: list[str] = []
+        for ch in match.group(1):
+            depth += ch == "("
+            depth -= ch == ")"
+            if ch == "," and depth == 0:
+                items.append(item)
+                item = ""
+            else:
+                item += ch
+        items.append(item)
+        for raw in items:
+            last = _LAST_IDENT.search(raw.strip())
+            if last and last.group(1) != "*":
+                names.append(last.group(1))
+    return names
+
+
+def _personal_field_issues(config: ConnectorConfig) -> list[LintIssue]:
+    """READ tools that return secrets (error) or personal data (warning).
+
+    By name alone, so it needs no product intent: a public catalog connector
+    that returned reviewers' email addresses passed lint before.
+    """
+    from .pii import classify_field
+
+    out: list[LintIssue] = []
+    for tool in config.tools:
+        if tool.category != "READ":
+            continue
+        for name in dict.fromkeys(returned_field_names(tool)):
+            kind = classify_field(name)
+            if kind == "secret":
+                out.append(
+                    LintIssue(
+                        severity="ERROR",
+                        code="SENSITIVE_FIELD_EXPOSED",
+                        tool_id=tool.id,
+                        message=f"Tool '{tool.id}' returns '{name}', which looks like a secret.",
+                        suggestion=f"Stop returning '{name}'. Agents never need it.",
+                    )
+                )
+            elif kind == "personal":
+                out.append(
+                    LintIssue(
+                        severity="WARN",
+                        code="PERSONAL_FIELD_EXPOSED",
+                        tool_id=tool.id,
+                        message=f"Tool '{tool.id}' returns '{name}', personal data about someone.",
+                        suggestion=(
+                            f"Keep '{name}' only if agents need it for this job, and only on a "
+                            "connector whose users may see it."
+                        ),
+                    )
+                )
+    return out
+
+
 def lint_connector(
     config: ConnectorConfig,
     sensitive_fields: list[str] | None = None,
@@ -842,6 +968,7 @@ def lint_connector(
 
     # ── source auth checks (per-user / OAuth distribution safety) ────────────
     issues.extend(_lint_source_auth(config))
+    issues.extend(_lint_caller_placeholders(config))
 
     # ── SQL ↔ source_ids coverage (runtime "no such table" guard) ────────────
     issues.extend(_lint_tool_source_coverage(config))
@@ -877,14 +1004,17 @@ def lint_connector(
     for tool in config.tools:
         desc = tool.description or ""
 
-        if len(desc.strip()) < 15:
+        if len(desc.strip()) < MIN_DESCRIPTION_CHARS:
             issues.append(
                 LintIssue(
                     severity="ERROR",
                     code="DESCRIPTION_TOO_SHORT",
                     tool_id=tool.id,
                     message=f"Tool '{tool.id}' description is too short ({len(desc)} chars).",
-                    suggestion='Write at least 15 characters starting with a verb: "Return all...", "Get a single..."',
+                    suggestion=(
+                        f"Write at least {MIN_DESCRIPTION_CHARS} characters starting with a "
+                        'verb: "Return all...", "Get a single..."'
+                    ),
                 )
             )
         elif not _starts_with_verb(desc):
@@ -1039,6 +1169,39 @@ def lint_connector(
                     )
                 )
 
+            # Allowed values that are lists written as text ('["Lunch",
+            # "Dinner"]'): a profile used to offer a column of arrays as an
+            # enum. No agent sends that text, so a natural "Dinner" is refused,
+            # and `col = :value` never matches a value inside a list.
+            if param.enum and any(is_json_list_of_scalars(v) for v in param.enum):
+                inside = sorted(
+                    {
+                        str(x)
+                        for v in param.enum
+                        if is_json_list_of_scalars(v)
+                        for x in json.loads(v)
+                        if x is not None
+                    }
+                )
+                issues.append(
+                    LintIssue(
+                        severity="WARN",
+                        code="ENUM_HOLDS_LISTS",
+                        tool_id=tool.id,
+                        message=(
+                            f"Tool '{tool.id}' parameter '{param.name}' allows lists written "
+                            f"as text (e.g. {param.enum[0]}); agents send one value, such as "
+                            f"'{inside[0] if inside else 'Dinner'}', and it is refused."
+                        ),
+                        suggestion=(
+                            f"Allow the values inside the lists ({', '.join(inside[:6])}"
+                            f"{'…' if len(inside) > 6 else ''}) and filter by membership: "
+                            f"`(:{param.name} IS NULL OR EXISTS (SELECT 1 FROM json_each(<column>) "
+                            f"WHERE value = :{param.name}))`."
+                        ),
+                    )
+                )
+
             # Only warn when there's already a (non-trivial) description but it
             # omits the match semantics — the empty-description case is covered
             # by PARAMETER_MISSING_DESCRIPTION above.
@@ -1137,6 +1300,8 @@ def lint_connector(
                     suggestion="Use auth.secret_key to reference an env var; never put secrets in URLs.",
                 )
             )
+
+    issues.extend(_personal_field_issues(config))
 
     for field in sensitive_fields or []:
         if not field.strip():

@@ -5,8 +5,10 @@ import {
   type App,
   type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps/react";
+import { applyBrand } from "./lib/brand";
 import type { ElliotBranding, ElliotUiConfig } from "./lib/config";
 import { parseToolResult, resolveAutoPreset, type ToolData } from "./lib/data";
+import { CardsPreset, looksLikeCards } from "./presets/cards";
 import { ChartPreset } from "./presets/chart";
 import { DetailPreset } from "./presets/detail";
 import { MarkdownPreset } from "./presets/markdown";
@@ -22,20 +24,12 @@ export interface PresetProps {
 }
 
 function applyTheme(ctx: McpUiHostContext | undefined, branding?: ElliotBranding | null) {
-  const theme = ctx?.theme;
-  if (theme === "dark" || theme === "light") {
-    document.documentElement.setAttribute("data-theme", theme);
-  }
-  // The brand accent outranks the host's accent (it IS the product's
-  // identity) while text/background stay host-themed for legibility. Inline
-  // root style wins over both the stylesheet fallbacks and host variables.
-  const accent =
-    theme === "dark"
-      ? (branding?.accent_dark ?? branding?.accent)
-      : branding?.accent;
-  if (accent) {
-    document.documentElement.style.setProperty("--primary", accent);
-  }
+  const theme = ctx?.theme === "dark" || ctx?.theme === "light" ? ctx.theme : undefined;
+  if (theme) document.documentElement.setAttribute("data-theme", theme);
+  // The connector's design system: brand tokens outrank the host's (they ARE
+  // the product's identity); anything the brand leaves unset keeps following
+  // the host so the view stays legible in any client and theme.
+  applyBrand(theme, branding);
 }
 
 export function AppShell({ config }: { config: ElliotUiConfig }) {
@@ -84,12 +78,15 @@ export function AppShell({ config }: { config: ElliotUiConfig }) {
 
   const preset = useMemo(() => {
     if (!data) return null;
-    return config.preset === "auto" ? resolveAutoPreset(data) : config.preset;
+    if (config.preset !== "auto") return config.preset;
+    // A catalog (rows with an image and a title) reads best as cards.
+    if (data.rows.length > 1 && looksLikeCards(data.rows)) return "cards";
+    return resolveAutoPreset(data);
   }, [config.preset, data]);
 
   if (cancelled) {
     return (
-      <Frame title={config.title} logo={config.branding?.logo}>
+      <Frame title={config.title} brand={config.branding}>
         <p className="text-sm text-muted-foreground p-4">Tool call cancelled: {cancelled}</p>
       </Frame>
     );
@@ -97,7 +94,7 @@ export function AppShell({ config }: { config: ElliotUiConfig }) {
 
   if (!data) {
     return (
-      <Frame title={config.title} logo={config.branding?.logo}>
+      <Frame title={config.title} brand={config.branding}>
         <div className="p-4 space-y-2" aria-label="Waiting for tool result">
           <div className="h-3.5 w-2/3 rounded bg-muted animate-pulse" />
           <div className="h-3.5 w-1/2 rounded bg-muted animate-pulse" />
@@ -110,6 +107,9 @@ export function AppShell({ config }: { config: ElliotUiConfig }) {
   const shared: PresetProps = { config, data, app, onContext };
   let body: React.ReactNode;
   switch (preset) {
+    case "cards":
+      body = <CardsPreset {...shared} />;
+      break;
     case "detail":
       body = <DetailPreset {...shared} />;
       break;
@@ -129,7 +129,7 @@ export function AppShell({ config }: { config: ElliotUiConfig }) {
   }
 
   return (
-    <Frame title={config.title} toolInput={toolInput} logo={config.branding?.logo}>
+    <Frame title={config.title} toolInput={toolInput} brand={config.branding}>
       {body}
       {data.truncated && data.truncationNote && (
         <p className="px-4 pb-3 text-2xs text-warning">{data.truncationNote}</p>
@@ -141,14 +141,16 @@ export function AppShell({ config }: { config: ElliotUiConfig }) {
 function Frame({
   title,
   toolInput,
-  logo,
+  brand,
   children,
 }: {
   title: string;
   toolInput?: Record<string, unknown> | null;
-  logo?: string | null;
+  brand?: ElliotBranding | null;
   children: React.ReactNode;
 }) {
+  const logo = brand?.logo;
+  const name = brand?.name;
   const inputSummary =
     toolInput && Object.keys(toolInput).length > 0
       ? Object.entries(toolInput)
@@ -162,11 +164,17 @@ function Frame({
           {logo && (
             <img
               src={logo}
-              alt=""
+              alt={name ? "" : "Logo"}
               className="h-5 w-auto max-w-[7rem] shrink-0 rounded-sm object-contain"
             />
           )}
-          <h1 className="text-sm font-semibold truncate">{title}</h1>
+          {name && <span className="shrink-0 text-sm font-semibold">{name}</span>}
+          {name && (
+            <span aria-hidden className="h-3.5 w-px shrink-0 bg-border" />
+          )}
+          <h1 className={name ? "text-sm text-muted-foreground truncate" : "text-sm font-semibold truncate"}>
+            {title}
+          </h1>
         </span>
         {inputSummary && (
           <span className="font-mono text-2xs text-muted-foreground truncate" title={inputSummary}>

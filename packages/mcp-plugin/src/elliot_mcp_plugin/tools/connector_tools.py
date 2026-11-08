@@ -372,6 +372,24 @@ def register_connector_tools(mcp: FastMCP, session: ElliotSession) -> None:
                     session.product_intent.sensitive_fields if session.product_intent else None
                 ),
             )
+            # The static linter cannot see the data; the session can. A tool
+            # whose SQL names a column that does not exist passed lint and
+            # failed on its first call.
+            from elliot_core.linter import LintIssue
+            from elliot_mcp_plugin.tools.tool_tools import sql_compile_error
+
+            for tool_id, sql in sorted(session.tool_sql.items()):
+                problem = sql_compile_error(sql, session) if sql else None
+                if problem:
+                    issues.append(
+                        LintIssue(
+                            severity="ERROR",
+                            code="INVALID_SQL",
+                            tool_id=tool_id,
+                            message=f"Tool '{tool_id}' cannot run: {problem}",
+                            suggestion="Fix the column or table name with elliot_update_tool.",
+                        )
+                    )
             return {
                 "issues": [dataclasses.asdict(i) for i in issues],
                 "error_count": sum(1 for i in issues if i.severity == "ERROR"),

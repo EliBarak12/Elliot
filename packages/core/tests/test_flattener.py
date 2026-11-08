@@ -139,3 +139,24 @@ def test_colliding_columns_are_kept_and_warned():
     assert row["name"] == "a" and row["name_2"] == "b"
     renamed = [w for w in result.warnings if w.type == "column_renamed"]
     assert len(renamed) == 1  # de-duped to one warning, not one per row
+
+
+def test_snake_case_columns_split_camel_case_and_acronyms():
+    from elliot_core.sqlite.flattener import flatten, snake_case_for
+
+    rows = [{"discountPercentage": 1, "reviewerEmail": "x", "HTTPStatus": 200, "id": 1}]
+    snake = flatten(rows, table_name="p", snake_case=True)
+    assert [c.name for c in snake.primary_table.columns if not c.name.startswith("_")] == [
+        "discount_percentage",
+        "reviewer_email",
+        "http_status",
+        "id",
+    ]
+    # The default (and every source discovered before) keeps lowercase names.
+    lower = flatten(rows, table_name="p")
+    assert "discountpercentage" in [c.name for c in lower.primary_table.columns]
+
+    class _Src:
+        column_style = "snake"
+
+    assert snake_case_for(_Src()) is True and snake_case_for(object()) is False

@@ -45,6 +45,7 @@ describe("AppResultView", () => {
     });
     expect(callToolResultFn).toHaveBeenCalledWith("elliot_preview_tool_ui", {
       tool_id: "list_orders",
+      include_html: true,
     });
   });
 

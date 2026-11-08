@@ -356,25 +356,19 @@ def _agent_hint_from_identity(identity: AgentIdentity | None) -> str:
 def _current_session_and_identity(ctx: Any) -> tuple[str | None, dict[str, Any] | None]:
     """Best-effort (session_id, identity) for the in-flight MCP request.
 
-    Mirrors the correlation logic in ``_register_tool``'s handler: prefer the
-    stable ``mcp-session-id`` header, fall back to the per-call request id, and
-    enrich the contextvar identity with client info from either protocol era
-    (initialize handshake or per-request ``_meta``). ``ctx`` is the SDK context
-    injected into the calling handler — v2 removed ``mcp.get_context()``, so
-    callers must thread it through.
+    Uses the same session id as the tool handler (``_resolve_stable_session_id``:
+    the Elliot session handle first), so a rejected call or a feedback report
+    lands in the agent's session rather than one keyed by its JSON-RPC request
+    id — which every client restarts at 1, merging unrelated agents' mistakes
+    into one bogus session. Enriches the contextvar identity with client info
+    from either protocol era (initialize handshake or per-request ``_meta``).
+    ``ctx`` is the SDK context injected into the calling handler — v2 removed
+    ``mcp.get_context()``, so callers must thread it through.
     """
-    session_id: str | None = None
+    session_id = _resolve_stable_session_id(ctx)
     client_name: str | None = None
     client_version: str | None = None
     if ctx is not None:
-        with contextlib.suppress(Exception):
-            session_id = ctx.request_id
-        with contextlib.suppress(Exception):
-            request = ctx.request_context.request
-            if request is not None:
-                mcp_session_id = request.headers.get("mcp-session-id")
-                if mcp_session_id:
-                    session_id = mcp_session_id
         sdk_identity = get_client_identity(ctx)
         client_name = sdk_identity.client_name
         client_version = sdk_identity.client_version

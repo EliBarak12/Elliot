@@ -1919,6 +1919,48 @@ def test_echoed_handle_groups_calls_into_one_session(app) -> None:
         assert any(s["session_id"] == handle for s in raw)
 
 
+def _bad_call(client: TestClient, req_id: int, handle: str) -> None:
+    """A tools/call with an argument the tool doesn't take: rejected before it runs."""
+    client.post(
+        "/mcp/",
+        json={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "method": "tools/call",
+            "params": {"name": "list_animals", "arguments": {"bogus": 1}, "_meta": _MODERN_META},
+        },
+        headers={
+            **_MODERN_HEADERS,
+            "Mcp-Method": "tools/call",
+            "Mcp-Name": "list_animals",
+            "Elliot-Session-Id": handle,
+        },
+    )
+
+
+@respx.mock
+def test_rejected_calls_land_in_the_agents_own_session(app) -> None:
+    """Two agents each make a mistake with the same JSON-RPC id (every client
+    counts from 1). Each mistake belongs to that agent's session, next to its
+    good calls, not to a session named after the request id that merges both."""
+    respx.get("https://api.example.com/animals").mock(
+        return_value=httpx.Response(200, json={"items": [{"id": 1, "name": "Rex"}]})
+    )
+    with TestClient(app) as client:
+        handles = []
+        for _ in range(2):
+            resp, _ = _modern_call(client, 1)
+            handle = resp.headers["Elliot-Session-Id"]
+            _bad_call(client, 2, handle)
+            handles.append(handle)
+
+        sessions = {s["session_id"]: s for s in client.get("/v1/sessions?n=10").json()}
+        assert "2" not in sessions, f"a session keyed by the request id: {list(sessions)}"
+        for handle in handles:
+            assert sessions[handle]["total_tool_calls"] == 2, sessions[handle]
+            assert sessions[handle]["error_count"] == 1, sessions[handle]
+
+
 @respx.mock
 def test_meta_carried_handle_upgrades_minted_one(app) -> None:
     """A client that echoes the handle via request _meta (instead of the

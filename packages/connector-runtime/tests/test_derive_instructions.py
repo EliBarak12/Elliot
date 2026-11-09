@@ -137,3 +137,61 @@ def test_falls_back_gracefully_with_no_tools() -> None:
     text = derive_agent_briefing(_connector([]))
     assert "acme-orders" in text
     assert "Call list_tools" in text
+
+
+def test_briefing_says_which_tool_hands_over_the_id() -> None:
+    """get_product_details needs a product_id; nothing in the tool list says
+    where one comes from. The briefing names the tool that returns it."""
+
+    def tool(tool_id: str, sql: str, needs_id: bool) -> ToolDefinition:
+        return ToolDefinition(
+            id=tool_id,
+            name=tool_id,
+            description="Read products from the store catalog.",
+            category="READ",
+            sql=sql,
+            source_ids=["orders"],
+            parameters=[
+                ParameterDefinition(
+                    name="product_id", type="integer", required=True, description="The id"
+                )
+            ]
+            if needs_id
+            else [],
+        )
+
+    text = derive_agent_briefing(
+        _connector(
+            [
+                tool(
+                    "get_product_details",
+                    'SELECT id, title FROM "products" WHERE id = :product_id',
+                    True,
+                ),
+                tool(
+                    "summarize_products_by_category",
+                    'SELECT category, COUNT(*) AS n FROM "products" GROUP BY category',
+                    False,
+                ),
+                tool("search_products", 'SELECT id, title FROM "products"', False),
+                tool(
+                    "list_product_reviews",
+                    'SELECT rating FROM "reviews" WHERE product_id = :product_id',
+                    True,
+                ),
+            ],
+            description="Search a store's products and read their reviews",
+        )
+    )
+    assert text.startswith("acme-orders: Search a store's products and read their reviews.")
+    assert (
+        "Start with search_products: it returns the id that get_product_details and "
+        "list_product_reviews take." in text
+    )
+    # A summary returns no id, so it is never named as where ids come from.
+    assert "Start with summarize" not in text
+
+
+def test_no_handoff_line_when_no_tool_needs_an_id() -> None:
+    text = derive_agent_briefing(_connector([_read("list_orders"), _read("get_order")]))
+    assert "Start with" not in text

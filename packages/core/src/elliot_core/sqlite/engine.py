@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import sqlite3
 import threading
 from typing import Any
@@ -51,6 +52,42 @@ def _ingest_value(value: Any) -> Any:
     return str(value)
 
 
+_WORD = re.compile(r"[^\W_]+", re.UNICODE)
+
+
+def matches_words(query: Any, *texts: Any) -> int:
+    """SQL function ``matches_words(query, col, …)``: every word of the query
+    appears somewhere in the columns.
+
+    What an agent types is words, not a phrase: "phone case" should find
+    "iPhone 12 Silicone Case", which ``title LIKE '%phone case%'`` never does,
+    and "perfumes" should find a product tagged "perfume". Each word is matched
+    on its own, case-insensitively, across all the columns together; a plural
+    also matches its singular. A NULL or blank query matches every row, so
+    ``matches_words(:q, …)`` is an optional filter by itself. NULL columns are
+    skipped.
+    """
+    if query is None:
+        return 1
+    words = [w for w in _WORD.findall(str(query).lower()) if len(w) > 1]
+    if not words:
+        return 1
+    haystack = " ".join(str(t).lower() for t in texts if t is not None)
+    if not haystack:
+        return 0
+    for word in words:
+        forms = [word]
+        if len(word) > 3 and word.endswith("s"):
+            forms.append(word[:-1])
+        if len(word) > 4 and word.endswith("es"):
+            forms.append(word[:-2])
+        if len(word) > 4 and word.endswith("ies"):
+            forms.append(word[:-3] + "y")
+        if not any(f in haystack for f in forms):
+            return 0
+    return 1
+
+
 class SQLiteEngine:
     """In-memory SQLite wrapper.
 
@@ -66,6 +103,8 @@ class SQLiteEngine:
         self._conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
+        # Word search for tools: matches_words(:query, col, …). See the function.
+        self._conn.create_function("matches_words", -1, matches_words, deterministic=True)
         self._conn.commit()
 
     def load_table(self, table: FlattenedTable, *, commit: bool = True) -> None:

@@ -237,3 +237,28 @@ def test_profile_column_lists_of_objects_are_not_list_columns(engine: SQLiteEngi
     engine.load_result(flatten(rows, "things"))
     profile = engine.profile_column("things", "tags")
     assert "list_column" not in profile
+
+
+def test_matches_words_finds_what_a_phrase_search_misses(engine: SQLiteEngine):
+    """An agent types words. Each one is matched on its own across the columns,
+    a plural finds its singular, and no query is no filter."""
+    rows = [
+        {"title": "iPhone 12 Silicone Case", "tags": ["mobile", "accessory"], "description": None},
+        {
+            "title": "Calvin Klein CK One",
+            "tags": ["fragrances", "perfume"],
+            "description": "A unisex scent",
+        },
+        {"title": "Kitchen Sieve", "tags": ["kitchen"], "description": "Steel sieve"},
+    ]
+    engine.load_result(flatten(rows, "products"))
+    sql = "SELECT title FROM products WHERE matches_words(:q, title, description, tags) ORDER BY title"
+
+    def find(q):  # type: ignore[no-untyped-def]
+        return [r["title"] for r in engine.query(sql, {"q": q})]
+
+    assert find("phone cases") == ["iPhone 12 Silicone Case"]  # two words, a plural
+    assert find("PERFUMES") == ["Calvin Klein CK One"]  # in the tags, any case
+    assert find("steel kitchen") == ["Kitchen Sieve"]  # words from two columns
+    assert find("kitchen phone") == []  # every word must appear
+    assert len(find(None)) == 3 and len(find("  ")) == 3  # optional by itself

@@ -276,6 +276,60 @@ def _require_destructive_confirmation() -> bool:
 _is_destructive = is_destructive
 
 
+_FINDER_PREFIXES = ("search_", "find_", "list_", "get_", "lookup_")
+
+
+def _id_handoffs(served: list[Any]) -> list[str]:
+    """Which tool returns the id another tool needs, in a sentence each.
+
+    An agent that calls ``get_product_details`` first has no ``product_id`` to
+    give it. The tool list doesn't say where ids come from; this does: "Start
+    with search_products: it returns the id that get_product_details and
+    list_product_reviews take." Derived from the definitions alone — a tool
+    requires ``<entity>_id``, and another READ tool about the same entity
+    returns ``id`` (or ``<entity>_id``) without needing it.
+    """
+    from elliot_core.linter import returned_field_names
+
+    def required_ids(tool: Any) -> list[str]:
+        return [
+            p.name
+            for p in getattr(tool, "parameters", None) or []
+            if getattr(p, "required", False) and p.name.endswith("_id") and len(p.name) > 3
+        ]
+
+    finders: dict[str, list[str]] = {}
+    for tool in served:
+        for param in required_ids(tool):
+            entity = param[:-3]
+            candidates = []
+            for other in served:
+                if other is tool or other.category != "READ" or param in required_ids(other):
+                    continue
+                returned = {n.lower() for n in returned_field_names(other)}
+                if entity in other.id and ({"id", param} & returned):
+                    candidates.append(other.id)
+            if not candidates:
+                continue
+            candidates.sort(
+                key=lambda tid: next(
+                    (i for i, pre in enumerate(_FINDER_PREFIXES) if tid.startswith(pre)),
+                    len(_FINDER_PREFIXES),
+                )
+            )
+            takers = finders.setdefault(candidates[0], [])
+            if tool.id not in takers:
+                takers.append(tool.id)
+    lines = []
+    for finder, takers in finders.items():
+        shown = takers[:4]
+        names = ", ".join(shown[:-1]) + (" and " if len(shown) > 1 else "") + shown[-1]
+        more = "" if len(takers) <= 4 else f" (+{len(takers) - 4} more)"
+        verb = "takes" if len(takers) == 1 else "take"
+        lines.append(f"Start with {finder}: it returns the id that {names}{more} {verb}.")
+    return lines[:3]
+
+
 def derive_agent_briefing(cfg: Any) -> str:
     """Compose the default MCP ``instructions`` briefing a consuming agent reads
     on connect. Unlike a bare "call list_tools" note, it orients the agent to the
@@ -288,9 +342,13 @@ def derive_agent_briefing(cfg: Any) -> str:
     product and the actions to operate it, with the danger zone flagged."""
     name = cfg.name or "this connector"
     desc = (getattr(cfg, "description", "") or "").strip()
-    lead = f"This MCP server exposes '{name}' as agent-ready tools."
-    if desc:
-        lead = f"{lead} {desc.rstrip('.')}."
+    # The app's role in one line comes first: it is what tells an agent when
+    # this connector is the right one to reach for.
+    lead = (
+        f"{name}: {desc.rstrip('.')}."
+        if desc
+        else f"This MCP server exposes '{name}' as agent-ready tools."
+    )
 
     # Disabled tools are not registered, so the briefing must not advertise
     # them — counting them here would promise the agent tools it cannot call.
@@ -315,6 +373,7 @@ def derive_agent_briefing(cfg: Any) -> str:
     lines = [lead]
     if parts:
         lines.append(". ".join(parts) + ".")
+    lines.extend(_id_handoffs(served))
     if danger:
         shown = sorted(t.id for t in danger)
         names = ", ".join(shown[:6])

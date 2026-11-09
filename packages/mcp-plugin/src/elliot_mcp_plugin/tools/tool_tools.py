@@ -444,6 +444,12 @@ def register_tool_tools(mcp: FastMCP, session: ElliotSession) -> None:
             child's position in the parent array). JOIN child to parent on
             ``child._parent_id = parent._id`` — this is the only reliable
             link when the upstream JSON has no natural foreign key.
+          * Free-text search: ``WHERE matches_words(:query, "title",
+            "description", "tags")`` — every word of the query must appear
+            somewhere in those columns (any case; a plural finds its
+            singular; no query matches every row). A plain
+            ``title LIKE '%' || :query || '%'`` only finds the exact phrase,
+            so "phone case" misses "iPhone 12 Silicone Case".
 
         ``source_ids`` is inferred from the SQL — only the source whose
         tables appear after ``FROM`` / ``JOIN`` will be materialized at

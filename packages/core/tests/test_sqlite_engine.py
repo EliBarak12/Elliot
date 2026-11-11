@@ -262,3 +262,34 @@ def test_matches_words_finds_what_a_phrase_search_misses(engine: SQLiteEngine):
     assert find("steel kitchen") == ["Kitchen Sieve"]  # words from two columns
     assert find("kitchen phone") == []  # every word must appear
     assert len(find(None)) == 3 and len(find("  ")) == 3  # optional by itself
+
+
+def test_matches_words_matches_words_not_letters_inside_them(engine: SQLiteEngine):
+    """Acting as a shopper's agent, "watches for men" came back with women's
+    watches: "men" was found inside "women". A query word matches the start of
+    a word, or the end of a compound when it is four letters or more."""
+    rows = [
+        {"title": "Watch Gold for Women", "category": "womens-watches"},
+        {"title": "Rolex Submariner Watch", "category": "mens-watches"},
+        {"title": "Lenovo Yoga 920", "category": "laptops"},
+        {"title": "Blue Frock", "category": "tops"},
+        {"title": "Oppo K1", "category": "smartphones"},
+        {"title": "Smart Speaker", "category": "home"},
+    ]
+    engine.load_result(flatten(rows, "products"))
+    sql = "SELECT title FROM products WHERE matches_words(:q, title, category) ORDER BY title"
+
+    def find(q):  # type: ignore[no-untyped-def]
+        return [r["title"] for r in engine.query(sql, {"q": q})]
+
+    # "men" is not in "women"; "for" is filler, and no product has to say it.
+    assert find("watches for men") == ["Rolex Submariner Watch"]
+    assert find("women watch") == ["Watch Gold for Women"]
+    # The end of a compound counts: a phone is a smartphone.
+    assert find("phone") == ["Oppo K1"]
+    # A short word inside a longer one does not: tops are not laptops,
+    # and art is not smart.
+    assert find("top") == ["Blue Frock"]
+    assert find("art") == []
+    # Filler alone is still a search, for what it says.
+    assert find("for") == ["Watch Gold for Women"]

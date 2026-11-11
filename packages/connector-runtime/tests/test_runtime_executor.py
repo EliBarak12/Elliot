@@ -1827,3 +1827,190 @@ def test_tool_description_caps_wide_field_lists() -> None:
     assert "c0, c1" in desc
     assert "+8 more." in desc
     assert "c12" not in desc.split("Returns:")[1]
+
+
+# ── an empty result says which filter excluded everything ─────────────────────
+
+
+def _shop_executor() -> tuple[ToolExecutor, ToolDefinition]:
+    from elliot_core.sqlite.engine import SQLiteEngine
+
+    engine = SQLiteEngine()
+    engine.ingest(
+        "products",
+        [
+            {"id": 1, "title": "Phone case", "category": "mobile-accessories", "price": 9.0},
+            {"id": 2, "title": "Phone charger", "category": "mobile-accessories", "price": 19.0},
+            {"id": 3, "title": "Desk lamp", "category": "furniture", "price": 35.0},
+        ],
+    )
+    tool = ToolDefinition.model_validate(
+        {
+            "id": "search_products",
+            "name": "Search products",
+            "description": "Search products by text, category and price.",
+            "category": "READ",
+            "source_ids": ["products"],
+            "sql": (
+                "SELECT id, title, price FROM products "
+                "WHERE (:search_text IS NULL OR title LIKE '%' || :search_text || '%') "
+                "AND (:category IS NULL OR category = :category) "
+                "AND (:max_price IS NULL OR price <= :max_price) "
+                "AND id >= :min_id "
+                "ORDER BY price LIMIT COALESCE(:limit, 20)"
+            ),
+            "parameters": [
+                {"name": "search_text", "type": "string", "required": False},
+                {"name": "category", "type": "string", "required": False},
+                {"name": "max_price", "type": "number", "required": False},
+                {"name": "min_id", "type": "integer", "required": False, "default": 0},
+                {"name": "limit", "type": "integer", "required": False, "default": 20},
+            ],
+        }
+    )
+    config = ConnectorConfig(
+        name="Shop",
+        slug="shop",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="products",
+                name="Products",
+                type="rest",
+                url="https://api.example.com/products",
+            )
+        ],
+        tools=[tool],
+    )
+    return ToolExecutor(config, secrets={}, engine=engine), tool
+
+
+async def test_empty_result_measures_what_each_supplied_filter_cost() -> None:
+    """A category the data does not have: with it left out, the two phone
+    rows match. The text filter is not the cause, and says so with a zero."""
+    executor, tool = _shop_executor()
+    result = await executor.execute(tool, {"search_text": "phone", "category": "phones"})
+    assert result.rows == []
+    assert result.rows_without_filter == {"search_text": 0, "category": 2}
+
+
+async def test_empty_result_diagnosis_leaves_defaults_and_size_inputs_alone() -> None:
+    """Only what the caller sent is a filter it can change: a default the
+    author declared and the row limit are never reported as the cause."""
+    executor, tool = _shop_executor()
+    result = await executor.execute(tool, {"category": "phones", "limit": 5})
+    assert result.rows_without_filter == {"category": 3}
+
+
+async def test_result_with_rows_is_not_diagnosed() -> None:
+    executor, tool = _shop_executor()
+    result = await executor.execute(tool, {"category": "furniture"})
+    assert len(result.rows) == 1
+    assert result.rows_without_filter is None
+
+
+async def test_empty_result_with_nothing_supplied_is_not_diagnosed() -> None:
+    from elliot_core.sqlite.engine import SQLiteEngine
+
+    engine = SQLiteEngine()
+    engine.ingest("products", [{"id": 1, "title": "Phone case"}])
+    tool = ToolDefinition.model_validate(
+        {
+            "id": "list_expensive",
+            "name": "List expensive",
+            "description": "List products over a thousand.",
+            "category": "READ",
+            "source_ids": ["products"],
+            "sql": "SELECT id FROM products WHERE id > 1000",
+            "parameters": [],
+        }
+    )
+    config = ConnectorConfig(
+        name="Shop",
+        slug="shop",
+        version="1.0.0",
+        sources=[
+            SourceConfig(
+                id="products",
+                name="Products",
+                type="rest",
+                url="https://api.example.com/products",
+            )
+        ],
+        tools=[tool],
+    )
+    result = await ToolExecutor(config, secrets={}, engine=engine).execute(tool, {})
+    assert result.rows == []
+    assert result.rows_without_filter is None
+
+
+def test_empty_note_names_the_filter_that_excluded_everything() -> None:
+    """The agent is told which input to change, and never shown a value."""
+    from elliot_connector_runtime.server import _payload_for
+    from elliot_core.types import QueryResult
+
+    _executor, tool = _shop_executor()
+    out = _payload_for(
+        QueryResult(
+            rows=[], tool_id=tool.id, rows_without_filter={"search_text": 0, "category": 2}
+        ),
+        tool,
+        {"search_text": "phone", "category": "phones"},
+    )
+    assert out["empty"] is True
+    assert out["empty_note"].startswith(
+        "No rows matched because of category: without it, 2 rows match."
+    )
+    assert "phones" not in out["empty_note"]
+    assert "search_text" not in out["empty_note"]
+
+
+def test_empty_note_lists_each_filter_when_any_one_would_do() -> None:
+    from elliot_connector_runtime.server import _payload_for
+    from elliot_core.types import QueryResult
+
+    _executor, tool = _shop_executor()
+    out = _payload_for(
+        QueryResult(rows=[], tool_id=tool.id, rows_without_filter={"category": 1, "max_price": 2}),
+        tool,
+        {"category": "furniture", "max_price": 10},
+    )
+    assert (
+        "Leaving one out: without category, 1 row matches; without max_price, 2 rows match."
+        in out["empty_note"]
+    )
+
+
+def test_empty_note_says_at_least_when_a_count_reaches_the_row_limit() -> None:
+    """The tool's own limit caps each count: 20 with a limit of 20 is 20 or more."""
+    from elliot_connector_runtime.server import _payload_for
+    from elliot_core.types import QueryResult
+
+    _executor, tool = _shop_executor()
+    out = _payload_for(
+        QueryResult(
+            rows=[], tool_id=tool.id, rows_without_filter={"search_text": 20, "max_price": 1}
+        ),
+        tool,
+        {"search_text": "phone case", "max_price": 20},
+    )
+    assert (
+        "without max_price, 1 row matches; without search_text, at least 20 rows match"
+        in out["empty_note"]
+    )
+
+
+def test_empty_note_says_when_no_single_filter_is_the_cause() -> None:
+    from elliot_connector_runtime.server import _payload_for
+    from elliot_core.types import QueryResult
+
+    _executor, tool = _shop_executor()
+    out = _payload_for(
+        QueryResult(
+            rows=[], tool_id=tool.id, rows_without_filter={"category": 0, "search_text": 0}
+        ),
+        tool,
+        {"category": "x", "search_text": "y"},
+    )
+    assert "leaving out any one filter (category, search_text)" in out["empty_note"]
+    assert "genuinely empty" in out["empty_note"]

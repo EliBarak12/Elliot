@@ -122,6 +122,12 @@ class QueryResult(BaseModel):
     #                  blow a context window), so fewer rows were returned;
     #                  select fewer fields or narrow the request.
     truncation_reason: Literal["result_cap", "source_cap", "token_budget"] | None = None
+    # For a READ that matched nothing: each filter the caller supplied, and how
+    # many rows come back once that one filter is dropped. It lets the agent be
+    # told which filter excluded everything instead of guessing among them.
+    # None when nothing was diagnosed (a non-empty result, or a path where
+    # asking again would cost an upstream call).
+    rows_without_filter: dict[str, int] | None = None
 
 
 class ToolUIConfig(BaseModel):

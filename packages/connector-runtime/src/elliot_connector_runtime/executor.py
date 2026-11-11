@@ -92,6 +92,14 @@ def _fit_rows_to_token_budget(rows: list[dict[str, Any]], budget: int) -> int:
     return len(rows)
 
 
+# Inputs that size or page a result rather than choose rows: dropping one
+# cannot be why nothing matched.
+_SIZE_PARAMS = frozenset({"limit", "offset", "page", "page_size", "per_page", "cursor"})
+# An empty answer is diagnosed with one extra local query per supplied filter;
+# past this many the answer is the generic note.
+_MAX_DIAGNOSED_FILTERS = 4
+
+
 class ToolExecutor:
     """
     Executes a ToolDefinition against the connector's live data sources.
@@ -165,6 +173,9 @@ class ToolExecutor:
         # returning 50 rows in preview — a silent preview/production divergence
         # and an unbounded over-fetch. Filling defaults here keeps every path
         # (pushdown, snapshot SQL, filter_groups, passthrough) consistent.
+        # What the caller sent, before defaults are filled in: only these are
+        # filters the agent chose and can change.
+        supplied = [name for name, value in arguments.items() if value is not None]
         arguments = self._apply_param_defaults(tool, arguments)
 
         # Validate + coerce inputs with the SAME rules the design-time preview
@@ -243,7 +254,12 @@ class ToolExecutor:
         # entirely so unit tests don't need network/file fixtures.
         if self._injected_engine is not None:
             rows = self._injected_engine.query(sql, params)
-            return self._capped_result(tool.id, rows)
+            result = self._capped_result(tool.id, rows)
+            if not rows:
+                result.rows_without_filter = self._rows_without_each_filter(
+                    self._injected_engine, tool, sql, params, supplied
+                )
+            return result
 
         engine = await self._ensure_materialized(tool, arguments)
 
@@ -296,7 +312,59 @@ class ToolExecutor:
                         return self._capped_result(tool.id, [])
             raise
 
-        return self._capped_result(tool.id, rows, source_capped=self._tool_source_capped(tool))
+        result = self._capped_result(tool.id, rows, source_capped=self._tool_source_capped(tool))
+        if not rows:
+            result.rows_without_filter = self._rows_without_each_filter(
+                engine, tool, sql, params, supplied
+            )
+        return result
+
+    @staticmethod
+    def _rows_without_each_filter(
+        engine: SQLiteEngine,
+        tool: ToolDefinition,
+        sql: str,
+        params: dict[str, Any],
+        supplied: list[str],
+    ) -> dict[str, int] | None:
+        """For a READ that matched nothing: what each supplied filter cost.
+
+        Runs the tool's own query once more per optional filter the caller
+        supplied, with that one filter left out, and counts the rows. A filter
+        whose removal brings rows back is the one that excluded everything
+        (a category that does not exist, a price below the cheapest item), and
+        saying so spares the agent a round of guessing which to relax.
+
+        Only for a tool with its own SQL over the snapshot this runtime holds,
+        where asking again is a local query: a pushed-down database query or a
+        live REST call would cost the product's backend an extra request for
+        every empty answer. At most ``_MAX_DIAGNOSED_FILTERS`` filters, and
+        never a required input or a size control. Counts only: no row leaves.
+        """
+        if tool.category != "READ" or not tool.sql:
+            return None
+        declared = {p.name: p for p in tool.parameters}
+        filters = [
+            name
+            for name in supplied
+            if name in declared
+            and not declared[name].required
+            and name not in _SIZE_PARAMS
+            and params.get(name) is not None
+        ]
+        if not filters or len(filters) > _MAX_DIAGNOSED_FILTERS:
+            return None
+        counted = f"SELECT COUNT(*) AS n FROM ({sql.strip().rstrip(';')})"
+        out: dict[str, int] = {}
+        for name in filters:
+            try:
+                found = engine.query(counted, {**params, name: None})
+            except Exception:  # noqa: BLE001 - a query that cannot run without the filter says nothing
+                log.debug("tool.empty.diagnosis_skipped", tool_id=tool.id, filter=name)
+                continue
+            out[name] = int(found[0]["n"]) if found else 0
+        log.info("tool.empty.diagnosed", tool_id=tool.id, filters=sorted(out))
+        return out or None
 
     def _capped_result(
         self,

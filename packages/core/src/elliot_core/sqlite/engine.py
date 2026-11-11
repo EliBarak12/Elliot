@@ -53,6 +53,45 @@ def _ingest_value(value: Any) -> Any:
 
 
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
+# Words that say nothing about what is wanted. "watches for men" must not
+# depend on a product's text happening to contain "for".
+_FILLER = frozenset(
+    {
+        "a", "an", "and", "any", "are", "at", "by", "for", "from", "i", "in",
+        "is", "me", "my", "of", "on", "or", "some", "the", "to", "with",
+    }
+)  # fmt: skip
+
+
+def _word_forms(word: str) -> list[str]:
+    """The word and its singular: "cases" also looks for "case"."""
+    forms = [word]
+    if len(word) > 3 and word.endswith("s"):
+        forms.append(word[:-1])
+    if len(word) > 4 and word.endswith("es"):
+        forms.append(word[:-2])
+    if len(word) > 4 and word.endswith("ies"):
+        forms.append(word[:-3] + "y")
+    return forms
+
+
+def _word_found(form: str, in_words: set[str]) -> bool:
+    """Whether a word of the text is what the query word asks for.
+
+    The start of a word always counts ("watch" finds "watches", "men" finds
+    "mens"). The end of a word counts for a query word of four letters or more,
+    which is how compounds are built: "phone" finds "iPhone" and "smartphones".
+    Anywhere inside a word does not: "men" must not find "women", nor "top"
+    "laptop", nor "art" "smart".
+    """
+    for word in in_words:
+        if word.startswith(form):
+            return True
+        if len(form) >= 4 and (
+            word.endswith(form) or word.endswith(form + "s") or word.endswith(form + "es")
+        ):
+            return True
+    return False
 
 
 def matches_words(query: Any, *texts: Any) -> int:
@@ -62,28 +101,25 @@ def matches_words(query: Any, *texts: Any) -> int:
     What an agent types is words, not a phrase: "phone case" should find
     "iPhone 12 Silicone Case", which ``title LIKE '%phone case%'`` never does,
     and "perfumes" should find a product tagged "perfume". Each word is matched
-    on its own, case-insensitively, across all the columns together; a plural
-    also matches its singular. A NULL or blank query matches every row, so
+    on its own, case-insensitively, across all the columns together, against
+    the start of a word or the end of a compound (see ``_word_found``); a
+    plural also matches its singular, and filler words ("for", "the") are not
+    required. A NULL or blank query matches every row, so
     ``matches_words(:q, …)`` is an optional filter by itself. NULL columns are
     skipped.
     """
     if query is None:
         return 1
     words = [w for w in _WORD.findall(str(query).lower()) if len(w) > 1]
+    # Filler is dropped only when something else is left to search for.
+    words = [w for w in words if w not in _FILLER] or words
     if not words:
         return 1
-    haystack = " ".join(str(t).lower() for t in texts if t is not None)
-    if not haystack:
+    in_words = set(_WORD.findall(" ".join(str(t).lower() for t in texts if t is not None)))
+    if not in_words:
         return 0
     for word in words:
-        forms = [word]
-        if len(word) > 3 and word.endswith("s"):
-            forms.append(word[:-1])
-        if len(word) > 4 and word.endswith("es"):
-            forms.append(word[:-2])
-        if len(word) > 4 and word.endswith("ies"):
-            forms.append(word[:-3] + "y")
-        if not any(f in haystack for f in forms):
+        if not any(_word_found(form, in_words) for form in _word_forms(word)):
             return 0
     return 1
 

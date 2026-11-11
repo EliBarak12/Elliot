@@ -499,7 +499,7 @@ def _payload_for(
         payload["truncated"] = True
         payload["truncation_note"] = _truncation_note(result)
     elif not rows and td is not None:
-        note = _empty_result_note(td, kwargs or {})
+        note = _empty_result_note(td, kwargs or {}, getattr(result, "rows_without_filter", None))
         if note:
             payload["empty"] = True
             payload["empty_note"] = note
@@ -611,7 +611,9 @@ def _truncation_note(result: Any) -> str:
     )
 
 
-def _empty_result_note(td: Any, kwargs: dict[str, Any]) -> str | None:
+def _empty_result_note(
+    td: Any, kwargs: dict[str, Any], rows_without_filter: dict[str, int] | None = None
+) -> str | None:
     """Actionable guidance for a READ tool that matched no rows (principle 3).
 
     An empty result is ambiguous — a too-narrow filter, or genuinely no data —
@@ -620,9 +622,54 @@ def _empty_result_note(td: Any, kwargs: dict[str, Any]) -> str | None:
     the next move is obvious (relax a filter among them), or say plainly that no
     arguments were passed so the source is simply empty. Returns ``None`` when no
     note helps — a WRITE/ACTION (an empty mutation result is normal), or a tool
-    with no declared parameters."""
+    with no declared parameters.
+
+    When the executor measured what each filter cost (``rows_without_filter``),
+    the note names the one that excluded everything. Names only, never the
+    values: what an agent sent stays out of anything a person might read."""
     if getattr(td, "category", None) != "READ":
         return None
+    if rows_without_filter:
+        # The tool's own row limit caps each count, so a count that reaches it
+        # means "this many or more".
+        limit = kwargs.get("limit")
+        if limit is None:
+            limit = next(
+                (p.default for p in (getattr(td, "parameters", []) or []) if p.name == "limit"),
+                None,
+            )
+
+        def rows(n: int) -> str:
+            more = "at least " if isinstance(limit, int) and n >= limit else ""
+            return f"{more}{n} row{'s' if n != 1 else ''} match{'es' if n == 1 else ''}"
+
+        # Fewest rows first: the filter whose removal changes least is the
+        # one closest to what was asked for.
+        blocking = sorted(
+            (name for name, n in rows_without_filter.items() if n > 0),
+            key=lambda name: (rows_without_filter[name], name),
+        )
+        if len(blocking) == 1:
+            name = blocking[0]
+            return (
+                f"No rows matched because of {name}: without it, "
+                f"{rows(rows_without_filter[name])}. Pass a {name} value that exists "
+                "in the data, or leave it out, and call again."
+            )
+        if blocking:
+            each = "; ".join(
+                f"without {name}, {rows(rows_without_filter[name])}" for name in blocking
+            )
+            return (
+                f"No rows matched these filters together. Leaving one out: {each}. "
+                "Leave out or change the one that matters least, and call again."
+            )
+        tried = ", ".join(sorted(rows_without_filter))
+        return (
+            f"No rows matched, and leaving out any one filter ({tried}) still "
+            "matches nothing. Relax more than one, or treat the result as "
+            "genuinely empty."
+        )
     applied = sorted(
         p.name for p in (getattr(td, "parameters", []) or []) if kwargs.get(p.name) is not None
     )
